@@ -1,0 +1,76 @@
+# 开发环境覆盖配置
+# 使用方式: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./packages/server/migrations:/docker-entrypoint-initdb.d
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  nats:
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./packages/server:/app
+    environment:
+      - INKBLOOM_DATABASE_URL=postgres://inkbloom:inkbloom_dev@postgres:5432/inkbloom?sslmode=disable
+      - INKBLOOM_REDIS_URL=redis://redis:6379/0
+      - INKBLOOM_NATS_URL=nats://nats:4222
+      - INKBLOOM_AI_SERVICE_URL=http://ai-service:8100
+      - INKBLOOM_SERVER_MODE=debug
+      - INKBLOOM_AUTH_TOKEN=inkbloom-dev-token
+      - INKBLOOM_LOG_LEVEL=debug
+    # Override entrypoint to use go run for hot reload
+    command: ["go", "run", "./cmd/server"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ai-service:
+    build:
+      context: ./packages/ai-service
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+      - "50051:50051"
+    volumes:
+      - ./packages/ai-service:/app
+    environment:
+      - INKBLOOM_GRPC_PORT=50051
+      - INKBLOOM_HTTP_PORT=8100
+      - INKBLOOM_GO_SERVICE_URL=http://server:8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: ./packages/web
+      dockerfile: Dockerfile.dev
+    ports: !override
+      - "3000:3000"
+    volumes:
+      - ./packages/web/src:/app/src
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+    depends_on:
+      - server
+    command: ["pnpm", "dev", "--host", "0.0.0.0"]

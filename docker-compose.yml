@@ -1,0 +1,115 @@
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: inkbloom-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inkbloom
+      POSTGRES_PASSWORD: inkbloom_dev
+      POSTGRES_DB: inkbloom
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inkbloom"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: inkbloom-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: nats:2
+    container_name: inkbloom-nats
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir", "/data"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application Services ────────────────────────────────────────────────
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+    container_name: inkbloom-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - INKBLOOM_DATABASE_URL=postgres://inkbloom:inkbloom_dev@postgres:5432/inkbloom?sslmode=disable
+      - INKBLOOM_REDIS_URL=redis://redis:6379/0
+      - INKBLOOM_NATS_URL=nats://nats:4222
+      - INKBLOOM_AI_SERVICE_URL=http://ai-service:8100
+      - INKBLOOM_SERVER_MODE=release
+      - INKBLOOM_AUTH_TOKEN=inkbloom-dev-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  ai-service:
+    build:
+      context: ./packages/ai-service
+      dockerfile: Dockerfile
+    container_name: inkbloom-ai-service
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+      - "50051:50051"
+    environment:
+      - INKBLOOM_GRPC_PORT=50051
+      - INKBLOOM_HTTP_PORT=8100
+      - INKBLOOM_GO_SERVICE_URL=http://server:8080
+    depends_on:
+      - server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: inkbloom-web
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  nats_data:

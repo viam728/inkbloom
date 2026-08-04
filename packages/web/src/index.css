@@ -1,0 +1,231 @@
+@import "tailwindcss";
+
+/* ===== 主题设计令牌（Tailwind v4） ===== */
+@theme {
+  /* 品牌色 */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+
+  /* 表面层级色（深色主题） */
+  --color-surface-0: #0d0d14;
+  --color-surface-1: #12121c;
+  --color-surface-2: #181826;
+  --color-surface-3: #1f1f30;
+  --color-surface-4: #27273a;
+
+  /* 动效 */
+  --animate-fade-in: fade-in 0.18s ease-out;
+  --animate-fade-in-slow: fade-in 0.4s ease-out;
+  --animate-slide-up: slide-up 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-down: slide-down 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-scale-in: scale-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slide-down {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes shimmer {
+    from { background-position: -200% 0; }
+    to { background-position: 200% 0; }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+}
+
+/* ===== 全局基础样式 ===== */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--color-surface-0);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(99, 102, 241, 0.35);
+  color: #fff;
+}
+
+/* ===== 滚动条 ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: content-box;
+}
+
+/* ===== 通用玻璃拟态面板 ===== */
+.glass-panel {
+  background: rgba(24, 24, 38, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+/* ===== 骨架屏 ===== */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 6px;
+}
+
+/* ===== 拖拽分栏时禁用文本选择 ===== */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.resizing * {
+  cursor: col-resize !important;
+}
+
+/* ===== TipTap 编辑器样式 ===== */
+.tiptap {
+  outline: none;
+  min-height: 400px;
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  color: #525266;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.tiptap h1 {
+  font-size: 2em;
+  font-weight: 700;
+  margin: 0.67em 0;
+  letter-spacing: -0.01em;
+}
+
+.tiptap h2 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin: 0.83em 0;
+}
+
+.tiptap h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  margin: 1em 0;
+}
+
+.tiptap p {
+  margin: 0.5em 0;
+  line-height: 1.85;
+}
+
+.tiptap ul,
+.tiptap ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.tiptap ul {
+  list-style-type: disc;
+}
+
+.tiptap ol {
+  list-style-type: decimal;
+}
+
+.tiptap blockquote {
+  border-left: 3px solid var(--color-brand-500);
+  padding-left: 1em;
+  margin: 0.75em 0;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.tiptap code {
+  background: #26263a;
+  border-radius: 0.25em;
+  padding: 0.15em 0.3em;
+  font-size: 0.9em;
+  color: #f472b6;
+}
+
+.tiptap pre {
+  background: var(--color-surface-1);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0.5em;
+  padding: 1em;
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
+.tiptap pre code {
+  background: none;
+  padding: 0;
+  color: #d4d4d4;
+}
+
+.tiptap img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5em;
+  margin: 1em 0;
+}
+
+.tiptap u {
+  text-decoration: underline;
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  margin: 1.5em 0;
+}
+
+/* 专注模式下的编辑区排版增强 */
+.focus-mode .tiptap {
+  font-size: 1.0625rem;
+  line-height: 1.9;
+}

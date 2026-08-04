@@ -1,0 +1,85 @@
+"""OpenAI-compatible LLM provider (works with OpenAI, DeepSeek, etc.)."""
+
+from typing import AsyncIterator
+
+from openai import AsyncOpenAI
+
+from app.config import settings
+from app.llm.base import BaseLLMProvider, LLMChunk, LLMResponse
+from app.utils.token_counter import count_tokens as _count_tokens
+
+
+class OpenAIProvider(BaseLLMProvider):
+    """LLM provider using the OpenAI SDK, compatible with any OpenAI-style API."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        self._client = AsyncOpenAI(
+            api_key=api_key or settings.openai_api_key,
+            base_url=base_url or settings.openai_base_url,
+        )
+
+    async def chat(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> LLMResponse:
+        """Send a chat completion request and return the full response."""
+        model = model or settings.default_model
+
+        response = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+
+        choice = response.choices[0]
+        usage = response.usage
+
+        return LLMResponse(
+            content=choice.message.content or "",
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+        )
+
+    async def stream(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> AsyncIterator[LLMChunk]:
+        """Stream chat completion chunks as they arrive."""
+        model = model or settings.default_model
+
+        response = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+        async for chunk in response:
+            if not chunk.choices:
+                continue
+
+            delta = chunk.choices[0].delta
+            finish_reason = chunk.choices[0].finish_reason or ""
+
+            yield LLMChunk(
+                content=delta.content or "",
+                finish_reason=finish_reason,
+            )
+
+    async def count_tokens(self, text: str, model: str | None = None) -> int:
+        """Count tokens using tiktoken."""
+        model = model or settings.default_model
+        return _count_tokens(text, model)

@@ -1,0 +1,177 @@
+import { create } from 'zustand';
+import { fetchOutline, saveOutline } from '@/services/outline-client';
+
+/** 章节大纲状态：未开始 → 写作中 → 已完成 */
+export type OutlineStatus = 'planned' | 'drafting' | 'done';
+
+export const OUTLINE_STATUS_LABELS: Record<OutlineStatus, string> = {
+  planned: '未开始',
+  drafting: '写作中',
+  done: '已完成',
+};
+
+/** 章节大纲节点 */
+export interface OutlineNode {
+  id: string;
+  /** 章节标题（成稿章节将以此命名） */
+  title: string;
+  /** 剧情要点（支持多行） */
+  summary: string;
+  status: OutlineStatus;
+  /** 已关联的成稿章节 id */
+  chapter_id?: number;
+  /** 扩写时引用的作品记忆条目名 */
+  memory_refs?: string[];
+}
+
+/** 幕 / 卷：大纲分组 */
+export interface OutlineAct {
+  id: string;
+  title: string;
+  nodes: OutlineNode[];
+}
+
+interface OutlineState {
+  /** 按 novel_id 缓存 */
+  byNovel: Record<number, OutlineAct[]>;
+  loading: boolean;
+  saving: boolean;
+
+  loadOutline: (novelId: number) => Promise<void>;
+  addAct: (novelId: number, title: string) => OutlineAct;
+  updateAct: (novelId: number, actId: string, title: string) => void;
+  removeAct: (novelId: number, actId: string) => void;
+  moveAct: (novelId: number, actId: string, dir: -1 | 1) => void;
+  addNode: (novelId: number, actId: string) => OutlineNode;
+  updateNode: (novelId: number, actId: string, nodeId: string, patch: Partial<OutlineNode>) => void;
+  removeNode: (novelId: number, actId: string, nodeId: string) => void;
+  moveNode: (novelId: number, actId: string, nodeId: string, dir: -1 | 1) => void;
+}
+
+const persistLocal = (novelId: number, acts: OutlineAct[]) => {
+  try {
+    localStorage.setItem(`inkbloom-outline-${novelId}`, JSON.stringify(acts));
+  } catch {
+    /* ignore */
+  }
+};
+
+/** 本地保存并尽力同步后端 */
+const commit = (
+  set: (fn: (s: OutlineState) => Partial<OutlineState>) => void,
+  get: () => OutlineState,
+  novelId: number,
+  mutate: (acts: OutlineAct[]) => OutlineAct[],
+) => {
+  const prev = get().byNovel[novelId] ?? [];
+  const next = mutate(prev);
+  set((s) => ({ byNovel: { ...s.byNovel, [novelId]: next }, saving: true }));
+  persistLocal(novelId, next);
+  saveOutline(novelId, next)
+    .catch(() => {
+      /* 后端不可用，仅本地保存 */
+    })
+    .finally(() => set(() => ({ saving: false })));
+  return next;
+};
+
+export const useOutlineStore = create<OutlineState>((set, get) => ({
+  byNovel: {},
+  loading: false,
+  saving: false,
+
+  loadOutline: async (novelId) => {
+    set({ loading: true });
+    try {
+      const acts = await fetchOutline(novelId);
+      set((s) => ({ byNovel: { ...s.byNovel, [novelId]: acts } }));
+    } catch {
+      // 后端不可用时回退本地缓存
+      try {
+        const raw = localStorage.getItem(`inkbloom-outline-${novelId}`);
+        const acts: OutlineAct[] = raw ? JSON.parse(raw) : [];
+        set((s) => ({ byNovel: { ...s.byNovel, [novelId]: acts } }));
+      } catch {
+        set((s) => ({ byNovel: { ...s.byNovel, [novelId]: [] } }));
+      }
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  addAct: (novelId, title) => {
+    const act: OutlineAct = {
+      id: crypto.randomUUID(),
+      title: title || `第 ${(get().byNovel[novelId] ?? []).length + 1} 幕`,
+      nodes: [],
+    };
+    commit(set, get, novelId, (acts) => [...acts, act]);
+    return act;
+  },
+
+  updateAct: (novelId, actId, title) => {
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) => (a.id === actId ? { ...a, title } : a)),
+    );
+  },
+
+  removeAct: (novelId, actId) => {
+    commit(set, get, novelId, (acts) => acts.filter((a) => a.id !== actId));
+  },
+
+  moveAct: (novelId, actId, dir) => {
+    commit(set, get, novelId, (acts) => {
+      const idx = acts.findIndex((a) => a.id === actId);
+      const target = idx + dir;
+      if (idx < 0 || target < 0 || target >= acts.length) return acts;
+      const next = [...acts];
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  },
+
+  addNode: (novelId, actId) => {
+    const node: OutlineNode = {
+      id: crypto.randomUUID(),
+      title: '',
+      summary: '',
+      status: 'planned',
+    };
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) => (a.id === actId ? { ...a, nodes: [...a.nodes, node] } : a)),
+    );
+    return node;
+  },
+
+  updateNode: (novelId, actId, nodeId, patch) => {
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) =>
+        a.id === actId
+          ? { ...a, nodes: a.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)) }
+          : a,
+      ),
+    );
+  },
+
+  removeNode: (novelId, actId, nodeId) => {
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) =>
+        a.id === actId ? { ...a, nodes: a.nodes.filter((n) => n.id !== nodeId) } : a,
+      ),
+    );
+  },
+
+  moveNode: (novelId, actId, nodeId, dir) => {
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) => {
+        if (a.id !== actId) return a;
+        const idx = a.nodes.findIndex((n) => n.id === nodeId);
+        const target = idx + dir;
+        if (idx < 0 || target < 0 || target >= a.nodes.length) return a;
+        const nodes = [...a.nodes];
+        [nodes[idx], nodes[target]] = [nodes[target], nodes[idx]];
+        return { ...a, nodes };
+      }),
+    );
+  },
+}));

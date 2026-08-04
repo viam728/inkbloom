@@ -1,0 +1,18 @@
+# Development Dockerfile for web package
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json ./
+
+# Install dependencies
+RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN pnpm install
+
+# Copy source
+COPY . .
+
+EXPOSE 3000
+
+CMD ["pnpm", "dev", "--host", "0.0.0.0"]

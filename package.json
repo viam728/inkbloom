@@ -1,0 +1,24 @@
+{
+  "name": "inkbloom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "InkBloom - AIGC 图文创作工具",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:server": "cd packages/server && air",
+    "dev:ai": "cd packages/ai-service && uvicorn app.main:app --reload",
+    "dev:desktop": "pnpm --filter desktop electron:dev",
+    "build": "pnpm -r build",
+    "build:web": "pnpm --filter web build",
+    "build:server": "cd packages/server && go build -o bin/server ./cmd/server",
+    "build:desktop": "pnpm --filter desktop electron:build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r clean"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=9"
+  }
+}

@@ -1,0 +1,26 @@
+appId: com.inkbloom.app
+productName: InkBloom
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - dist-electron/**/*
+extraResources:
+  - from: ../server/bin/
+    to: server/
+  - from: ../ai-service/
+    to: ai-service/
+    filter:
+      - '**/*'
+      - '!__pycache__'
+      - '!.venv'
+win:
+  target: nsis
+  icon: resources/icon.ico
+mac:
+  target: dmg
+  icon: resources/icon.icns
+linux:
+  target: AppImage
+  icon: resources/icon.png

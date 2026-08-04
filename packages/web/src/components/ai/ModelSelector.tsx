@@ -1,0 +1,128 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, ChevronUp, Cpu, Zap, Sparkles, MessageSquareText } from 'lucide-react';
+import { useAIStore } from '@/stores/ai-store';
+
+export interface ModelOption {
+  value: string;
+  label: string;
+  desc: string;
+  icon: React.ReactNode;
+}
+
+export const MODELS: ModelOption[] = [
+  {
+    value: 'gpt-4o-mini',
+    label: 'GPT-4o Mini',
+    desc: '快速轻量 · 日常创作',
+    icon: <Zap size={14} />,
+  },
+  {
+    value: 'gpt-4o',
+    label: 'GPT-4o',
+    desc: '旗舰能力 · 深度构思',
+    icon: <Sparkles size={14} />,
+  },
+  {
+    value: 'deepseek-chat',
+    label: 'DeepSeek Chat',
+    desc: '长文本 · 情节推演',
+    icon: <MessageSquareText size={14} />,
+  },
+];
+
+/** 简约可展开的模型选择器：默认收起为胶囊，点击向上弹出模型列表 */
+const ModelSelector: React.FC = () => {
+  const currentModel = useAIStore((s) => s.currentModel);
+  const setModel = useAIStore((s) => s.setModel);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const current = MODELS.find((m) => m.value === currentModel) ?? MODELS[0];
+
+  // 点击外部 / Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      {/* 向上弹出的模型列表 */}
+      {open && (
+        <div className="absolute bottom-full left-0 mb-2 w-56 glass-panel rounded-xl p-1.5 z-40 animate-scale-in origin-bottom-left">
+          <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+            选择模型
+          </p>
+          {MODELS.map((m) => {
+            const selected = m.value === currentModel;
+            return (
+              <button
+                key={m.value}
+                onClick={() => {
+                  setModel(m.value);
+                  setOpen(false);
+                }}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
+                  selected ? 'bg-brand-600/15' : 'hover:bg-white/6'
+                }`}
+              >
+                <span
+                  className={`shrink-0 w-6 h-6 rounded-md flex items-center justify-center ${
+                    selected
+                      ? 'bg-brand-500/25 text-brand-300'
+                      : 'bg-white/6 text-neutral-400'
+                  }`}
+                >
+                  {m.icon}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span
+                    className={`block text-xs font-medium truncate ${
+                      selected ? 'text-brand-300' : 'text-neutral-200'
+                    }`}
+                  >
+                    {m.label}
+                  </span>
+                  <span className="block text-[10px] text-neutral-500 truncate">{m.desc}</span>
+                </span>
+                {selected && <Check size={13} className="shrink-0 text-brand-400" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 收起态：简约胶囊按钮 */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="切换 AI 模型"
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all duration-150 ${
+          open
+            ? 'bg-brand-600/20 text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
+            : 'text-neutral-400 hover:text-neutral-200 hover:bg-white/6'
+        }`}
+      >
+        <Cpu size={13} className={open ? 'text-brand-400' : 'text-neutral-500'} />
+        <span className="max-w-[110px] truncate">{current.label}</span>
+        <ChevronUp
+          size={12}
+          className={`text-neutral-500 transition-transform duration-200 ${open ? '' : 'rotate-180'}`}
+        />
+      </button>
+    </div>
+  );
+};
+
+export default ModelSelector;

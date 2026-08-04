@@ -1,0 +1,63 @@
+# Node
+node_modules/
+dist/
+.next/
+.turbo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+vendor/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+.qoder/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.docker/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Build artifacts
+build/
+out/
+coverage/
+.nyc_output/
+
+# OS
+Thumbs.db
+.DS_Store

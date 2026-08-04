@@ -1,0 +1,22 @@
+server:
+  port: 8080
+  mode: debug  # debug/release
+
+database:
+  url: postgres://inkbloom:inkbloom_dev@localhost:5432/inkbloom?sslmode=disable
+
+redis:
+  url: redis://localhost:6379/0
+
+nats:
+  url: nats://localhost:4222
+
+log:
+  level: debug
+  format: console  # console/json
+
+auth:
+  token: inkbloom-dev-token
+
+ai_service:
+  url: http://localhost:8100
