@@ -7,6 +7,7 @@ import (
 
 	"github.com/inkbloom/server/internal/model"
 	"github.com/inkbloom/server/internal/repository"
+	"github.com/inkbloom/server/internal/scope"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -57,13 +58,14 @@ func NewAIContextBuilder(
 	}
 }
 
-// Build assembles AI context from the novel, chapter, and surrounding text.
-// cursorText is the text near the cursor used for keyword matching.
-func (b *AIContextBuilder) Build(ctx context.Context, novelID, chapterID int64, cursorText string) (*AIContext, error) {
+// Build assembles AI context from the novel, chapter, and surrounding text,
+// scoped to the requesting user. cursorText is the text near the cursor used
+// for keyword matching.
+func (b *AIContextBuilder) Build(ctx context.Context, userID, novelID, chapterID int64, cursorText string) (*AIContext, error) {
 	result := &AIContext{}
 
 	// 1. Fetch current chapter
-	chapter, err := b.chapterRepo.GetByID(ctx, chapterID)
+	chapter, err := b.chapterRepo.GetByID(ctx, userID, chapterID)
 	if err != nil {
 		b.logger.Warn("failed to fetch chapter", zap.Int64("chapter_id", chapterID), zap.Error(err))
 	}
@@ -75,7 +77,7 @@ func (b *AIContextBuilder) Build(ctx context.Context, novelID, chapterID int64, 
 	}
 
 	// 2. Fetch novel
-	novel, err := b.novelRepo.GetByID(ctx, novelID)
+	novel, err := b.novelRepo.GetByID(ctx, userID, novelID)
 	if err != nil {
 		b.logger.Warn("failed to fetch novel", zap.Int64("novel_id", novelID), zap.Error(err))
 	}
@@ -87,10 +89,10 @@ func (b *AIContextBuilder) Build(ctx context.Context, novelID, chapterID int64, 
 	keywords := extractKeywords(cursorText)
 
 	// 4. Query related settings (LIKE match, max 5)
-	result.RelatedSettings = b.findRelatedSettings(ctx, novelID, keywords, 5)
+	result.RelatedSettings = b.findRelatedSettings(ctx, userID, novelID, keywords, 5)
 
 	// 5. Query related characters (LIKE match, max 5)
-	result.RelatedCharacters = b.findRelatedCharacters(ctx, novelID, keywords, 5)
+	result.RelatedCharacters = b.findRelatedCharacters(ctx, userID, novelID, keywords, 5)
 
 	// 6. Token budget enforcement (< 4000 tokens, ~1.5 tokens per CJK char / ~1 per English word)
 	truncateContext(result, 4000)
@@ -191,13 +193,13 @@ func extractKeywords(text string) []string {
 }
 
 // findRelatedSettings queries settings matching any keyword via LIKE.
-func (b *AIContextBuilder) findRelatedSettings(ctx context.Context, novelID int64, keywords []string, limit int) []SettingContext {
+func (b *AIContextBuilder) findRelatedSettings(ctx context.Context, userID, novelID int64, keywords []string, limit int) []SettingContext {
 	if len(keywords) == 0 {
 		return nil
 	}
 
 	var settings []model.Setting
-	query := b.db.WithContext(ctx).Where("novel_id = ?", novelID)
+	query := b.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID)
 
 	// Build OR conditions for title/content LIKE match
 	conditions := make([]string, 0, len(keywords)*2)
@@ -235,13 +237,13 @@ func (b *AIContextBuilder) findRelatedSettings(ctx context.Context, novelID int6
 }
 
 // findRelatedCharacters queries characters matching any keyword via LIKE.
-func (b *AIContextBuilder) findRelatedCharacters(ctx context.Context, novelID int64, keywords []string, limit int) []CharacterContext {
+func (b *AIContextBuilder) findRelatedCharacters(ctx context.Context, userID, novelID int64, keywords []string, limit int) []CharacterContext {
 	if len(keywords) == 0 {
 		return nil
 	}
 
 	var characters []model.Character
-	query := b.db.WithContext(ctx).Where("novel_id = ?", novelID)
+	query := b.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID)
 
 	conditions := make([]string, 0, len(keywords)*3)
 	args := make([]interface{}, 0, len(keywords)*3)

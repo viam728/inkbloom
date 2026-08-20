@@ -120,7 +120,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
         start = time.perf_counter()
         try:
             user = prompts.candidates_prompt(request.action, request.context, request.n)
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.8, model=request.model
             )
             if err:
@@ -135,7 +135,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                     for line in content.splitlines()
                     if line.strip()
                 ]
-            return {"candidates": candidates}
+            return {"candidates": candidates, "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_candidates action=%s took %.2fs",
@@ -149,7 +149,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
         start = time.perf_counter()
         try:
             user = prompts.review_prompt(request.chapter_id, request.text)
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.3, max_tokens=3000
             )
             if err:
@@ -177,7 +177,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                     if suggestion:
                         annotation["suggestion"] = suggestion
                     annotations.append(annotation)
-            return {"annotations": annotations}
+            return {"annotations": annotations, "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_review chapter_id=%s took %.2fs",
@@ -191,7 +191,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
         start = time.perf_counter()
         try:
             user = prompts.inspiration_prompt(request.category, request.context or "")
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.9
             )
             if err:
@@ -205,7 +205,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                     for line in content.splitlines()
                     if line.strip()
                 ]
-            return {"items": items}
+            return {"items": items, "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_inspiration category=%s took %.2fs",
@@ -229,12 +229,12 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                 if request.target_words
                 else 4096
             )
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, system, user, temperature=0.8, max_tokens=max_tokens
             )
             if err:
                 return {"draft": "", "error": err}
-            return {"draft": content.strip()}
+            return {"draft": content.strip(), "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_expand_outline title=%s took %.2fs",
@@ -255,7 +255,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                 request.outline_nodes,
                 request.characters,
             )
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.4, max_tokens=3000
             )
             if err:
@@ -265,6 +265,8 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
             if report is None:
                 logger.warning("ai_analyze_story: unparseable report for %s", request.title)
                 return {"error": "failed to parse analysis report"}
+            report["usage"] = usage
+            report["model"] = model_name
             return report
         finally:
             logger.info(
@@ -280,7 +282,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
         try:
             plain = strip_html(request.content)
             user = prompts.analyze_media_prompt(request.title, plain, request.platform)
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.4, max_tokens=3000
             )
             if err:
@@ -290,6 +292,8 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
             if report is None:
                 logger.warning("ai_analyze_media: unparseable report for %s", request.title)
                 return {"error": "failed to parse analysis report"}
+            report["usage"] = usage
+            report["model"] = model_name
             return report
         finally:
             logger.info(
@@ -305,7 +309,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
         try:
             platform = request.platform if request.platform in _PLATFORMS else "wechat"
             user = prompts.generate_titles_prompt(request.topic, platform, request.count)
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, prompts.SYSTEM_JSON, user, temperature=0.9
             )
             if err:
@@ -319,7 +323,7 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                     for line in content.splitlines()
                     if line.strip()
                 ]
-            return {"titles": titles}
+            return {"titles": titles, "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_generate_titles platform=%s took %.2fs",
@@ -338,12 +342,12 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                 return {"adapted": "", "error": "empty content after stripping HTML"}
 
             system, user = prompts.adapt_content_prompt(plain, platform)
-            content, err = await call_llm(
+            content, err, usage, model_name = await call_llm(
                 llm, system, user, temperature=0.7, max_tokens=3000
             )
             if err:
                 return {"adapted": "", "error": err}
-            return {"adapted": content.strip()}
+            return {"adapted": content.strip(), "usage": usage, "model": model_name}
         finally:
             logger.info(
                 "ai_adapt_content platform=%s took %.2fs",

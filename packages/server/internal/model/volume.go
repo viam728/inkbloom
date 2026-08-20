@@ -9,6 +9,7 @@ import (
 // Volume represents a volume entity within a novel.
 type Volume struct {
 	ID        int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	NovelID   int64          `gorm:"not null;index:idx_volumes_novel" json:"novel_id"`
 	Title     string         `gorm:"type:varchar(255);not null" json:"title"`
 	Position  int            `gorm:"not null;index:idx_volumes_novel" json:"position"`

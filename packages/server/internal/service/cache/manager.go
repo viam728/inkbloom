@@ -7,35 +7,36 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/inkbloom/server/internal/pkg/kvstore"
 	"go.uber.org/zap"
 )
 
 // ErrNullCached is returned when a null value is cached (anti-penetration).
 var ErrNullCached = errors.New("null value cached")
 
-// CacheManager provides Cache-Aside pattern operations backed by Redis.
+// CacheManager provides Cache-Aside pattern operations backed by a kvstore
+// (Redis in cloud mode, in-memory map in the local embedded mode).
 type CacheManager struct {
-	redis  *redis.Client
+	kv     kvstore.Store
 	logger *zap.Logger
 }
 
 // NewCacheManager creates a new CacheManager.
-func NewCacheManager(rdb *redis.Client, logger *zap.Logger) *CacheManager {
-	return &CacheManager{redis: rdb, logger: logger}
+func NewCacheManager(kv kvstore.Store, logger *zap.Logger) *CacheManager {
+	return &CacheManager{kv: kv, logger: logger}
 }
 
 // Get retrieves a value from cache. On miss, it calls loader to load the value
 // and caches it with the given TTL.
 func (m *CacheManager) Get(ctx context.Context, key string, dest interface{}, ttl time.Duration, loader func() (interface{}, error)) error {
 	// Try cache first
-	cached, err := m.redis.Get(ctx, key).Result()
+	cached, err := m.kv.Get(ctx, key)
 	if err == nil {
 		if err := json.Unmarshal([]byte(cached), dest); err == nil {
 			return nil
 		}
 		m.logger.Warn("cache unmarshal failed, reloading", zap.String("key", key), zap.Error(err))
-	} else if !errors.Is(err, redis.Nil) {
+	} else if !errors.Is(err, kvstore.ErrNotFound) {
 		m.logger.Warn("cache get failed", zap.String("key", key), zap.Error(err))
 	}
 
@@ -60,7 +61,7 @@ func (m *CacheManager) Get(ctx context.Context, key string, dest interface{}, tt
 // to prevent cache penetration.
 func (m *CacheManager) GetWithNullCache(ctx context.Context, key string, dest interface{}, ttl time.Duration, loader func() (interface{}, error)) error {
 	// Try cache first
-	cached, err := m.redis.Get(ctx, key).Result()
+	cached, err := m.kv.Get(ctx, key)
 	if err == nil {
 		if cached == NullValue {
 			return ErrNullCached
@@ -69,7 +70,7 @@ func (m *CacheManager) GetWithNullCache(ctx context.Context, key string, dest in
 			return nil
 		}
 		m.logger.Warn("cache unmarshal failed, reloading", zap.String("key", key), zap.Error(err))
-	} else if !errors.Is(err, redis.Nil) {
+	} else if !errors.Is(err, kvstore.ErrNotFound) {
 		m.logger.Warn("cache get failed", zap.String("key", key), zap.Error(err))
 	}
 
@@ -102,7 +103,7 @@ func (m *CacheManager) Set(ctx context.Context, key string, value interface{}, t
 	if err != nil {
 		return fmt.Errorf("cache marshal: %w", err)
 	}
-	if err := m.redis.Set(ctx, key, data, ttl).Err(); err != nil {
+	if err := m.kv.Set(ctx, key, string(data), ttl); err != nil {
 		return fmt.Errorf("cache set %s: %w", key, err)
 	}
 	return nil
@@ -113,7 +114,7 @@ func (m *CacheManager) Delete(ctx context.Context, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	if err := m.redis.Del(ctx, keys...).Err(); err != nil {
+	if _, err := m.kv.Del(ctx, keys...); err != nil {
 		return fmt.Errorf("cache delete: %w", err)
 	}
 	return nil
@@ -130,7 +131,7 @@ func (m *CacheManager) setAsync(ctx context.Context, key string, value interface
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := m.redis.Set(bgCtx, key, data, ttl).Err(); err != nil {
+		if err := m.kv.Set(bgCtx, key, string(data), ttl); err != nil {
 			m.logger.Warn("cache set failed", zap.String("key", key), zap.Error(err))
 		}
 	}()

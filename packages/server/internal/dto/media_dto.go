@@ -1,6 +1,9 @@
 package dto
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Payload ceilings are encoded in the binding tags below: content ≤ 1MB
 // (max=1048576), title ≤ 255, tags ≤ 50 items of ≤ 100 chars each.
@@ -55,4 +58,20 @@ type TopicItem struct {
 // topic list replaces the stored set atomically (idempotent).
 type SaveTopicsRequest struct {
 	Topics []TopicItem `json:"topics" binding:"dive"`
+}
+
+// UpdateMediaMemoryRequest is the request body for PUT /media/memory
+// (whole-document replacement). Version is an optional optimistic-concurrency
+// hint; payload limits are enforced by the service layer (2MB, JSON array).
+type UpdateMediaMemoryRequest struct {
+	Items   json.RawMessage `json:"items"`
+	Version *int            `json:"version"`
+}
+
+// MediaMemoryResponse is the data shape of GET/PUT /media/memory responses.
+// Items is passed through verbatim; no Go-side MemoryItem struct to avoid
+// schema drift with the frontend.
+type MediaMemoryResponse struct {
+	Items   json.RawMessage `json:"items"`
+	Version int             `json:"version"`
 }

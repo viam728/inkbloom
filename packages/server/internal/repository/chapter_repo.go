@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/scope"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -13,18 +15,19 @@ import (
 // belong to the target novel (missing, soft-deleted or cross-novel ids).
 var ErrReorderIDMismatch = errors.New("chapter ids do not match the novel")
 
-// ChapterRepository defines the interface for chapter data access.
+// ChapterRepository defines the interface for chapter data access. Every
+// method is scoped by userID (M1 isolation).
 type ChapterRepository interface {
 	Create(ctx context.Context, chapter *model.Chapter) error
-	GetByID(ctx context.Context, id int64) (*model.Chapter, error)
-	ListByNovelID(ctx context.Context, novelID int64) ([]model.Chapter, error)
-	Update(ctx context.Context, chapter *model.Chapter) error
-	Delete(ctx context.Context, id int64) error
-	DeleteByNovelID(ctx context.Context, novelID int64) error
-	GetMaxPosition(ctx context.Context, novelID int64) (int, error)
-	CreateAtPosition(ctx context.Context, chapter *model.Chapter, position int) error
-	ReorderByIDs(ctx context.Context, novelID int64, ids []int64) error
-	RefreshNovelWordCount(ctx context.Context, novelID int64) error
+	GetByID(ctx context.Context, userID, id int64) (*model.Chapter, error)
+	ListByNovelID(ctx context.Context, userID, novelID int64) ([]model.Chapter, error)
+	Update(ctx context.Context, userID int64, chapter *model.Chapter) error
+	Delete(ctx context.Context, userID, id int64) error
+	DeleteByNovelID(ctx context.Context, userID, novelID int64) error
+	GetMaxPosition(ctx context.Context, userID, novelID int64) (int, error)
+	CreateAtPosition(ctx context.Context, userID int64, chapter *model.Chapter, position int) error
+	ReorderByIDs(ctx context.Context, userID, novelID int64, ids []int64) error
+	RefreshNovelWordCount(ctx context.Context, userID, novelID int64) error
 }
 
 // chapterRepository is the GORM implementation of ChapterRepository.
@@ -41,9 +44,12 @@ func (r *chapterRepository) Create(ctx context.Context, chapter *model.Chapter) 
 	return r.db.WithContext(ctx).Create(chapter).Error
 }
 
-func (r *chapterRepository) GetByID(ctx context.Context, id int64) (*model.Chapter, error) {
+func (r *chapterRepository) GetByID(ctx context.Context, userID, id int64) (*model.Chapter, error) {
 	var chapter model.Chapter
-	if err := r.db.WithContext(ctx).First(&chapter, id).Error; err != nil {
+	err := r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
+		First(&chapter, id).Error
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -52,33 +58,45 @@ func (r *chapterRepository) GetByID(ctx context.Context, id int64) (*model.Chapt
 	return &chapter, nil
 }
 
-func (r *chapterRepository) ListByNovelID(ctx context.Context, novelID int64) ([]model.Chapter, error) {
+func (r *chapterRepository) ListByNovelID(ctx context.Context, userID, novelID int64) ([]model.Chapter, error) {
 	var chapters []model.Chapter
-	if err := r.db.WithContext(ctx).
+	err := r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
 		Where("novel_id = ?", novelID).
 		Order("position ASC").
-		Find(&chapters).Error; err != nil {
+		Find(&chapters).Error
+	if err != nil {
 		return nil, err
 	}
 	return chapters, nil
 }
 
-func (r *chapterRepository) Update(ctx context.Context, chapter *model.Chapter) error {
-	return r.db.WithContext(ctx).Save(chapter).Error
+func (r *chapterRepository) Update(ctx context.Context, userID int64, chapter *model.Chapter) error {
+	chapter.UserID = userID
+	return r.db.WithContext(ctx).
+		Model(chapter).
+		Where("user_id = ?", userID).
+		Save(chapter).Error
 }
 
-func (r *chapterRepository) Delete(ctx context.Context, id int64) error {
-	return r.db.WithContext(ctx).Delete(&model.Chapter{}, id).Error
+func (r *chapterRepository) Delete(ctx context.Context, userID, id int64) error {
+	return r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
+		Delete(&model.Chapter{}, id).Error
 }
 
-func (r *chapterRepository) DeleteByNovelID(ctx context.Context, novelID int64) error {
-	return r.db.WithContext(ctx).Where("novel_id = ?", novelID).Delete(&model.Chapter{}).Error
+func (r *chapterRepository) DeleteByNovelID(ctx context.Context, userID, novelID int64) error {
+	return r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
+		Where("novel_id = ?", novelID).
+		Delete(&model.Chapter{}).Error
 }
 
-func (r *chapterRepository) GetMaxPosition(ctx context.Context, novelID int64) (int, error) {
+func (r *chapterRepository) GetMaxPosition(ctx context.Context, userID, novelID int64) (int, error) {
 	var maxPos int
 	err := r.db.WithContext(ctx).
 		Model(&model.Chapter{}).
+		Scopes(scope.ForUser(userID)).
 		Where("novel_id = ?", novelID).
 		Select("COALESCE(MAX(position), 0)").
 		Scan(&maxPos).Error
@@ -94,13 +112,14 @@ func (r *chapterRepository) GetMaxPosition(ctx context.Context, novelID int64) (
 // unique index uniq_chapters_novel_position is non-deferrable, so PostgreSQL
 // validates it row-by-row during statement execution, and adjacent increments
 // (e.g. 1->2 while a row still holds 2) deterministically hit 23505.
-func (r *chapterRepository) CreateAtPosition(ctx context.Context, chapter *model.Chapter, position int) error {
+func (r *chapterRepository) CreateAtPosition(ctx context.Context, userID int64, chapter *model.Chapter, position int) error {
+	chapter.UserID = userID
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Phase 1: move rows to be shifted (position >= target) to negative
 		// sentinel values (-position-1). The mapping is injective and cannot
 		// collide with any non-negative position still held by other rows.
 		if err := tx.Model(&model.Chapter{}).
-			Where("novel_id = ? AND position >= ?", chapter.NovelID, position).
+			Where("user_id = ? AND novel_id = ? AND position >= ?", userID, chapter.NovelID, position).
 			UpdateColumn("position", gorm.Expr("-position - 1")).Error; err != nil {
 			return err
 		}
@@ -110,7 +129,7 @@ func (r *chapterRepository) CreateAtPosition(ctx context.Context, chapter *model
 		// >= position+1, distinct, and cannot collide with untouched rows
 		// (which hold 0..position-1).
 		if err := tx.Model(&model.Chapter{}).
-			Where("novel_id = ? AND position < 0", chapter.NovelID).
+			Where("user_id = ? AND novel_id = ? AND position < 0", userID, chapter.NovelID).
 			UpdateColumn("position", gorm.Expr("-position")).Error; err != nil {
 			return err
 		}
@@ -121,15 +140,15 @@ func (r *chapterRepository) CreateAtPosition(ctx context.Context, chapter *model
 }
 
 // ReorderByIDs rewrites chapter positions to 0..len(ids)-1 following the
-// given id order, inside a single transaction. The novel_id guard on every
-// update prevents cross-novel tampering.
-func (r *chapterRepository) ReorderByIDs(ctx context.Context, novelID int64, ids []int64) error {
+// given id order, inside a single transaction. The user_id + novel_id guards
+// on every update prevent cross-user / cross-novel tampering.
+func (r *chapterRepository) ReorderByIDs(ctx context.Context, userID, novelID int64, ids []int64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Lock the target chapter rows for the duration of the transaction.
 		var locked []int64
 		if err := tx.Model(&model.Chapter{}).
 			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("novel_id = ? AND id IN ?", novelID, ids).
+			Where("user_id = ? AND novel_id = ? AND id IN ?", userID, novelID, ids).
 			Pluck("id", &locked).Error; err != nil {
 			return err
 		}
@@ -140,7 +159,7 @@ func (r *chapterRepository) ReorderByIDs(ctx context.Context, novelID int64, ids
 		// Phase 1: move affected rows to negative sentinel positions so the
 		// per-row final assignments never hit the partial unique index.
 		if err := tx.Model(&model.Chapter{}).
-			Where("novel_id = ? AND id IN ?", novelID, ids).
+			Where("user_id = ? AND novel_id = ? AND id IN ?", userID, novelID, ids).
 			UpdateColumn("position", gorm.Expr("-position - 1")).Error; err != nil {
 			return err
 		}
@@ -148,10 +167,10 @@ func (r *chapterRepository) ReorderByIDs(ctx context.Context, novelID int64, ids
 		// Phase 2: assign final positions following the requested order.
 		for i, id := range ids {
 			res := tx.Model(&model.Chapter{}).
-				Where("id = ? AND novel_id = ?", id, novelID).
+				Where("id = ? AND novel_id = ? AND user_id = ?", id, novelID, userID).
 				Updates(map[string]interface{}{
 					"position":   i,
-					"updated_at": gorm.Expr("now()"),
+					"updated_at": time.Now(),
 				})
 			if res.Error != nil {
 				return res.Error
@@ -165,13 +184,14 @@ func (r *chapterRepository) ReorderByIDs(ctx context.Context, novelID int64, ids
 }
 
 // RefreshNovelWordCount recomputes novels.word_count from the SQL aggregate
-// of its non-soft-deleted chapters.
-func (r *chapterRepository) RefreshNovelWordCount(ctx context.Context, novelID int64) error {
+// of its non-soft-deleted chapters. The update is guarded by user_id so a
+// stale novel id can never rewrite another user's counter.
+func (r *chapterRepository) RefreshNovelWordCount(ctx context.Context, userID, novelID int64) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Novel{}).
-		Where("id = ?", novelID).
+		Where("id = ? AND user_id = ?", novelID, userID).
 		UpdateColumn("word_count", gorm.Expr(
-			"(SELECT COALESCE(SUM(word_count), 0) FROM chapters WHERE novel_id = ? AND deleted_at IS NULL)",
-			novelID,
+			"(SELECT COALESCE(SUM(word_count), 0) FROM chapters WHERE novel_id = ? AND user_id = ? AND deleted_at IS NULL)",
+			novelID, userID,
 		)).Error
 }

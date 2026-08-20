@@ -13,30 +13,53 @@ import DashboardModal from '@/components/insights/DashboardModal';
 import RhythmModal from '@/components/insights/RhythmModal';
 import InspirationModal from '@/components/insights/InspirationModal';
 
-/** 拖拽调整宽度的手柄 */
+/** 拖拽调整宽度的手柄：raf 节流 + 双击折叠/还原 */
 const ResizeHandle: React.FC<{
   side: 'left' | 'right';
   onDelta: (deltaX: number) => void;
-}> = ({ side, onDelta }) => {
+  onDoubleClick: () => void;
+}> = ({ side, onDelta, onDoubleClick }) => {
   const dragging = useRef(false);
   const lastX = useRef(0);
+  const pendingX = useRef(0);
+  const rafId = useRef<number | null>(null);
+
+  // 卸载时清理未消费的 raf
+  useEffect(() => {
+    return () => {
+      if (rafId.current != null) cancelAnimationFrame(rafId.current);
+    };
+  }, []);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     dragging.current = true;
     lastX.current = e.clientX;
+    pendingX.current = e.clientX;
     document.body.classList.add('resizing');
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragging.current) return;
-    const delta = e.clientX - lastX.current;
-    lastX.current = e.clientX;
-    onDelta(side === 'left' ? delta : -delta);
+    pendingX.current = e.clientX;
+    // requestAnimationFrame 节流：每帧最多消费一次位移
+    if (rafId.current != null) return;
+    rafId.current = requestAnimationFrame(() => {
+      rafId.current = null;
+      if (!dragging.current) return;
+      const delta = pendingX.current - lastX.current;
+      if (delta === 0) return;
+      lastX.current = pendingX.current;
+      onDelta(side === 'left' ? delta : -delta);
+    });
   };
 
   const handlePointerUp = () => {
     dragging.current = false;
+    if (rafId.current != null) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
     document.body.classList.remove('resizing');
   };
 
@@ -45,6 +68,7 @@ const ResizeHandle: React.FC<{
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onDoubleClick={onDoubleClick}
       className="group relative w-[3px] shrink-0 cursor-col-resize z-10 -mx-[1px]"
     >
       <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[3px] bg-transparent group-hover:bg-brand-500/60 group-active:bg-brand-400 transition-colors" />
@@ -60,6 +84,7 @@ const AppLayout: React.FC = () => {
     leftCollapsed,
     rightCollapsed,
     analysisCollapsed,
+    editorMaximized,
     focusMode,
     role,
     setLeftWidth,
@@ -109,12 +134,27 @@ const AppLayout: React.FC = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [toggleLeft, toggleRight, toggleAnalysis, togglePalette, toggleShortcuts, toggleFocusMode]);
 
+  // 拖拽越界（低于 MIN）自动折叠：toggleLeft/toggleRight 会记录折叠前宽度供还原
   const handleLeftDelta = useCallback(
-    (delta: number) => setLeftWidth(useUIStore.getState().leftWidth + delta),
+    (delta: number) => {
+      const s = useUIStore.getState();
+      if (s.leftWidth + delta < LEFT_MIN) {
+        if (!s.leftCollapsed) s.toggleLeft();
+        return;
+      }
+      setLeftWidth(s.leftWidth + delta);
+    },
     [setLeftWidth],
   );
   const handleRightDelta = useCallback(
-    (delta: number) => setRightWidth(useUIStore.getState().rightWidth + delta),
+    (delta: number) => {
+      const s = useUIStore.getState();
+      if (s.rightWidth + delta < RIGHT_MIN) {
+        if (!s.rightCollapsed) s.toggleRight();
+        return;
+      }
+      setRightWidth(s.rightWidth + delta);
+    },
     [setRightWidth],
   );
   const handleAnalysisDelta = useCallback(
@@ -123,6 +163,9 @@ const AppLayout: React.FC = () => {
   );
 
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+  // 最大化/专注模式：渲染层隐藏全部侧栏（不改 collapsed 持久态，退出后恢复原状）
+  const chromeHidden = focusMode || editorMaximized;
 
   // 简约随记模式：整屏切换为轻量笔记界面
   if (role === 'memo') {
@@ -141,7 +184,7 @@ const AppLayout: React.FC = () => {
   return (
     <div className="flex flex-1 min-h-0 w-full overflow-hidden bg-surface-0 text-neutral-100 relative">
       {/* ===== 左侧栏 ===== */}
-      {!focusMode &&
+      {!chromeHidden &&
         (leftCollapsed ? (
           <button
             onClick={toggleLeft}
@@ -161,7 +204,7 @@ const AppLayout: React.FC = () => {
             >
               <LeftPanel />
             </div>
-            <ResizeHandle side="left" onDelta={handleLeftDelta} />
+            <ResizeHandle side="left" onDelta={handleLeftDelta} onDoubleClick={toggleLeft} />
           </>
         ))}
 
@@ -169,7 +212,7 @@ const AppLayout: React.FC = () => {
       {role === 'media' ? <MediaEditorArea /> : <EditorArea />}
 
       {/* ===== 右侧栏 ===== */}
-      {!focusMode &&
+      {!chromeHidden &&
         (rightCollapsed ? (
           <button
             onClick={toggleRight}
@@ -183,7 +226,7 @@ const AppLayout: React.FC = () => {
           </button>
         ) : (
           <>
-            <ResizeHandle side="right" onDelta={handleRightDelta} />
+            <ResizeHandle side="right" onDelta={handleRightDelta} onDoubleClick={toggleRight} />
             <div
               className="shrink-0 h-full overflow-hidden animate-fade-in"
               style={{ width: clamp(rightWidth, RIGHT_MIN, RIGHT_MAX) }}
@@ -194,7 +237,7 @@ const AppLayout: React.FC = () => {
         ))}
 
       {/* ===== 分析面板（第四面板） ===== */}
-      {!focusMode &&
+      {!chromeHidden &&
         (analysisCollapsed ? (
           <button
             onClick={toggleAnalysis}
@@ -208,7 +251,7 @@ const AppLayout: React.FC = () => {
           </button>
         ) : (
           <>
-            <ResizeHandle side="right" onDelta={handleAnalysisDelta} />
+            <ResizeHandle side="right" onDelta={handleAnalysisDelta} onDoubleClick={toggleAnalysis} />
             <div
               className="shrink-0 h-full overflow-hidden animate-fade-in"
               style={{ width: clamp(analysisWidth, ANALYSIS_MIN, ANALYSIS_MAX) }}

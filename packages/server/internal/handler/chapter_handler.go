@@ -30,7 +30,7 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.CreateChapter(c.Request.Context(), &req)
+	chapter, err := h.chapterService.CreateChapter(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
@@ -50,7 +50,7 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.GetChapter(c.Request.Context(), id)
+	chapter, err := h.chapterService.GetChapter(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
@@ -70,7 +70,7 @@ func (h *ChapterHandler) GetChapterContent(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.GetChapter(c.Request.Context(), id)
+	chapter, err := h.chapterService.GetChapter(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
@@ -107,7 +107,7 @@ func (h *ChapterHandler) ReorderChapters(c *gin.Context) {
 		return
 	}
 
-	if err := h.chapterService.ReorderChapters(c.Request.Context(), novelID, req.OrderedIDs); err != nil {
+	if err := h.chapterService.ReorderChapters(c.Request.Context(), GetUserID(c), novelID, req.OrderedIDs); err != nil {
 		switch {
 		case errors.Is(err, service.ErrNotFound):
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
@@ -131,7 +131,7 @@ func (h *ChapterHandler) ListChaptersByNovel(c *gin.Context) {
 		return
 	}
 
-	chapters, err := h.chapterService.ListChaptersByNovel(c.Request.Context(), novelID)
+	chapters, err := h.chapterService.ListChaptersByNovel(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -153,7 +153,7 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.UpdateChapter(c.Request.Context(), id, &req)
+	chapter, err := h.chapterService.UpdateChapter(c.Request.Context(), GetUserID(c), id, &req)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
@@ -173,7 +173,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 		return
 	}
 
-	if err := h.chapterService.DeleteChapter(c.Request.Context(), id); err != nil {
+	if err := h.chapterService.DeleteChapter(c.Request.Context(), GetUserID(c), id); err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
 			return

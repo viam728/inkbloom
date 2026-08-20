@@ -27,7 +27,7 @@ func (h *KnowledgeHandler) Extract(c *gin.Context) {
 		return
 	}
 
-	if err := h.knowledgeService.ExtractFromChapter(c.Request.Context(), req.NovelID, req.ChapterID, req.Text); err != nil {
+	if err := h.knowledgeService.ExtractFromChapter(c.Request.Context(), GetUserID(c), req.NovelID, req.ChapterID, req.Text); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, dto.APIResponse{Code: 422, Message: err.Error()})
 		return
 	}
@@ -43,7 +43,7 @@ func (h *KnowledgeHandler) GetGraph(c *gin.Context) {
 		return
 	}
 
-	graph, err := h.knowledgeService.GetGraph(c.Request.Context(), novelID)
+	graph, err := h.knowledgeService.GetGraph(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -60,7 +60,7 @@ func (h *KnowledgeHandler) CheckConsistency(c *gin.Context) {
 		return
 	}
 
-	issues, err := h.knowledgeService.CheckConsistency(c.Request.Context(), req.NovelID, req.ChapterID, req.Text)
+	issues, err := h.knowledgeService.CheckConsistency(c.Request.Context(), GetUserID(c), req.NovelID, req.ChapterID, req.Text)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, dto.APIResponse{Code: 422, Message: err.Error()})
 		return

@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import type { Editor } from '@tiptap/react';
+import { TextSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Image from '@tiptap/extension-image';
@@ -12,22 +14,46 @@ import CharacterMention, { CharacterSuggestionPopup } from './extensions/Charact
 import ContextMenu from './ContextMenu';
 import DiffViewer from './DiffViewer';
 import SlashCommandMenu, { SLASH_ITEMS, type SlashItem } from './SlashCommandMenu';
+import ImagePickerModal from './ImagePickerModal';
 import CandidatesPanel, { setLastCandidatesContext } from './CandidatesPanel';
+import { toast } from '@/components/common/Toast';
+import { uploadImage } from '@/services/image-client';
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useUIStore } from '@/stores/ui-store';
 import { useCandidatesStore } from '@/stores/candidates-store';
+import type { MediaPlatform } from '@/types/media';
 
 interface TipTapEditorProps {
   content: string;
   onChange: (html: string) => void;
   onWordCount?: (count: number) => void;
-  onExport?: () => void;
   /** 编辑器变体：novel 含角色@提及/章节分隔/行内续写等小说专属能力 */
   variant?: EditorVariant;
   placeholder?: string;
-  /** 工具栏导出按钮右侧的额外插槽 */
-  afterExport?: React.ReactNode;
+  /** 自媒体模式：当前发布平台（统一导出弹窗内选择） */
+  platform?: MediaPlatform;
+  onSelectPlatform?: (id: MediaPlatform) => void;
+  /** 自媒体模式：平台风格改写入口 */
+  onAdapt?: () => Promise<void>;
+  /** 工具栏预设：plain 时仅保留纯文本格式化按钮，并 gate 掉 AI/小说专属交互（弹窗编辑器场景） */
+  toolbarPreset?: 'full' | 'plain';
+  /** 编辑区内容层类名（覆盖默认 prose 基线，弹窗场景可传小 min-h） */
+  editorClassName?: string;
+  /** 局部专注：是否提供受控专注开关（由宿主决定布局） */
+  focusable?: boolean;
+  /** 局部专注：当前是否处于专注态（受控） */
+  focused?: boolean;
+  /** 局部专注：切换回调（受控） */
+  onToggleFocus?: () => void;
+  /** AIGC 入口回调（透传 Toolbar，传入时渲染 Sparkles 按钮） */
+  onAIGC?: () => void;
+  /** AIGC 调用中：按钮展示加载态并禁用 */
+  aigcLoading?: boolean;
+  /** 编辑器实例标识：写入容器 data-inkbloom-editor，供 inkbloom:insert-content 定向投递 */
+  insertTarget?: string;
+  /** 工具栏下方插槽（如章节标题输入框），由宿主自绘 */
+  titleSlot?: React.ReactNode;
 }
 
 /** 编辑器变体：三种创作模式共用同一套富文本内核 */
@@ -50,19 +76,35 @@ interface SlashState {
   query: string;
 }
 
+/** 模块级：最近一次获得焦点的编辑器容器（insert-content 无 target 时的定向依据） */
+let lastActiveEditorEl: HTMLDivElement | null = null;
+
 const TipTapEditor: React.FC<TipTapEditorProps> = ({
   content,
   onChange,
   onWordCount,
-  onExport,
   variant = 'novel',
   placeholder,
-  afterExport,
+  platform,
+  onSelectPlatform,
+  onAdapt,
+  toolbarPreset = 'full',
+  editorClassName,
+  focusable,
+  focused,
+  onToggleFocus,
+  onAIGC,
+  aigcLoading,
+  insertTarget,
+  titleSlot,
 }) => {
   const isNovel = variant === 'novel';
+  const isPlain = toolbarPreset === 'plain';
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const currentChapter = useNovelStore((s) => s.currentChapter);
-  const focusMode = useUIStore((s) => s.focusMode);
+  const rawFocusMode = useUIStore((s) => s.focusMode);
+  // plain 模式隔离全局专注态：弹窗编辑器不参与主界面专注模式
+  const focusMode = isPlain ? false : rawFocusMode;
   const triggerInline = useAIStore((s) => s.triggerInline);
   const inlineSuggestion = useAIStore((s) => s.inlineSuggestion);
   const isInlineStreaming = useAIStore((s) => s.isInlineStreaming);
@@ -77,7 +119,38 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   const [inlinePos, setInlinePos] = useState<DOMRect | null>(null);
   const [slash, setSlash] = useState<SlashState>({ visible: false, rect: null, query: '' });
   const [slashIndex, setSlashIndex] = useState(0);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+
+  // paste/drop 上传链路：editorProps 闭包在创建时捕获，经 ref 取最新编辑器实例与变体
+  const editorInstanceRef = useRef<Editor | null>(null);
+  const variantRef = useRef<EditorVariant>(variant);
+  variantRef.current = variant;
+
+  /** 图片文件 → 图床上传 → 成功后在光标处插入（绝不插入无效 src 或 base64） */
+  const uploadAndInsertImages = async (files: File[]) => {
+    if (files.length === 0) return;
+    const v = variantRef.current;
+    const novelId = v === 'novel' ? useNovelStore.getState().currentNovel?.id : undefined;
+    toast.show(`正在上传 ${files.length} 张图片…`, 'info');
+    let ok = 0;
+    for (const file of files) {
+      try {
+        const res = await uploadImage(file, { scope: v, novelId });
+        const ed = editorInstanceRef.current;
+        if (ed && !ed.isDestroyed) {
+          ed.chain()
+            .focus()
+            .insertContent({ type: 'image', attrs: { src: res.url, alt: res.display_name } })
+            .run();
+        }
+        ok += 1;
+      } catch (e) {
+        toast.show(`${file.name}：${e instanceof Error ? e.message : '上传失败'}`, 'error');
+      }
+    }
+    if (ok > 0) toast.show(`已插入 ${ok} 张图片`, 'success');
+  };
 
   // Characters for mention suggestion popup
   const characters: Array<{ name: string; id: number }> = (currentNovel as any)?.characters ?? [];
@@ -88,12 +161,13 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         heading: { levels: [1, 2, 3] },
       }),
       Underline,
-      Image,
+      // inline 化：空段落插入独占一行视觉，文本中间插入行内嵌入；禁 base64
+      Image.configure({ inline: true, allowBase64: false }),
       Placeholder.configure({
         placeholder: placeholder ?? '开始写作...',
       }),
-      // 小说专属扩展：章节分隔与角色@提及
-      ...(isNovel ? [ChapterBreak, CharacterMention] : []),
+      // 小说专属扩展：章节分隔与角色@提及（plain 模式不注册）
+      ...(isNovel && !isPlain ? [ChapterBreak, CharacterMention] : []),
       Highlight.configure({ multicolor: true }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
     ],
@@ -108,11 +182,11 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
       const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
       onWordCount?.(chineseChars + englishWords);
 
-      // Check for @ mention trigger（仅小说模式）
+      // Check for @ mention trigger（仅小说模式，plain 禁用）
       const { state } = ed;
       const { $from } = state.selection;
       const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\0');
-      if (isNovel) {
+      if (isNovel && !isPlainRef.current) {
         const atMatch = textBefore.match(/@(\S*)$/);
         if (atMatch && characters.length > 0) {
           const coords = ed.view.coordsAtPos($from.pos);
@@ -126,8 +200,8 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         }
       }
 
-      // Check for / slash command trigger（行内独立斜杠开头）
-      const slashMatch = textBefore.match(/\/([\u4e00-\u9fff\w-]*)$/);
+      // Check for / slash command trigger（行内独立斜杠开头，plain 模式禁用）
+      const slashMatch = isPlainRef.current ? null : textBefore.match(/\/([\u4e00-\u9fff\w-]*)$/);
       const beforeSlash = textBefore.slice(0, textBefore.length - (slashMatch?.[0].length ?? 0));
       if (slashMatch && (beforeSlash === '' || /\s$/.test(beforeSlash))) {
         const coords = ed.view.coordsAtPos($from.pos);
@@ -144,10 +218,13 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     editorProps: {
       attributes: {
         class:
+          editorClassName ??
           'prose prose-invert max-w-none min-h-[400px] px-8 py-6 focus:outline-none text-neutral-200',
       },
       handleDOMEvents: {
         contextmenu: (view, event) => {
+          // plain 模式禁用右键改写菜单
+          if (isPlainRef.current) return false;
           const sel = view.state.selection;
           const { from, to } = sel;
           if (from === to) return false;
@@ -160,6 +237,34 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
           event.preventDefault();
           return true;
         },
+      },
+      handlePaste: (_view, event) => {
+        // plain（记忆弹窗编辑器）不参与图片上传链路
+        if (isPlainRef.current) return false;
+        // 图片文件粘贴 → 上传后插入（HTML/base64 粘贴走默认链路，base64 被扩展拒绝）
+        const files = Array.from(event.clipboardData?.files ?? []).filter((f) =>
+          f.type.startsWith('image/'),
+        );
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void uploadAndInsertImages(files);
+        return true;
+      },
+      handleDrop: (view, event) => {
+        if (isPlainRef.current) return false;
+        const files = Array.from(event.dataTransfer?.files ?? []).filter((f) =>
+          f.type.startsWith('image/'),
+        );
+        if (files.length === 0) return false;
+        event.preventDefault();
+        // 拖入位置有文本节点时先移动光标到落点
+        const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (pos) {
+          const $pos = view.state.doc.resolve(Math.min(pos.pos, view.state.doc.content.size));
+          view.dispatch(view.state.tr.setSelection(TextSelection.near($pos)));
+        }
+        void uploadAndInsertImages(files);
+        return true;
       },
       handleKeyDown: (view, event) => {
         // 斜杠命令菜单键盘导航
@@ -195,8 +300,8 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
           return true;
         }
 
-        // Ctrl+Space → inline completion（仅小说模式）
-        if (event.ctrlKey && event.code === 'Space' && isNovelRef.current) {
+        // Ctrl+Space → inline completion（仅小说模式，plain 禁用）
+        if (event.ctrlKey && event.code === 'Space' && isNovelRef.current && !isPlainRef.current) {
           event.preventDefault();
           const { state } = view;
           const { from } = state.selection;
@@ -240,8 +345,8 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
           return true;
         }
 
-        // Esc → 退出专注模式（无建议时）
-        if (event.key === 'Escape' && useUIStore.getState().focusMode) {
+        // Esc → 退出专注模式（无建议时，plain 不参与）
+        if (event.key === 'Escape' && !isPlainRef.current && useUIStore.getState().focusMode) {
           useUIStore.getState().exitFocusMode();
           return true;
         }
@@ -251,12 +356,24 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     },
   });
 
+  editorInstanceRef.current = editor ?? null;
+
   // Sync external content changes
   useEffect(() => {
     if (!editor) return;
     const currentHtml = editor.getHTML();
-    if (currentHtml !== content && content !== '') {
+    if (currentHtml === content) return;
+    if (content !== '') {
       editor.commands.setContent(content);
+      return;
+    }
+    // 空内容同步：宿主传入 '' 但编辑器非空 —— 发生于按 id re-key 重挂载后宿主状态
+    // 滞后一拍（首帧以上一条内容初始化）或外部清空，必须清空编辑器。
+    // 仅按文本判空：用户删空全文时 onChange 已回写 ''，此时编辑器本就为空，不会触发。
+    // setContent 第二参 emitUpdate 缺省为 false，不会触发 onUpdate，避免把空内容
+    // 反向回写宿主、误触发防抖保存与字数统计。
+    if (editor.state.doc.textContent.trim().length > 0) {
+      editor.commands.setContent('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, editor]);
@@ -343,6 +460,11 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
       }
       setSlash((prev) => ({ ...prev, visible: false }));
 
+      if (item.kind === 'image') {
+        setImagePickerOpen(true);
+        return;
+      }
+
       if (item.kind === 'format') {
         const chain = editor.chain().focus();
         switch (item.format) {
@@ -372,6 +494,8 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   // 供 handleKeyDown 闭包使用的最新值引用
   const isNovelRef = useRef(isNovel);
   isNovelRef.current = isNovel;
+  const isPlainRef = useRef(isPlain);
+  isPlainRef.current = isPlain;
   const slashMenuOpenRef = useRef(false);
   const filteredSlashRef = useRef<SlashItem[]>([]);
   const slashIndexRef = useRef(0);
@@ -427,9 +551,56 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     return () => window.removeEventListener('inkbloom:locate-text', handler);
   }, [editor]);
 
+  // 内容插入广播：AIGC 预览/引导字段一键载入等外部入口投递 HTML 到光标处。
+  // 多实例并存时事件会广播给所有编辑器，定向策略（简单可靠方案）：
+  // 1. detail.target 存在 → 仅容器 data-inkbloom-editor 匹配的实例插入；
+  // 2. 无 target → 仅最近一次被聚焦（focusCapture 记录）的实例插入。
+  useEffect(() => {
+    const handler = (e: Event) => {
+      if (!editor) return;
+      // plain 实例（记忆弹窗编辑器）不接收外部插入广播，避免 AIGC 内容误落
+      if (isPlainRef.current) return;
+      const detail = (e as CustomEvent).detail as string | { html?: string; target?: string } | undefined;
+      const html = typeof detail === 'string' ? detail : detail?.html;
+      const target = typeof detail === 'string' ? undefined : detail?.target;
+      if (!html) return;
+      const el = editorRef.current;
+      if (target) {
+        if (el?.dataset.inkbloomEditor !== target) return;
+      } else if (lastActiveEditorEl !== el) {
+        return;
+      }
+      editor.chain().focus().insertContent(html).run();
+    };
+    window.addEventListener('inkbloom:insert-content', handler);
+    return () => window.removeEventListener('inkbloom:insert-content', handler);
+  }, [editor]);
+
   return (
-    <div className="flex flex-col h-full relative" ref={editorRef}>
-      {!focusMode && <Toolbar editor={editor} onExport={onExport} variant={variant} afterExport={afterExport} />}
+    <div
+      className="flex flex-col h-full relative"
+      ref={editorRef}
+      data-inkbloom-editor={insertTarget}
+      onFocusCapture={() => {
+        if (editorRef.current) lastActiveEditorEl = editorRef.current;
+      }}
+    >
+      {/* 工具栏恒显：全局专注模式下仍可通过工具栏按钮退出专注 */}
+      <Toolbar
+        editor={editor}
+        variant={variant}
+        platform={platform}
+        onSelectPlatform={onSelectPlatform}
+        onAdapt={onAdapt}
+        preset={toolbarPreset}
+        focusable={focusable}
+        focused={focused}
+        onToggleFocus={onToggleFocus}
+        onAIGC={onAIGC}
+        aigcLoading={aigcLoading}
+        onOpenImagePicker={() => setImagePickerOpen(true)}
+      />
+      {titleSlot}
       <div className="flex-1 overflow-y-auto bg-surface-0 relative">
         <div className={focusMode ? 'max-w-3xl mx-auto animate-fade-in' : ''}>
           <EditorContent editor={editor} className="h-full" />
@@ -474,18 +645,20 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         />
       )}
 
-      {/* 多候选生成（N 选 1） */}
-      <CandidatesPanel onAccept={handleAcceptCandidate} />
+      {/* 多候选生成（N 选 1，plain 禁用） */}
+      {!isPlain && <CandidatesPanel onAccept={handleAcceptCandidate} />}
 
-      {/* Context menu */}
-      <ContextMenu
-        selectedText={ctxMenu.selectedText}
-        position={ctxMenu.position}
-        onClose={() => setCtxMenu({ position: null, selectedText: '' })}
-      />
+      {/* Context menu（plain 禁用） */}
+      {!isPlain && (
+        <ContextMenu
+          selectedText={ctxMenu.selectedText}
+          position={ctxMenu.position}
+          onClose={() => setCtxMenu({ position: null, selectedText: '' })}
+        />
+      )}
 
-      {/* Diff viewer overlay */}
-      {showDiffViewer && rewriteResult && (
+      {/* Diff viewer overlay（plain 禁用） */}
+      {!isPlain && showDiffViewer && rewriteResult && (
         <DiffViewer
           original={rewriteResult.original}
           modified={rewriteResult.modified}
@@ -493,6 +666,16 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
           onReject={() => {
             rejectRewrite();
           }}
+        />
+      )}
+
+      {/* 图片选择弹窗（plain 禁用）：工具栏/斜杠命令共用 */}
+      {!isPlain && (
+        <ImagePickerModal
+          open={imagePickerOpen}
+          onClose={() => setImagePickerOpen(false)}
+          editor={editor}
+          variant={variant}
         />
       )}
     </div>

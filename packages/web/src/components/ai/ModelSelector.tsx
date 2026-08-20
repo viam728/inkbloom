@@ -11,16 +11,28 @@ export interface ModelOption {
 
 export const MODELS: ModelOption[] = [
   {
+    value: 'deepseek-v4-flash',
+    label: 'DeepSeek V4 Flash',
+    desc: '极速响应 · 默认模型',
+    icon: <Zap size={14} />,
+  },
+  {
+    value: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    desc: '旗舰能力 · 深度构思',
+    icon: <Sparkles size={14} />,
+  },
+  {
     value: 'gpt-4o-mini',
     label: 'GPT-4o Mini',
     desc: '快速轻量 · 日常创作',
-    icon: <Zap size={14} />,
+    icon: <MessageSquareText size={14} />,
   },
   {
     value: 'gpt-4o',
     label: 'GPT-4o',
     desc: '旗舰能力 · 深度构思',
-    icon: <Sparkles size={14} />,
+    icon: <Cpu size={14} />,
   },
   {
     value: 'deepseek-chat',

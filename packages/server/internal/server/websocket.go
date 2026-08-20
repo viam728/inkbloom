@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +26,7 @@ const (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	// CheckOrigin is replaced by WSHub.CheckOrigin (whitelist-driven, v2 §5.3).
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
@@ -30,7 +34,7 @@ var upgrader = websocket.Upgrader{
 
 // WSMessage represents a WebSocket message sent to clients.
 type WSMessage struct {
-	Type    string      `json:"type"`    // task:created, task:progress, task:completed, task:failed, notification
+	Type    string      `json:"type"` // task:created, task:progress, task:completed, task:failed, notification
 	Payload interface{} `json:"payload"`
 }
 
@@ -50,6 +54,19 @@ type WSHub struct {
 	broadcast  chan WSMessage
 	mu         sync.RWMutex
 	logger     *zap.Logger
+
+	// authenticate validates the query-string token and returns the user id.
+	// When nil, any non-empty token is accepted (legacy dev behavior).
+	authenticate func(token string) (int64, error)
+
+	// localAnon admits tokenless connections as the anonymous local user
+	// (desktop embedded mode, v2 §3.4). Never enable in cloud mode.
+	localAnon bool
+
+	// allowedOrigins is the WS Origin whitelist (v2 §5.3). Empty means
+	// "no cross-origin browser clients" (desktop loopback + same-origin
+	// nginx deployments pass via the empty-Origin / same-host rules).
+	allowedOrigins map[string]struct{}
 }
 
 // NewWSHub creates a new WSHub instance.
@@ -110,20 +127,80 @@ func (h *WSHub) Run(ctx context.Context) {
 	}
 }
 
+// SetAuthenticator installs the token validator (JWT access token) used by
+// HandleConnection to authenticate the "token" query parameter.
+func (h *WSHub) SetAuthenticator(fn func(token string) (int64, error)) {
+	h.authenticate = fn
+}
+
+// SetLocalAnon enables the tokenless anonymous admission used by the
+// desktop embedded mode (loopback listener only).
+func (h *WSHub) SetLocalAnon(enabled bool) {
+	h.localAnon = enabled
+}
+
+// SetAllowedOrigins installs the WS Origin whitelist (v2 §5.3). Requests
+// with an Origin header must match an entry; requests without an Origin
+// header (non-browser clients, curl, the desktop shell's loopback page)
+// are always allowed.
+func (h *WSHub) SetAllowedOrigins(origins []string) {
+	m := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			m[o] = struct{}{}
+		}
+	}
+	h.allowedOrigins = m
+}
+
 // HandleConnection upgrades an HTTP request to a WebSocket connection.
-// Expects a "token" query parameter for authentication.
+// Expects a "token" query parameter carrying a JWT access token.
+// In local embedded mode (v2 §3.4) a missing token is admitted as the
+// anonymous local user (uid=0): the listener is loopback-bound and the
+// desktop renderer connects before any cloud login.
 func (h *WSHub) HandleConnection(c *gin.Context) {
 	// Validate token from query param
 	token := c.Query("token")
 	if token == "" {
+		if h.localAnon {
+			h.serve(c, "0")
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "missing token"})
 		return
 	}
 
-	// For now, accept any non-empty token; extract userID from token or use default
-	userID := c.Query("user_id")
-	if userID == "" {
-		userID = "default"
+	var userID string
+	if h.authenticate != nil {
+		uid, err := h.authenticate(token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "invalid or expired token"})
+			return
+		}
+		userID = strconv.FormatInt(uid, 10)
+	} else {
+		// Legacy fallback: accept any non-empty token.
+		userID = c.Query("user_id")
+		if userID == "" {
+			userID = "default"
+		}
+	}
+
+	h.serve(c, userID)
+}
+
+// serve upgrades the request and registers the client under userID.
+func (h *WSHub) serve(c *gin.Context, userID string) {
+	// Origin whitelist enforcement (v2 §5.3): browser cross-origin requests
+	// carry an Origin header and must match; non-browser clients (no Origin)
+	// and same-host origins always pass.
+	if !h.originAllowed(c.Request) {
+		h.logger.Warn("WebSocket origin rejected",
+			zap.String("origin", c.GetHeader("Origin")),
+			zap.String("ip", c.ClientIP()))
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "origin not allowed"})
+		return
 	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -142,6 +219,25 @@ func (h *WSHub) HandleConnection(c *gin.Context) {
 
 	go client.writePump()
 	go client.readPump()
+}
+
+// originAllowed reports whether the request's Origin passes the whitelist.
+// Rules (v2 §5.3):
+//   - no Origin header (non-browser clients, curl, server-side) → allow;
+//   - Origin host == request Host (same-origin deployment) → allow;
+//   - Origin in the configured whitelist → allow;
+//   - otherwise → reject.
+func (h *WSHub) originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	// Same-origin: strip scheme and compare host.
+	if u, err := url.Parse(origin); err == nil && u.Host == r.Host {
+		return true
+	}
+	_, ok := h.allowedOrigins[origin]
+	return ok
 }
 
 // Broadcast sends a message to all connected clients.

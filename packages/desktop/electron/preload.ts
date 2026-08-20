@@ -17,4 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 应用
   getVersion: () => ipcRenderer.invoke('app:version'),
   getPlatform: () => process.platform,
+
+  // 菜单事件（v2 §7.2）：主进程菜单 → 渲染进程弹窗
+  onMenuOpenDataModal: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('menu:open-data-modal', listener);
+    return () => ipcRenderer.removeListener('menu:open-data-modal', listener);
+  },
 });

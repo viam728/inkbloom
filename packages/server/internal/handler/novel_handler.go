@@ -28,7 +28,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.CreateNovel(c.Request.Context(), &req)
+	novel, err := h.novelService.CreateNovel(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, dto.APIResponse{Code: 422, Message: err.Error()})
 		return
@@ -44,7 +44,7 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.GetNovel(c.Request.Context(), id)
+	novel, err := h.novelService.GetNovel(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
@@ -61,7 +61,7 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	result, err := h.novelService.ListNovels(c.Request.Context(), page, pageSize)
+	result, err := h.novelService.ListNovels(c.Request.Context(), GetUserID(c), page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -83,7 +83,7 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.UpdateNovel(c.Request.Context(), id, &req)
+	novel, err := h.novelService.UpdateNovel(c.Request.Context(), GetUserID(c), id, &req)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
@@ -103,7 +103,7 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 		return
 	}
 
-	if err := h.novelService.DeleteNovel(c.Request.Context(), id); err != nil {
+	if err := h.novelService.DeleteNovel(c.Request.Context(), GetUserID(c), id); err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
 			return

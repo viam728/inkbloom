@@ -13,6 +13,8 @@ import {
 } from '@/services/local-backend';
 import type { Novel, Chapter } from '@/types';
 import type { CreateNovelRequest, UpdateNovelRequest, CreateChapterRequest } from '@/types';
+import { useTabStore, chapterTabKey, countDraftWords } from './tab-store';
+import { useEditorStore } from './editor-store';
 
 const DEV_MOCK = import.meta.env.DEV;
 
@@ -102,6 +104,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   },
 
   selectNovel: async (novel) => {
+    // 切换作品前先把脏草稿尽力落盘，随后 fetchChapters 按新章节 id 清理失效 tab
+    useEditorStore.getState().flushDirtyTabs();
     set({ currentNovel: novel, currentChapter: null });
     await get().fetchChapters(novel.id);
   },
@@ -110,10 +114,14 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     try {
       const data = await apiClient.get(`/novels/${novelId}/chapters`) as any;
       const chapters: Chapter[] = Array.isArray(data) ? data : data?.chapters ?? data?.items ?? [];
-      set({ chapters: sortChapters(chapters) });
+      const sorted = sortChapters(chapters);
+      set({ chapters: sorted });
+      useTabStore.getState().prune(sorted.map((c) => c.id));
     } catch (e) {
       console.error('fetchChapters failed', e);
-      set({ chapters: DEV_MOCK ? sortChapters(localChapters(novelId)) : [] });
+      const chapters = DEV_MOCK ? sortChapters(localChapters(novelId)) : [];
+      set({ chapters });
+      useTabStore.getState().prune(chapters.map((c) => c.id));
     }
   },
 
@@ -186,17 +194,27 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   },
 
   selectChapter: async (chapter) => {
+    const key = chapterTabKey(chapter.id);
+    // 已打开的 tab 直接切换：草稿以 tab-store 为准，不重拉内容，编辑状态不丢
+    const created = useTabStore.getState().openTab(chapter.id, chapter.title, chapter.content || '');
+    if (!created) {
+      const draft = useTabStore.getState().tabs.find((t) => t.key === key)?.draft ?? '';
+      set({ currentChapter: { ...chapter, content: draft } });
+      return;
+    }
     set({ currentChapter: chapter });
     try {
       const data = await apiClient.get(`/chapters/${chapter.id}/content`) as any;
       const content = data?.content ?? data?.content_json ?? '';
       set({ currentChapter: { ...chapter, content, content_json: data?.content_json } });
+      useTabStore.getState().updateTab(key, { draft: content, wordCount: countDraftWords(content) });
     } catch (e) {
       console.error('selectChapter load content failed', e);
       if (DEV_MOCK) {
         // 已有内容（如刚写入的初稿）优先，其次本地缓存
-        const content = chapter.content || getLocalContent(chapter.id);
+        const content = chapter.content || getLocalContent(chapter.id) || '';
         set({ currentChapter: { ...chapter, content } });
+        useTabStore.getState().updateTab(key, { draft: content, wordCount: countDraftWords(content) });
       }
     }
   },
@@ -208,9 +226,19 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       if (!DEV_MOCK) throw e;
       removeLocalChapter(id);
     }
-    set((s) => ({
-      chapters: s.chapters.filter((c) => c.id !== id),
-      currentChapter: s.currentChapter?.id === id ? null : s.currentChapter,
-    }));
+    // 同步关闭对应 tab（草稿随章节作废，不再落盘）
+    useTabStore.getState().closeTab(chapterTabKey(id));
+    set((s) => {
+      const chapters = s.chapters.filter((c) => c.id !== id);
+      let currentChapter = s.currentChapter;
+      if (s.currentChapter?.id === id) {
+        // 被删章节正在编辑：currentChapter 跟随 tab 激活项回退（保持编辑器/面板一致）
+        const { tabs, activeKey } = useTabStore.getState();
+        const next = tabs.find((t) => t.key === activeKey);
+        const ch = next ? chapters.find((c) => c.id === next.chapterId) : undefined;
+        currentChapter = ch && next ? { ...ch, content: next.draft } : null;
+      }
+      return { chapters, currentChapter };
+    });
   },
 }));

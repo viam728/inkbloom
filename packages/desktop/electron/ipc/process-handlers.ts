@@ -1,42 +1,29 @@
 import { ipcMain } from 'electron';
-import { ChildProcess } from 'child_process';
+import { EmbeddedServer } from '../server-manager';
 
-interface ServiceStatus {
-  go: boolean;
-  python: boolean;
+export interface ProcessManager {
+  server: EmbeddedServer | null;
+  /** Reload the main window from the embedded server after a restart. */
+  reloadWindow: () => Promise<void>;
 }
 
-interface ProcessManager {
-  goProcess: ChildProcess | null;
-  pythonProcess: ChildProcess | null;
-  startGoService: () => void;
-  startPythonService: () => void;
-}
-
-export function registerProcessHandlers(processManager: ProcessManager): void {
-  ipcMain.handle('process:status', async (): Promise<ServiceStatus> => {
-    return {
-      go: processManager.goProcess !== null && !processManager.goProcess.killed,
-      python: processManager.pythonProcess !== null && !processManager.pythonProcess.killed,
-    };
+/**
+ * IPC for the embedded Go server (task #38). The web UI does not depend on
+ * these channels; they exist for diagnostics and future settings UI.
+ */
+export function registerProcessHandlers(manager: ProcessManager): void {
+  ipcMain.handle('process:status', async (): Promise<{ server: boolean }> => {
+    return { server: manager.server?.isRunning ?? false };
   });
 
   ipcMain.handle('process:restart', async (_event, name: string): Promise<void> => {
-    switch (name) {
-      case 'go':
-        if (processManager.goProcess && !processManager.goProcess.killed) {
-          processManager.goProcess.kill('SIGTERM');
-        }
-        processManager.startGoService();
-        break;
-      case 'python':
-        if (processManager.pythonProcess && !processManager.pythonProcess.killed) {
-          processManager.pythonProcess.kill('SIGTERM');
-        }
-        processManager.startPythonService();
-        break;
-      default:
-        throw new Error(`Unknown service: ${name}`);
+    if (name !== 'server') {
+      throw new Error(`Unknown service: ${name}`);
     }
+    if (!manager.server) {
+      throw new Error('embedded server not initialized');
+    }
+    await manager.server.restart();
+    await manager.reloadWindow();
   });
 }

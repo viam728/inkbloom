@@ -31,10 +31,11 @@ func NewChapterService(cr repository.ChapterRepository, nr repository.NovelRepos
 	return &ChapterService{chapterRepo: cr, novelRepo: nr, cache: cm}
 }
 
-// CreateChapter creates a new chapter and returns the response DTO.
-func (s *ChapterService) CreateChapter(ctx context.Context, req *dto.CreateChapterRequest) (*dto.ChapterResponse, error) {
-	// Verify the novel exists
-	novel, err := s.novelRepo.GetByID(ctx, req.NovelID)
+// CreateChapter creates a new chapter and returns the response DTO. The
+// owning novel is verified within the user's scope.
+func (s *ChapterService) CreateChapter(ctx context.Context, userID int64, req *dto.CreateChapterRequest) (*dto.ChapterResponse, error) {
+	// Verify the novel exists and belongs to the user
+	novel, err := s.novelRepo.GetByID(ctx, userID, req.NovelID)
 	if err != nil {
 		return nil, err
 	}
@@ -43,12 +44,13 @@ func (s *ChapterService) CreateChapter(ctx context.Context, req *dto.CreateChapt
 	}
 
 	// Calculate next position
-	maxPos, err := s.chapterRepo.GetMaxPosition(ctx, req.NovelID)
+	maxPos, err := s.chapterRepo.GetMaxPosition(ctx, userID, req.NovelID)
 	if err != nil {
 		return nil, err
 	}
 
 	chapter := &model.Chapter{
+		UserID:   userID,
 		NovelID:  req.NovelID,
 		VolumeID: req.VolumeID,
 		Title:    req.Title,
@@ -70,13 +72,13 @@ func (s *ChapterService) CreateChapter(ctx context.Context, req *dto.CreateChapt
 		if end := maxPos + 1; pos > end {
 			pos = end
 		}
-		err = s.chapterRepo.CreateAtPosition(ctx, chapter, pos)
+		err = s.chapterRepo.CreateAtPosition(ctx, userID, chapter, pos)
 		if isUniqueViolation(err) {
 			// Concurrent insert raced on the partial unique index; retry once.
 			zap.L().Warn("chapter insert hit unique-index conflict, retrying once",
 				zap.Int64("novel_id", req.NovelID), zap.Int("position", pos), zap.Error(err))
 			chapter.ID = 0
-			err = s.chapterRepo.CreateAtPosition(ctx, chapter, pos)
+			err = s.chapterRepo.CreateAtPosition(ctx, userID, chapter, pos)
 		}
 		if err != nil {
 			zap.L().Error("failed to create chapter at position",
@@ -95,8 +97,8 @@ func (s *ChapterService) CreateChapter(ctx context.Context, req *dto.CreateChapt
 
 // ReorderChapters rewrites chapter positions to 0..n-1 following orderedIDs.
 // Idempotent: the last complete ordered list wins.
-func (s *ChapterService) ReorderChapters(ctx context.Context, novelID int64, orderedIDs []int64) error {
-	novel, err := s.novelRepo.GetByID(ctx, novelID)
+func (s *ChapterService) ReorderChapters(ctx context.Context, userID, novelID int64, orderedIDs []int64) error {
+	novel, err := s.novelRepo.GetByID(ctx, userID, novelID)
 	if err != nil {
 		zap.L().Error("failed to fetch novel for reorder", zap.Int64("novel_id", novelID), zap.Error(err))
 		return err
@@ -119,7 +121,7 @@ func (s *ChapterService) ReorderChapters(ctx context.Context, novelID int64, ord
 		return ErrInvalidInput
 	}
 
-	if err := s.chapterRepo.ReorderByIDs(ctx, novelID, ids); err != nil {
+	if err := s.chapterRepo.ReorderByIDs(ctx, userID, novelID, ids); err != nil {
 		zap.L().Error("failed to reorder chapters",
 			zap.Int64("novel_id", novelID), zap.Int("count", len(ids)), zap.Error(err))
 		return err
@@ -127,13 +129,13 @@ func (s *ChapterService) ReorderChapters(ctx context.Context, novelID int64, ord
 	return nil
 }
 
-// GetChapter retrieves a chapter by ID (with cache).
-func (s *ChapterService) GetChapter(ctx context.Context, id int64) (*dto.ChapterResponse, error) {
-	key := fmt.Sprintf(cache.ChapterContent, id)
+// GetChapter retrieves a chapter by ID within the user's scope (with cache).
+func (s *ChapterService) GetChapter(ctx context.Context, userID, id int64) (*dto.ChapterResponse, error) {
+	key := fmt.Sprintf(cache.ChapterContent, userID, id)
 	var resp dto.ChapterResponse
 
 	err := s.cache.GetWithNullCache(ctx, key, &resp, cache.ChapterTTL, func() (interface{}, error) {
-		chapter, err := s.chapterRepo.GetByID(ctx, id)
+		chapter, err := s.chapterRepo.GetByID(ctx, userID, id)
 		if err != nil {
 			return nil, err
 		}
@@ -152,9 +154,9 @@ func (s *ChapterService) GetChapter(ctx context.Context, id int64) (*dto.Chapter
 	return &resp, nil
 }
 
-// ListChaptersByNovel lists all chapters for a given novel.
-func (s *ChapterService) ListChaptersByNovel(ctx context.Context, novelID int64) ([]dto.ChapterResponse, error) {
-	chapters, err := s.chapterRepo.ListByNovelID(ctx, novelID)
+// ListChaptersByNovel lists all chapters for a given novel within the user's scope.
+func (s *ChapterService) ListChaptersByNovel(ctx context.Context, userID, novelID int64) ([]dto.ChapterResponse, error) {
+	chapters, err := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,9 +168,9 @@ func (s *ChapterService) ListChaptersByNovel(ctx context.Context, novelID int64)
 	return responses, nil
 }
 
-// UpdateChapter updates an existing chapter.
-func (s *ChapterService) UpdateChapter(ctx context.Context, id int64, req *dto.UpdateChapterRequest) (*dto.ChapterResponse, error) {
-	chapter, err := s.chapterRepo.GetByID(ctx, id)
+// UpdateChapter updates an existing chapter within the user's scope.
+func (s *ChapterService) UpdateChapter(ctx context.Context, userID, id int64, req *dto.UpdateChapterRequest) (*dto.ChapterResponse, error) {
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -193,17 +195,17 @@ func (s *ChapterService) UpdateChapter(ctx context.Context, id int64, req *dto.U
 		chapter.Status = *req.Status
 	}
 
-	if err := s.chapterRepo.Update(ctx, chapter); err != nil {
+	if err := s.chapterRepo.Update(ctx, userID, chapter); err != nil {
 		zap.L().Error("failed to update chapter", zap.Int64("chapter_id", id), zap.Error(err))
 		return nil, err
 	}
 	// Invalidate cache after update
-	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, id))
+	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, userID, id))
 
 	// Content changed: refresh the aggregated novel word count. Failure is
 	// non-blocking — the chapter save itself already succeeded.
 	if req.Content != nil {
-		if err := s.chapterRepo.RefreshNovelWordCount(ctx, chapter.NovelID); err != nil {
+		if err := s.chapterRepo.RefreshNovelWordCount(ctx, userID, chapter.NovelID); err != nil {
 			zap.L().Warn("failed to refresh novel word_count after content save",
 				zap.Int64("novel_id", chapter.NovelID), zap.Int64("chapter_id", id), zap.Error(err))
 		}
@@ -211,18 +213,18 @@ func (s *ChapterService) UpdateChapter(ctx context.Context, id int64, req *dto.U
 	return toChapterResponse(chapter), nil
 }
 
-// DeleteChapter deletes a chapter by ID.
-func (s *ChapterService) DeleteChapter(ctx context.Context, id int64) error {
-	chapter, err := s.chapterRepo.GetByID(ctx, id)
+// DeleteChapter deletes a chapter by ID within the user's scope.
+func (s *ChapterService) DeleteChapter(ctx context.Context, userID, id int64) error {
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, id)
 	if err != nil {
 		return err
 	}
 	if chapter == nil {
 		return ErrNotFound
 	}
-	err = s.chapterRepo.Delete(ctx, id)
+	err = s.chapterRepo.Delete(ctx, userID, id)
 	if err == nil {
-		_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, id))
+		_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, userID, id))
 	}
 	return err
 }

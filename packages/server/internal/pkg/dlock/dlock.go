@@ -30,6 +30,13 @@ var lockRenewScript = redis.NewScript(`
 	end
 `)
 
+// LockAcquirer is the lock capability consumed by the task engine. Both
+// DistributedLock (cloud, Redis-backed) and LocalLock (desktop embedded
+// mode, in-process) satisfy it (tech plan v2 §3.3).
+type LockAcquirer interface {
+	Acquire(ctx context.Context, key string, ttl time.Duration) (*Lock, error)
+}
+
 // DistributedLock provides distributed locking via Redis.
 type DistributedLock struct {
 	redis  *redis.Client
@@ -51,6 +58,11 @@ type Lock struct {
 	redis   *redis.Client
 	stopDog chan struct{}
 	logger  *zap.Logger
+
+	// local-mode fields (tech plan v2 §3.3): when local is non-nil the lock
+	// came from LocalLock and Release degenerates to an in-process delete.
+	local    *LocalLock
+	localKey string
 }
 
 // Acquire tries to acquire a distributed lock with the given key and TTL.
@@ -84,6 +96,12 @@ func (l *DistributedLock) Acquire(ctx context.Context, key string, ttl time.Dura
 
 // Release atomically releases the lock if the caller is still the holder.
 func (lk *Lock) Release(ctx context.Context) error {
+	// In-process lock (local mode): no watchdog, no Redis round-trip.
+	if lk.local != nil {
+		lk.local.release(lk.localKey)
+		return nil
+	}
+
 	// Stop the watchdog first
 	close(lk.stopDog)
 

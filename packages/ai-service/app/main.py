@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from grpc import aio as grpc_aio
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from app.config import settings
@@ -19,6 +20,7 @@ from app.knowledge.relation_extractor import RelationExtractor
 from app.knowledge.consistency_checker import ConsistencyChecker
 from app.llm.openai_provider import OpenAIProvider
 from app.ai_actions.routes import create_router as create_ai_actions_router
+from app.agents.routes import create_agent_router
 from app.aigc.pollinations import PollinationsProvider
 from app.aigc.dalle import DallEProvider
 from app.prompt.builder import PromptBuilder
@@ -53,6 +55,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="InkBloom AI Service", lifespan=lifespan)
 
+# Prometheus metrics for the AI service (tech plan v2 §8.1).
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 
 # ── HTTP request / response models ──────────────────────────────────────
 class ChatMessageHTTP(BaseModel):
@@ -75,8 +80,49 @@ _consistency_checker = ConsistencyChecker(_llm)
 _prompt_builder = PromptBuilder()
 _image_prompt_builder = ImagePromptBuilder(_llm)
 
+
+def _sse_stream(messages, model, temperature, max_tokens):
+    """Shared SSE generator (tech plan v2 §6.3).
+
+    Emits content chunks as `data: {"content": ...}` lines, then a terminal
+    usage meta event `data: {"usage": {...}}` right before `[DONE]` so the
+    Go proxy can settle token billing against the real upstream usage.
+    """
+
+    async def generate():
+        usage: dict | None = None
+        try:
+            async for chunk in _llm.stream(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                # Terminal usage chunk (finish_reason="usage"): capture and
+                # emit as the billing meta event, not as content.
+                if chunk.finish_reason == "usage":
+                    usage = {
+                        "prompt_tokens": chunk.prompt_tokens,
+                        "completion_tokens": chunk.completion_tokens,
+                    }
+                    continue
+                data = json.dumps({"content": chunk.content})
+                yield f"data: {data}\n\n"
+            if usage is not None:
+                yield f"data: {json.dumps({'usage': usage})}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            err = json.dumps({"content": f"[Error] {exc}"})
+            yield f"data: {err}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 # ── AI action endpoints (candidates / review / analysis / media) ────────
 app.include_router(create_ai_actions_router(_llm))
+
+# ── Agent scene generation endpoint (character / setting / summary / …) ─
+app.include_router(create_agent_router(_llm))
 
 
 @app.get("/health")
@@ -90,24 +136,7 @@ async def chat_stream(request: ChatHTTPRequest):
     """Stream chat completion chunks via SSE."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-
-    async def generate():
-        try:
-            async for chunk in _llm.stream(
-                messages=messages,
-                model=model,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-            ):
-                data = json.dumps({"content": chunk.content})
-                yield f"data: {data}\n\n"
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            err = json.dumps({"content": f"[Error] {exc}"})
-            yield f"data: {err}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_stream(messages, model, request.temperature, request.max_tokens)
 
 
 @app.post("/api/chat/complete")
@@ -123,7 +152,14 @@ async def chat_complete(request: ChatHTTPRequest):
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
-        return {"content": result.content}
+        # task #43: surface token usage so the Go server can bill it.
+        return {
+            "content": result.content,
+            "usage": {
+                "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
+            },
+        }
     except Exception as exc:
         return {"content": f"[Error] {exc}"}
 
@@ -148,24 +184,7 @@ async def inline_completion(request: InlineRequest):
     """Inline completion - SSE streaming."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-
-    async def generate():
-        try:
-            async for chunk in _llm.stream(
-                messages=messages,
-                model=model,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-            ):
-                data = json.dumps({"content": chunk.content})
-                yield f"data: {data}\n\n"
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            err = json.dumps({"content": f"[Error] {exc}"})
-            yield f"data: {err}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_stream(messages, model, request.temperature, request.max_tokens)
 
 
 @app.post("/api/chat/rewrite")
@@ -173,24 +192,7 @@ async def rewrite_text(request: RewriteRequest):
     """Text rewrite (polish/expand/condense/humanize) - SSE streaming."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-
-    async def generate():
-        try:
-            async for chunk in _llm.stream(
-                messages=messages,
-                model=model,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-            ):
-                data = json.dumps({"content": chunk.content})
-                yield f"data: {data}\n\n"
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            err = json.dumps({"content": f"[Error] {exc}"})
-            yield f"data: {err}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_stream(messages, model, request.temperature, request.max_tokens)
 
 
 # ── Knowledge HTTP endpoints ─────────────────────────────────────────────
@@ -288,6 +290,8 @@ class ImageGenRequest(BaseModel):
     provider: str = "pollinations"
     novel_id: int = 0
     seed: int | None = None
+    # Output directory scope (task #64): novel | media | memo.
+    scope: str = "novel"
 
 
 _pollinations = PollinationsProvider()
@@ -315,6 +319,7 @@ async def generate_image(request: ImageGenRequest):
             height=request.height,
             novel_id=request.novel_id,
             seed=request.seed,
+            scope=request.scope,
         )
         return {
             "url": result.url,

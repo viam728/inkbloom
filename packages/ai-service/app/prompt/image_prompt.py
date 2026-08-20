@@ -101,6 +101,11 @@ class ImagePromptBuilder:
                 max_tokens=1024,
             )
             result = self._parse_response(response.content, style)
+            # task #43: surface token usage so the Go server can bill it.
+            result["usage"] = {
+                "prompt_tokens": int(getattr(response, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(response, "completion_tokens", 0) or 0),
+            }
         except Exception as exc:
             logger.warning("LLM call failed, falling back to rule-based prompt: %s", exc)
             result = self._fallback_prompt(context_text, style)

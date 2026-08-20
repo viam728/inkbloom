@@ -3,7 +3,6 @@ import {
   Plus,
   Trash2,
   ListTree,
-  GripVertical,
   Pencil,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -22,7 +21,6 @@ const ChapterList: React.FC = () => {
     selectChapter,
     deleteChapter,
     renameChapter,
-    reorderChapters,
   } = useNovelStore();
   const { showToast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
@@ -30,10 +28,6 @@ const ChapterList: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [sortDesc, setSortDesc] = useState(false);
-
-  // ── 拖拽排序 ─────────────────────────────────────────────────────────
-  const [draggingId, setDraggingId] = useState<number | null>(null);
-  const [dragOverId, setDragOverId] = useState<number | null>(null);
 
   // ── 重命名 ───────────────────────────────────────────────────────────
   const [renameTarget, setRenameTarget] = useState<Chapter | null>(null);
@@ -91,24 +85,6 @@ const ChapterList: React.FC = () => {
     }
   };
 
-  const handleDrop = (targetId: number) => {
-    if (draggingId == null || draggingId === targetId) {
-      setDraggingId(null);
-      setDragOverId(null);
-      return;
-    }
-    // 在展示列表中把拖拽项移动到目标项之前
-    const next = displayList.filter((c) => c.id !== draggingId);
-    const at = next.findIndex((c) => c.id === targetId);
-    const dragged = displayList.find((c) => c.id === draggingId);
-    if (dragged) next.splice(at, 0, dragged);
-    // store 始终使用升序语义：倒序视图下需反转回升序
-    const ascendingIds = sortDesc ? next.map((c) => c.id).reverse() : next.map((c) => c.id);
-    reorderChapters(ascendingIds);
-    setDraggingId(null);
-    setDragOverId(null);
-  };
-
   if (!currentNovel) return null;
 
   return (
@@ -147,51 +123,19 @@ const ChapterList: React.FC = () => {
 
       {displayList.map((chapter: Chapter, idx: number) => {
         const active = currentChapter?.id === chapter.id;
-        const isDragging = draggingId === chapter.id;
-        const isDragOver = dragOverId === chapter.id && draggingId !== chapter.id;
         return (
           <div
             key={chapter.id}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.effectAllowed = 'move';
-              setDraggingId(chapter.id);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              if (dragOverId !== chapter.id) setDragOverId(chapter.id);
-            }}
-            onDragLeave={() => {
-              if (dragOverId === chapter.id) setDragOverId(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              handleDrop(chapter.id);
-            }}
-            onDragEnd={() => {
-              setDraggingId(null);
-              setDragOverId(null);
-            }}
             onClick={() => selectChapter(chapter)}
             className={`group relative flex items-center gap-2.5 mx-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150 ${
               active
                 ? 'bg-gradient-to-r from-brand-600/20 to-brand-600/5 text-neutral-100'
                 : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'
-            } ${isDragging ? 'opacity-40' : ''} ${
-              isDragOver ? 'ring-1 ring-brand-500/60 bg-brand-500/10' : ''
             }`}
           >
             {active && (
               <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-gradient-to-b from-indigo-400 to-pink-400" />
             )}
-            <span
-              className="shrink-0 text-neutral-600 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
-              title="拖动调整顺序"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <GripVertical size={12} />
-            </span>
             <span
               className={`shrink-0 w-6 h-6 rounded flex items-center justify-center text-[10px] font-semibold ${
                 active ? 'bg-brand-500/20 text-brand-300' : 'bg-white/5 text-neutral-500'

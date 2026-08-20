@@ -10,6 +10,7 @@ import (
 // Chapter represents a chapter entity within a novel.
 type Chapter struct {
 	ID          int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	NovelID     int64          `gorm:"not null;index:idx_chapters_novel" json:"novel_id"`
 	VolumeID    *int64         `gorm:"index" json:"volume_id,omitempty"`
 	Title       string         `gorm:"type:varchar(255);not null" json:"title"`

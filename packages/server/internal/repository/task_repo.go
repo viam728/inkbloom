@@ -5,16 +5,21 @@ import (
 	"fmt"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/scope"
 	"gorm.io/gorm"
 )
 
 // TaskRepository defines the interface for task persistence operations.
+// The unscoped List/GetByID variants serve the background task engine; API
+// handlers must use ListByUser plus an ownership check on GetByID results
+// (M1 isolation).
 type TaskRepository interface {
 	Create(ctx context.Context, task *model.Task) error
 	GetByID(ctx context.Context, id string) (*model.Task, error)
 	UpdateStatus(ctx context.Context, id string, status string) error
 	UpdateProgress(ctx context.Context, id string, progress int16) error
 	List(ctx context.Context, status string, limit int) ([]model.Task, error)
+	ListByUser(ctx context.Context, userID int64, status string, limit int) ([]model.Task, error)
 	IncrementRetry(ctx context.Context, id string) error
 	GetByIdempotencyKey(ctx context.Context, key string) (*model.Task, error)
 }
@@ -47,9 +52,9 @@ func (r *taskRepository) GetByID(ctx context.Context, id string) (*model.Task, e
 func (r *taskRepository) UpdateStatus(ctx context.Context, id string, status string) error {
 	result := r.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", id).
 		Updates(map[string]interface{}{
-			"status":     status,
-			"started_at": gorm.Expr("CASE WHEN ? IN ('running') AND started_at IS NULL THEN NOW() ELSE started_at END", status),
-			"completed_at": gorm.Expr("CASE WHEN ? IN ('success','failed','dead_letter') THEN NOW() ELSE completed_at END", status),
+			"status":       status,
+			"started_at":   gorm.Expr("CASE WHEN ? IN ('running') AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END", status),
+			"completed_at": gorm.Expr("CASE WHEN ? IN ('success','failed','dead_letter') THEN CURRENT_TIMESTAMP ELSE completed_at END", status),
 		})
 	if result.Error != nil {
 		return fmt.Errorf("update task status %s: %w", id, result.Error)
@@ -81,6 +86,25 @@ func (r *taskRepository) List(ctx context.Context, status string, limit int) ([]
 	}
 	if err := query.Find(&tasks).Error; err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+// ListByUser lists tasks owned by a single user (API-facing variant of List;
+// the background engine keeps using the unscoped List).
+func (r *taskRepository) ListByUser(ctx context.Context, userID int64, status string, limit int) ([]model.Task, error) {
+	var tasks []model.Task
+	query := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Order("priority DESC, created_at ASC")
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	} else {
+		query = query.Limit(50)
+	}
+	if err := query.Find(&tasks).Error; err != nil {
+		return nil, fmt.Errorf("list tasks by user: %w", err)
 	}
 	return tasks, nil
 }

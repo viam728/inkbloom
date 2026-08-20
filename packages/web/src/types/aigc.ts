@@ -23,6 +23,21 @@ export interface Asset {
   created_at: string;
 }
 
+/** AIGC 生成记录（GET /aigc/records items）：只含 AIGC，不含 upload */
+export interface AigcRecord {
+  id: number;
+  prompt: string;
+  provider: string;
+  scope: string;
+  asset_id: number | null;
+  novel_id: number | null;
+  created_at: string;
+  url: string;
+  thumb_url: string;
+  display_name: string;
+  content_hash: string;
+}
+
 export interface GenerateOptions {
   width?: number;
   height?: number;

@@ -1,26 +1,34 @@
+# InkBloom desktop packaging (task #38, M2-b).
+# The renderer is served by the embedded Go server (web-dist extraResource),
+# so only the compiled main process ships in `files`.
 appId: com.inkbloom.app
 productName: InkBloom
 directories:
   output: release
-  buildResources: resources
 files:
-  - dist/**/*
   - dist-electron/**/*
+  - package.json
 extraResources:
+  # Compiled Go server (local mode), produced by `npm run build:server`.
   - from: ../server/bin/
     to: server/
-  - from: ../ai-service/
-    to: ai-service/
-    filter:
-      - '**/*'
-      - '!__pycache__'
-      - '!.venv'
+  # Web UI build output, hosted BY the Go server (SPA fallback included).
+  - from: ../web/dist/
+    to: web-dist/
 win:
   target: nsis
-  icon: resources/icon.ico
 mac:
   target: dmg
-  icon: resources/icon.icns
 linux:
   target: AppImage
-  icon: resources/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+# Auto-update feed (tech plan v2 §7.1): generic provider pointing at the
+# self-hosted update feed. The URL is injected at build time via the
+# UPDATE_FEED_URL env var (electron-builder expands ${env.VAR}); the
+# fallback keeps local packaging working without a real feed.
+publish:
+  provider: generic
+  url: ${env.UPDATE_FEED_URL:-https://updates.inkbloom.example.com/}

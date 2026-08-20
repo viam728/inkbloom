@@ -1,7 +1,8 @@
 -- 003_knowledge.up.sql
--- Knowledge graph: nodes (entities) and edges (relations)
+-- Knowledge graph: nodes (entities) and edges (relations).
+-- Idempotent (task #36): tables may already exist via GORM AutoMigrate.
 
-CREATE TABLE knowledge_nodes (
+CREATE TABLE IF NOT EXISTS knowledge_nodes (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     name VARCHAR(255) NOT NULL,
@@ -10,10 +11,10 @@ CREATE TABLE knowledge_nodes (
     source_chapter_id BIGINT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_knowledge_nodes_novel ON knowledge_nodes(novel_id, type);
-CREATE UNIQUE INDEX idx_knowledge_nodes_unique ON knowledge_nodes(novel_id, name, type);
+CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_novel ON knowledge_nodes(novel_id, type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_nodes_unique ON knowledge_nodes(novel_id, name, type);
 
-CREATE TABLE knowledge_edges (
+CREATE TABLE IF NOT EXISTS knowledge_edges (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     source_id BIGINT NOT NULL REFERENCES knowledge_nodes(id),
@@ -23,4 +24,4 @@ CREATE TABLE knowledge_edges (
     source_chapter_id BIGINT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE UNIQUE INDEX idx_knowledge_edges_unique ON knowledge_edges(novel_id, source_id, target_id, relation_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_edges_unique ON knowledge_edges(novel_id, source_id, target_id, relation_type);

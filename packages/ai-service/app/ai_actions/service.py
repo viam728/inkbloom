@@ -5,6 +5,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 # ── LLM invocation ───────────────────────────────────────────────────────
@@ -17,16 +19,22 @@ async def call_llm(
     temperature: float = 0.7,
     max_tokens: int = 2048,
     model: str | None = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, dict | None, str]:
     """Call the LLM provider (non-streaming).
 
-    Returns (content, error). On any failure (missing key, upstream error,
-    timeout) returns ("", error_message) instead of raising.
+    Returns (content, error, usage, model). On any failure (missing key,
+    upstream error, timeout) returns ("", error_message, None, model)
+    instead of raising. usage is ``{"prompt_tokens": n, "completion_tokens":
+    n}`` when the provider reports token counts (task #43: Go server bills
+    on it). model is the model actually used (provider response value when
+    available, else the requested model, else settings.default_model) —
+    task #46: the billing ledger records it.
     """
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+    resolved_model = model or settings.default_model
     try:
         result = await llm.chat(
             messages=messages,
@@ -34,10 +42,16 @@ async def call_llm(
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return result.content or "", None
+        usage = {
+            "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
+        }
+        # Prefer the model echoed by the provider response when present.
+        actual_model = str(getattr(result, "model", "") or "") or resolved_model
+        return result.content or "", None, usage, actual_model
     except Exception as exc:  # noqa: BLE001 - never leak 500 to caller
         logger.warning("LLM call failed: %s", exc)
-        return "", str(exc)
+        return "", str(exc), None, resolved_model
 
 
 # ── HTML stripping ───────────────────────────────────────────────────────

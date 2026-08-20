@@ -11,6 +11,7 @@ import (
 // The acts payload is opaque JSONB owned by the frontend contract.
 type NovelOutline struct {
 	NovelID   int64          `gorm:"primaryKey" json:"novel_id"`
+	UserID    int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Acts      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"acts"`
 	Version   int            `gorm:"not null;default:0" json:"version"`
 	UpdatedAt time.Time      `json:"updated_at"`

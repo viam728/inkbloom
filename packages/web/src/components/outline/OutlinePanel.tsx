@@ -10,6 +10,7 @@ import {
   Sparkles,
   Link2,
   ListOrdered,
+  Maximize2,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useMemoryStore, sortMemoryItems } from '@/stores/memory-store';
@@ -23,7 +24,10 @@ import {
 import { expandOutlineToDraft } from '@/services/outline-client';
 import { useToast } from '@/components/common/Toast';
 import Modal from '@/components/common/Modal';
+import TipTapEditor from '@/components/editor/TipTapEditor';
+import { htmlToPlainText } from '@/utils/html';
 import DraftPreviewModal from './DraftPreviewModal';
+import OutlineExpandedView from './OutlineExpandedView';
 
 /** 稳定引用的空数组，避免 selector 每次返回新引用导致无限渲染 */
 const EMPTY_ACTS: OutlineAct[] = [];
@@ -49,6 +53,20 @@ const STATUS_CONFIG: Record<
   },
 };
 
+/** 旧纯文本 summary 迁移为编辑器 HTML（幂等：已是 HTML 则原样返回） */
+const toEditorHtml = (raw: string): string => {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return '';
+  if (trimmed.startsWith('<') && raw.includes('>')) return raw;
+  return raw
+    .split('\n')
+    .map((line) => {
+      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return escaped.trim() ? `<p>${escaped}</p>` : '<p></p>';
+    })
+    .join('');
+};
+
 /** 结构化创作面板：大纲（幕 → 章节要点）→ AI 扩写 → 成稿章节 */
 const OutlinePanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
@@ -63,7 +81,6 @@ const OutlinePanel: React.FC = () => {
     addAct,
     updateAct,
     removeAct,
-    moveAct,
     addNode,
     updateNode,
     removeNode,
@@ -73,6 +90,7 @@ const OutlinePanel: React.FC = () => {
   const { showToast } = useToast();
 
   const [collapsedActs, setCollapsedActs] = useState<Set<string>>(new Set());
+  const [expandedOpen, setExpandedOpen] = useState(false);
 
   // ── 弹窗编辑（替代左栏内联展开） ─────────────────────────────────────
   const [editingNode, setEditingNode] = useState<{ actId: string; node: OutlineNode } | null>(null);
@@ -80,6 +98,8 @@ const OutlinePanel: React.FC = () => {
   const [nodeSummaryDraft, setNodeSummaryDraft] = useState('');
   const [editingAct, setEditingAct] = useState<OutlineAct | null>(null);
   const [actTitleDraft, setActTitleDraft] = useState('');
+  /** 节点编辑弹窗内局部专注态（受控，由 TipTapEditor 工具栏切换） */
+  const [nodeEditorFocused, setNodeEditorFocused] = useState(false);
 
   // 扩写 → 初稿预览状态
   const [expandTarget, setExpandTarget] = useState<{
@@ -126,18 +146,22 @@ const OutlinePanel: React.FC = () => {
     setEditingNode({ actId, node });
     setNodeTitleDraft(node.title);
     setNodeSummaryDraft(node.summary);
+    setNodeEditorFocused(false);
   };
 
   const openNodeEditor = (actId: string, node: OutlineNode) => {
     setEditingNode({ actId, node });
     setNodeTitleDraft(node.title);
-    setNodeSummaryDraft(node.summary);
+    // summary 现为 HTML；旧纯文本（含换行）迁移为 <p> 段，避免在富文本编辑器中丢换行
+    setNodeSummaryDraft(toEditorHtml(node.summary));
+    setNodeEditorFocused(false);
   };
 
   const closeNodeEditor = () => {
     setEditingNode(null);
     setNodeTitleDraft('');
     setNodeSummaryDraft('');
+    setNodeEditorFocused(false);
   };
 
   const commitNodeEdit = (patch?: Partial<OutlineNode>) => {
@@ -157,15 +181,24 @@ const OutlinePanel: React.FC = () => {
     setDraft(null);
     setDraftRefs([]);
 
-    // 注入作品记忆（人物/设定）作为上下文
+    // 注入作品记忆（人物/设定/前情/灵感四组）作为上下文；灵感条目作为 tips 随时干预 AI
     let refs: string[] = [];
     try {
       const mem = useMemoryStore.getState();
       if (!mem.byNovel[novelId]) await mem.loadMemory(novelId);
       const items = useMemoryStore.getState().byNovel[novelId] ?? [];
-      // 置顶条目优先携带，保证 AI 扩写贴合核心设定
+      // 章节锁判据：限制可见的条目在所选章节任一完成（done）后全局解锁注入
+      const statusById = new Map(
+        acts.flatMap((a) => a.nodes.map((n) => [n.id, n.status] as const)),
+      );
+      // 置顶条目优先携带（sortMemoryItems 已含），再按 AI 可见性与可见时机过滤
       refs = sortMemoryItems(items)
-        .filter((i) => i.type === 'character' || i.type === 'setting')
+        .filter(
+          (i) =>
+            i.ai_visible !== false &&
+            (!i.visible_chapters?.length ||
+              i.visible_chapters.some((id) => statusById.get(id) === 'done')),
+        )
         .map((i) => i.name)
         .slice(0, 6);
     } catch {
@@ -175,7 +208,8 @@ const OutlinePanel: React.FC = () => {
     try {
       const text = await expandOutlineToDraft({
         outlineTitle: node.title || '未命名章节',
-        summary: node.summary,
+        // summary 现为 HTML，发送前转为纯文本（契约不变）
+        summary: htmlToPlainText(node.summary),
         memoryContext: refs,
       });
       setDraftRefs(refs);
@@ -282,8 +316,17 @@ const OutlinePanel: React.FC = () => {
             <ListOrdered size={11} />
             创作蓝图
           </span>
-          <span className="text-[10px] text-neutral-500 tabular-nums">
-            {doneNodes}/{totalNodes} 章完成 · {progress}%
+          <span className="flex items-center gap-1">
+            <span className="text-[10px] text-neutral-500 tabular-nums">
+              {doneNodes}/{totalNodes} 章完成 · {progress}%
+            </span>
+            <button
+              onClick={() => setExpandedOpen(true)}
+              title="大纲管理 · 展开视图"
+              className="p-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
+            >
+              <Maximize2 size={12} />
+            </button>
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-white/6 overflow-hidden">
@@ -313,12 +356,10 @@ const OutlinePanel: React.FC = () => {
           </div>
         )}
 
-        {acts.map((act, actIdx) => (
+        {acts.map((act) => (
           <ActBlock
             key={act.id}
             act={act}
-            actIdx={actIdx}
-            actCount={acts.length}
             collapsed={collapsedActs.has(act.id)}
             onToggle={() => toggleAct(act.id)}
             onRename={() => {
@@ -329,7 +370,6 @@ const OutlinePanel: React.FC = () => {
               if (novelId) removeAct(novelId, act.id);
               showToast('已删除幕', 'info');
             }}
-            onMove={(dir) => novelId && moveAct(novelId, act.id, dir)}
             onAddNode={() => handleAddNode(act.id)}
             onEditNode={(node) => openNodeEditor(act.id, node)}
             onExpandNode={(node) => handleExpand(act.id, node)}
@@ -353,26 +393,38 @@ const OutlinePanel: React.FC = () => {
         open={editingNode !== null}
         onClose={closeNodeEditor}
         title="编辑章节要点"
-        width="480px"
+        width="640px"
       >
         {editingNodeLive && (
           <div className="px-5 py-4">
-            <input
-              value={nodeTitleDraft}
-              onChange={(e) => setNodeTitleDraft(e.target.value)}
-              placeholder="章节标题（将用于成稿章节名）"
-              autoFocus
-              className="w-full px-3 py-2 rounded-lg bg-white/5 text-sm text-neutral-100 border border-white/10 placeholder-neutral-500 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all"
-            />
-            <textarea
-              value={nodeSummaryDraft}
-              onChange={(e) => setNodeSummaryDraft(e.target.value)}
-              placeholder={'剧情要点，每行一条：\n主角在雨夜发现密信\n与旧友摊牌……'}
-              rows={5}
-              className="mt-2.5 w-full px-3 py-2 rounded-lg bg-white/5 text-[13px] leading-6 text-neutral-200 border border-white/10 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 resize-none placeholder-neutral-500 transition-all"
-            />
+            {/* 局部专注时隐藏标题输入，编辑板铺满 */}
+            {!nodeEditorFocused && (
+              <input
+                value={nodeTitleDraft}
+                onChange={(e) => setNodeTitleDraft(e.target.value)}
+                placeholder="章节标题（将用于成稿章节名）"
+                autoFocus
+                className="w-full px-3 py-2 rounded-lg bg-white/5 text-sm text-neutral-100 border border-white/10 placeholder-neutral-500 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all"
+              />
+            )}
+            <div
+              className={`${nodeEditorFocused ? 'h-[420px]' : 'mt-2.5 h-[260px]'} rounded-lg border border-white/10 bg-white/4 overflow-hidden flex flex-col`}
+            >
+              <TipTapEditor
+                content={nodeSummaryDraft}
+                onChange={setNodeSummaryDraft}
+                variant="memo"
+                toolbarPreset="plain"
+                placeholder={'剧情要点：主角在雨夜发现密信，与旧友摊牌……'}
+                editorClassName="prose prose-invert prose-sm max-w-none min-h-[120px] px-3 py-2 text-neutral-200 focus:outline-none"
+                focusable
+                focused={nodeEditorFocused}
+                onToggleFocus={() => setNodeEditorFocused((v) => !v)}
+              />
+            </div>
 
-            {/* 状态选择 */}
+            {/* 状态选择（局部专注时隐藏） */}
+            {!nodeEditorFocused && (
             <div className="flex items-center gap-1.5 mt-3">
               <span className="text-[11px] text-neutral-500 mr-1">状态</span>
               {(Object.keys(OUTLINE_STATUS_LABELS) as OutlineStatus[]).map((s) => (
@@ -389,6 +441,7 @@ const OutlinePanel: React.FC = () => {
                 </button>
               ))}
             </div>
+            )}
 
             {/* 操作行 */}
             <div className="flex items-center gap-1.5 mt-4">
@@ -505,6 +558,17 @@ const OutlinePanel: React.FC = () => {
         }}
         onWrite={handleWriteDraft}
       />
+
+      {/* 展开大视图：点击卡片先关大视图再开编辑弹窗（Modal Esc 为 window capture，禁止嵌套） */}
+      <OutlineExpandedView
+        open={expandedOpen}
+        onClose={() => setExpandedOpen(false)}
+        acts={acts}
+        onEditNode={(actId, node) => {
+          setExpandedOpen(false);
+          openNodeEditor(actId, node);
+        }}
+      />
     </div>
   );
 };
@@ -512,13 +576,10 @@ const OutlinePanel: React.FC = () => {
 // ── 幕区块 ──────────────────────────────────────────────────────────────
 interface ActBlockProps {
   act: OutlineAct;
-  actIdx: number;
-  actCount: number;
   collapsed: boolean;
   onToggle: () => void;
   onRename: () => void;
   onRemove: () => void;
-  onMove: (dir: -1 | 1) => void;
   onAddNode: () => void;
   onEditNode: (node: OutlineNode) => void;
   onExpandNode: (node: OutlineNode) => void;
@@ -527,13 +588,10 @@ interface ActBlockProps {
 
 const ActBlock: React.FC<ActBlockProps> = ({
   act,
-  actIdx,
-  actCount,
   collapsed,
   onToggle,
   onRename,
   onRemove,
-  onMove,
   onAddNode,
   onEditNode,
   onExpandNode,
@@ -574,22 +632,6 @@ const ActBlock: React.FC<ActBlockProps> = ({
             className="p-1 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
           >
             <Pencil size={11} />
-          </button>
-          <button
-            onClick={() => onMove(-1)}
-            disabled={actIdx === 0}
-            title="上移"
-            className="p-1 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 disabled:opacity-30 transition-colors"
-          >
-            <ArrowUp size={11} />
-          </button>
-          <button
-            onClick={() => onMove(1)}
-            disabled={actIdx === actCount - 1}
-            title="下移"
-            className="p-1 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 disabled:opacity-30 transition-colors"
-          >
-            <ArrowDown size={11} />
           </button>
           <button
             onClick={onRemove}
@@ -665,7 +707,7 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onExpand, onJump }) =
         </span>
       </div>
       {node.summary && (
-        <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{node.summary}</p>
+        <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{htmlToPlainText(node.summary)}</p>
       )}
       {/* 悬停快捷操作 */}
       <div className="absolute top-1.5 right-1.5 hidden group-hover:flex items-center gap-0.5 bg-surface-2 rounded-md">

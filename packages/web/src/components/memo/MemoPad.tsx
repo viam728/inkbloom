@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, StickyNote, Search } from 'lucide-react';
 import { useMemoStore } from '@/stores/memo-store';
 import { useUIStore } from '@/stores/ui-store';
-import RoleSwitcher from '@/components/layout/RoleSwitcher';
 import TipTapEditor from '@/components/editor/TipTapEditor';
 
 const fmtTime = (ts: number) => {
@@ -73,8 +72,8 @@ const MemoPad: React.FC = () => {
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-surface-0 animate-fade-in">
-      {/* 顶栏 */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-surface-1/60">
+      {/* 随记专属标识栏：品牌标题 + Ctrl K 快捷入口（用户入口/角色切换已迁至全局 TopBar，避免重复） */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-white/6 bg-surface-1/60">
         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center text-xs">
           🌸
         </div>
@@ -88,8 +87,6 @@ const MemoPad: React.FC = () => {
           <Search size={12} />
           <kbd className="text-[10px]">Ctrl K</kbd>
         </button>
-        <div className="flex-1" />
-        <RoleSwitcher align="right" />
       </div>
 
       <div className="flex flex-1 min-h-0">

@@ -60,12 +60,13 @@ func NewNovelDocService(
 	return &NovelDocService{novelRepo: nr, docRepo: dr, chapterRepo: cr}
 }
 
-// GetOutline returns the outline document of a novel (empty acts when absent).
-func (s *NovelDocService) GetOutline(ctx context.Context, novelID int64) (*OutlineDoc, error) {
-	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+// GetOutline returns the outline document of a novel within the user's
+// scope (empty acts when absent).
+func (s *NovelDocService) GetOutline(ctx context.Context, userID, novelID int64) (*OutlineDoc, error) {
+	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return nil, err
 	}
-	doc, err := s.docRepo.GetOutline(ctx, novelID)
+	doc, err := s.docRepo.GetOutline(ctx, userID, novelID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +76,15 @@ func (s *NovelDocService) GetOutline(ctx context.Context, novelID int64) (*Outli
 // UpdateOutline wholesale-replaces the outline acts of a novel and returns
 // the new version. expectedVersion is an optional soft concurrency check:
 // when supplied and stale, ErrVersionConflict is returned.
-func (s *NovelDocService) UpdateOutline(ctx context.Context, novelID int64, acts json.RawMessage, expectedVersion *int) (int, error) {
-	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+func (s *NovelDocService) UpdateOutline(ctx context.Context, userID, novelID int64, acts json.RawMessage, expectedVersion *int) (int, error) {
+	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return 0, err
 	}
 	if err := validateDocPayload(acts); err != nil {
 		return 0, err
 	}
 	if expectedVersion != nil {
-		current, err := s.docRepo.GetOutline(ctx, novelID)
+		current, err := s.docRepo.GetOutline(ctx, userID, novelID)
 		if err != nil {
 			return 0, err
 		}
@@ -92,7 +93,7 @@ func (s *NovelDocService) UpdateOutline(ctx context.Context, novelID int64, acts
 		}
 	}
 
-	doc := &model.NovelOutline{NovelID: novelID, Acts: datatypes.JSON(acts)}
+	doc := &model.NovelOutline{UserID: userID, NovelID: novelID, Acts: datatypes.JSON(acts)}
 	if err := s.docRepo.UpsertOutline(ctx, doc); err != nil {
 		zap.L().Error("failed to upsert novel outline", zap.Int64("novel_id", novelID), zap.Error(err))
 		return 0, err
@@ -100,12 +101,13 @@ func (s *NovelDocService) UpdateOutline(ctx context.Context, novelID int64, acts
 	return doc.Version, nil
 }
 
-// GetMemory returns the memory document of a novel (empty items when absent).
-func (s *NovelDocService) GetMemory(ctx context.Context, novelID int64) (*MemoryDoc, error) {
-	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+// GetMemory returns the memory document of a novel within the user's scope
+// (empty items when absent).
+func (s *NovelDocService) GetMemory(ctx context.Context, userID, novelID int64) (*MemoryDoc, error) {
+	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return nil, err
 	}
-	doc, err := s.docRepo.GetMemory(ctx, novelID)
+	doc, err := s.docRepo.GetMemory(ctx, userID, novelID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,15 +116,15 @@ func (s *NovelDocService) GetMemory(ctx context.Context, novelID int64) (*Memory
 
 // UpdateMemory wholesale-replaces the memory items of a novel and returns
 // the new version, with the same soft version-check semantics as UpdateOutline.
-func (s *NovelDocService) UpdateMemory(ctx context.Context, novelID int64, items json.RawMessage, expectedVersion *int) (int, error) {
-	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+func (s *NovelDocService) UpdateMemory(ctx context.Context, userID, novelID int64, items json.RawMessage, expectedVersion *int) (int, error) {
+	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return 0, err
 	}
 	if err := validateDocPayload(items); err != nil {
 		return 0, err
 	}
 	if expectedVersion != nil {
-		current, err := s.docRepo.GetMemory(ctx, novelID)
+		current, err := s.docRepo.GetMemory(ctx, userID, novelID)
 		if err != nil {
 			return 0, err
 		}
@@ -131,7 +133,7 @@ func (s *NovelDocService) UpdateMemory(ctx context.Context, novelID int64, items
 		}
 	}
 
-	doc := &model.NovelMemory{NovelID: novelID, Items: datatypes.JSON(items)}
+	doc := &model.NovelMemory{UserID: userID, NovelID: novelID, Items: datatypes.JSON(items)}
 	if err := s.docRepo.UpsertMemory(ctx, doc); err != nil {
 		zap.L().Error("failed to upsert novel memory", zap.Int64("novel_id", novelID), zap.Error(err))
 		return 0, err
@@ -143,20 +145,21 @@ func (s *NovelDocService) UpdateMemory(ctx context.Context, novelID int64, items
 // non-soft-deleted chapters ordered by position. Server-side it uses
 // word-count deviation from the mean plus title-keyword weighting, mirroring
 // the frontend fallback heuristic; no LLM call, no caching.
-func (s *NovelDocService) GetRhythm(ctx context.Context, novelID int64) ([]RhythmPoint, error) {
-	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+func (s *NovelDocService) GetRhythm(ctx context.Context, userID, novelID int64) ([]RhythmPoint, error) {
+	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return nil, err
 	}
-	chapters, err := s.chapterRepo.ListByNovelID(ctx, novelID)
+	chapters, err := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
 	if err != nil {
 		return nil, err
 	}
 	return computeRhythmPoints(chapters), nil
 }
 
-// ensureNovelExists maps a missing novel to ErrNotFound (404 semantics).
-func (s *NovelDocService) ensureNovelExists(ctx context.Context, novelID int64) error {
-	novel, err := s.novelRepo.GetByID(ctx, novelID)
+// ensureNovelExists maps a missing or foreign-owned novel to ErrNotFound
+// (404 semantics; existence of other users' novels is never revealed).
+func (s *NovelDocService) ensureNovelExists(ctx context.Context, userID, novelID int64) error {
+	novel, err := s.novelRepo.GetByID(ctx, userID, novelID)
 	if err != nil {
 		return err
 	}

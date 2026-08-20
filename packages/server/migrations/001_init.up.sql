@@ -1,8 +1,10 @@
 -- 001_init.up.sql
--- InkBloom initial schema
+-- InkBloom initial schema.
+-- Idempotent (task #36): tables may already exist via GORM AutoMigrate,
+-- which has historically been the only migration mechanism in this repo.
 
 -- novels 小说表
-CREATE TABLE novels (
+CREATE TABLE IF NOT EXISTS novels (
     id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     genre VARCHAR(100),
@@ -15,10 +17,10 @@ CREATE TABLE novels (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
-CREATE INDEX idx_novels_status ON novels(status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_novels_status ON novels(status) WHERE deleted_at IS NULL;
 
 -- volumes 卷表
-CREATE TABLE volumes (
+CREATE TABLE IF NOT EXISTS volumes (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     title VARCHAR(255) NOT NULL,
@@ -26,10 +28,10 @@ CREATE TABLE volumes (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
-CREATE INDEX idx_volumes_novel ON volumes(novel_id, position);
+CREATE INDEX IF NOT EXISTS idx_volumes_novel ON volumes(novel_id, position);
 
 -- chapters 章节表
-CREATE TABLE chapters (
+CREATE TABLE IF NOT EXISTS chapters (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     volume_id BIGINT REFERENCES volumes(id),
@@ -44,10 +46,10 @@ CREATE TABLE chapters (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
-CREATE INDEX idx_chapters_novel ON chapters(novel_id, position);
+CREATE INDEX IF NOT EXISTS idx_chapters_novel ON chapters(novel_id, position);
 
 -- settings 设定表
-CREATE TABLE settings (
+CREATE TABLE IF NOT EXISTS settings (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     title VARCHAR(255) NOT NULL,
@@ -60,7 +62,7 @@ CREATE TABLE settings (
 );
 
 -- characters 角色表
-CREATE TABLE characters (
+CREATE TABLE IF NOT EXISTS characters (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT NOT NULL REFERENCES novels(id),
     name VARCHAR(255) NOT NULL,

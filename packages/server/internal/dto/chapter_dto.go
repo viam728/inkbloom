@@ -34,13 +34,13 @@ type UpdateChapterRequest struct {
 
 // ChapterResponse is the response body for a single chapter.
 type ChapterResponse struct {
-	ID        int64     `json:"id"`
-	NovelID   int64     `json:"novel_id"`
-	VolumeID  *int64    `json:"volume_id"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	WordCount int       `json:"word_count"`
-	Position  int       `json:"position"`
+	ID        int64  `json:"id"`
+	NovelID   int64  `json:"novel_id"`
+	VolumeID  *int64 `json:"volume_id"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	WordCount int    `json:"word_count"`
+	Position  int    `json:"position"`
 	// SortOrder 前端兼容别名（前端 Chapter.sort_order 只认该字段），与 Position 同值，下迭代收敛。
 	SortOrder   int             `json:"sort_order"`
 	ContentJSON json.RawMessage `json:"content_json,omitempty"`

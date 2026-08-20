@@ -10,10 +10,10 @@ class Settings(BaseSettings):
     grpc_port: int = 50051
     http_port: int = 8100
 
-    # LLM
+    # LLM (OpenAI-compatible; DeepSeek by default)
     openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    default_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.deepseek.com"
+    default_model: str = "deepseek-v4-flash"
 
     # Go service
     go_service_url: str = "http://localhost:8080"

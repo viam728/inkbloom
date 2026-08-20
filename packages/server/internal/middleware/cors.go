@@ -2,26 +2,43 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-// CORS returns a CORS middleware that allows requests from the Vite dev server.
-func CORS() gin.HandlerFunc {
-	allowedOrigins := []string{
-		"http://localhost:5173",
-		"http://localhost:3000",
-		"http://127.0.0.1:5173",
+// defaultDevOrigins keeps the Vite dev server working out of the box.
+// Production deployments must set server.cors_origins (or
+// INKBLOOM_SERVER_CORS_ORIGINS, comma-separated) to their real domains —
+// tech plan v2 §4.2.
+var defaultDevOrigins = []string{
+	"http://localhost:5173",
+	"http://localhost:3000",
+	"http://127.0.0.1:5173",
+	"http://127.0.0.1:3000",
+	"http://127.0.0.1:18080", // desktop embedded server (self-hosted SPA)
+}
+
+// CORS returns a CORS middleware. allowedOrigins comes from configuration;
+// when empty the dev defaults above are used. Non-matching origins receive
+// no Access-Control-Allow-Origin header (deny-all by default).
+func CORS(allowedOrigins []string) gin.HandlerFunc {
+	if len(allowedOrigins) == 0 {
+		allowedOrigins = defaultDevOrigins
+	}
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			allowed[o] = struct{}{}
+		}
 	}
 
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 
-		for _, o := range allowedOrigins {
-			if origin == o {
-				c.Header("Access-Control-Allow-Origin", origin)
-				break
-			}
+		if _, ok := allowed[origin]; ok {
+			c.Header("Access-Control-Allow-Origin", origin)
 		}
 
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")

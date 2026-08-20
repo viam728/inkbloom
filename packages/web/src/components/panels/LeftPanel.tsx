@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Sparkles, Library, Brain, ListOrdered, Megaphone, Lightbulb } from 'lucide-react';
+import { Library, Brain, ListOrdered, Megaphone, Lightbulb } from 'lucide-react';
 import NovelList from './NovelList';
 import ChapterList from './ChapterList';
 import KnowledgePanel from '../knowledge/KnowledgePanel';
@@ -7,7 +7,6 @@ import MemoryPanel from '../memory/MemoryPanel';
 import OutlinePanel from '../outline/OutlinePanel';
 import MediaLibraryPanel from '../media/MediaLibraryPanel';
 import TopicPoolPanel from '../media/TopicPoolPanel';
-import RoleSwitcher from '../layout/RoleSwitcher';
 import { useUIStore, type LeftTab, type CreatorRole } from '@/stores/ui-store';
 
 /** 小说作者：作品库 / 大纲 / 记忆 */
@@ -31,7 +30,6 @@ const TABS_BY_ROLE: Record<CreatorRole, typeof NOVELIST_TABS> = {
 };
 
 const LeftPanel: React.FC = () => {
-  const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
   const leftTab = useUIStore((s) => s.leftTab);
   const setLeftTab = useUIStore((s) => s.setLeftTab);
   const role = useUIStore((s) => s.role);
@@ -42,41 +40,8 @@ const LeftPanel: React.FC = () => {
 
   return (
     <div className="w-full h-full flex flex-col bg-surface-1">
-      {/* Logo + 标题 */}
-      <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-2.5">
-        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center text-[15px] shadow-lg shadow-indigo-500/20">
-          🌸
-        </div>
-        <h1 className="text-[15px] font-bold bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 bg-clip-text text-transparent">
-          InkBloom
-        </h1>
-        <span className="ml-auto flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20">
-          <Sparkles size={10} />
-          AI
-        </span>
-      </div>
-
-      {/* 创作场景切换 */}
-      <div className="px-3 pb-1.5">
-        <RoleSwitcher />
-      </div>
-
-      {/* 快速搜索入口 */}
-      <div className="px-3 pb-2">
-        <button
-          onClick={() => setPaletteOpen(true)}
-          className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/4 border border-white/6 text-neutral-500 hover:text-neutral-300 hover:bg-white/7 hover:border-white/12 transition-colors text-xs"
-        >
-          <Search size={13} />
-          <span className="flex-1 text-left">快速跳转…</span>
-          <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-white/6 border border-white/8 text-neutral-500">
-            Ctrl K
-          </kbd>
-        </button>
-      </div>
-
-      {/* Tab 切换：按角色展示不同 Tab */}
-      <div className="flex gap-1 px-3 pb-2">
+      {/* Tab 切换：按角色展示不同 Tab（Logo/角色切换/搜索/用户入口已迁至全局 TopBar） */}
+      <div className="flex gap-1 px-3 pt-2 pb-2">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -111,7 +76,8 @@ const LeftPanel: React.FC = () => {
       )}
       {activeTab === 'memory' && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          <MemoryPanel />
+          {/* 自媒体角色使用全局记忆，其余角色按作品隔离 */}
+          <MemoryPanel scope={role === 'media' ? 'media' : 'novel'} />
         </div>
       )}
       {activeTab === 'contents' && (

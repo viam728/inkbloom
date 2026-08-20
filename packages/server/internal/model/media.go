@@ -11,6 +11,7 @@ import (
 // chapters). Tags are stored as a JSONB string array.
 type MediaContent struct {
 	ID        int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Title     string         `gorm:"type:varchar(255);not null" json:"title"`
 	Platform  string         `gorm:"type:varchar(20);not null" json:"platform"`
 	Content   string         `gorm:"type:text;not null;default:''" json:"content"`
@@ -30,6 +31,7 @@ func (MediaContent) TableName() string {
 // client- or server-assigned string id.
 type MediaTopic struct {
 	ID        string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	UserID    int64     `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Title     string    `gorm:"type:varchar(255);not null" json:"title"`
 	Note      string    `gorm:"type:text;not null;default:''" json:"note"`
 	Status    string    `gorm:"type:varchar(20);not null;default:'idea'" json:"status"`

@@ -1,5 +1,7 @@
--- 004_assets.up.sql: Asset table for AIGC-generated images
-CREATE TABLE assets (
+-- 004_assets.up.sql: Asset table for AIGC-generated images.
+-- Idempotent (task #36): table may already exist via GORM AutoMigrate.
+
+CREATE TABLE IF NOT EXISTS assets (
     id BIGSERIAL PRIMARY KEY,
     novel_id BIGINT REFERENCES novels(id),
     chapter_id BIGINT REFERENCES chapters(id),
@@ -16,6 +18,6 @@ CREATE TABLE assets (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_assets_novel ON assets(novel_id, created_at DESC);
-CREATE INDEX idx_assets_chapter ON assets(chapter_id);
-CREATE INDEX idx_assets_task ON assets(task_id);
+CREATE INDEX IF NOT EXISTS idx_assets_novel ON assets(novel_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assets_chapter ON assets(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_assets_task ON assets(task_id);

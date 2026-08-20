@@ -10,6 +10,7 @@ import (
 // Novel represents a novel entity.
 type Novel struct {
 	ID          int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Title       string         `gorm:"type:varchar(255);not null" json:"title"`
 	Genre       *string        `gorm:"type:varchar(100)" json:"genre,omitempty"`
 	Description *string        `gorm:"type:text" json:"description,omitempty"`

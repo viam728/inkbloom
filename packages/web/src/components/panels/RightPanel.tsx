@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { MessageSquareText, Palette, MessageSquareQuote, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo } from 'react';
+import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images } from 'lucide-react';
 import AIChatPanel from '@/components/ai/AIChatPanel';
 import AIGCPanel from '@/components/aigc/AIGCPanel';
 import ReviewPanel from '@/components/review/ReviewPanel';
 import TitleFactoryPanel from '@/components/media/TitleFactoryPanel';
+import GalleryGrid from '@/components/gallery/GalleryGrid';
 import { useUIStore, type RightTab } from '@/stores/ui-store';
 
 const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'AI 助手', icon: <MessageSquareText size={14} /> },
   { id: 'review', label: '批注评审', icon: <MessageSquareQuote size={14} /> },
   { id: 'aigc', label: '图片生成', icon: <Palette size={14} /> },
+  { id: 'gallery', label: '图床', icon: <Images size={14} /> },
 ];
 
 // 自媒体创作者：标题工厂替代批注评审，侧重传播效率
@@ -17,11 +19,15 @@ const MEDIA_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'AI 助手', icon: <MessageSquareText size={14} /> },
   { id: 'title', label: '标题工厂', icon: <Sparkles size={14} /> },
   { id: 'aigc', label: '配图生成', icon: <Palette size={14} /> },
+  { id: 'gallery', label: '图床', icon: <Images size={14} /> },
 ];
 
 const RightPanel: React.FC = () => {
   const role = useUIStore((s) => s.role);
-  const [activeTab, setActiveTab] = useState<RightTab>('chat');
+  const rightCollapsed = useUIStore((s) => s.rightCollapsed);
+  // activeTab 改读全局 ui-store，供命令面板 / AIGC 等外部跳转直达指定 Tab
+  const activeTab = useUIStore((s) => s.activeRightTab);
+  const setActiveTab = useUIStore((s) => s.setActiveRightTab);
 
   // 角色差异：小说作者→批注评审；自媒体创作者→标题工厂
   const tabs = useMemo(() => (role === 'media' ? MEDIA_TABS : NOVELIST_TABS), [role]);
@@ -41,7 +47,7 @@ const RightPanel: React.FC = () => {
       window.removeEventListener('inkbloom:show-aigc', showAigc);
       window.removeEventListener('inkbloom:show-review', showReview);
     };
-  }, []);
+  }, [setActiveTab]);
 
   return (
     <div className="w-full h-full border-l border-white/6 flex flex-col bg-surface-1">
@@ -75,6 +81,9 @@ const RightPanel: React.FC = () => {
         {activeTab === 'review' && <ReviewPanel />}
         {activeTab === 'title' && <TitleFactoryPanel />}
         {activeTab === 'aigc' && <AIGCPanel />}
+        {activeTab === 'gallery' && (
+          <GalleryGrid mode="manage" compact visible={!rightCollapsed} />
+        )}
       </div>
     </div>
   );

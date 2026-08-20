@@ -1,9 +1,14 @@
 import type { ChatMessage, ChatRequestOptions } from '@/types';
+import { useAuthStore } from '@/stores/auth-store';
 
-const AUTH_HEADERS: Record<string, string> = {
-  'Content-Type': 'application/json',
-  Authorization: 'Bearer inkbloom-dev-token',
-};
+/** 动态构造鉴权头：每次请求时读取最新 access_token（续期后自动生效） */
+function authHeaders(): Record<string, string> {
+  const token = useAuthStore.getState().access_token;
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 /**
  * Common SSE stream reader: reads a fetch Response body and calls
@@ -78,7 +83,7 @@ export async function streamChat(
 ): Promise<void> {
   const response = await fetch('/api/v1/ai/chat', {
     method: 'POST',
-    headers: AUTH_HEADERS,
+    headers: authHeaders(),
     body: JSON.stringify({
       messages,
       model: options?.model,
@@ -104,7 +109,7 @@ export async function streamInline(
 ): Promise<void> {
   const response = await fetch('/api/v1/ai/inline', {
     method: 'POST',
-    headers: AUTH_HEADERS,
+    headers: authHeaders(),
     body: JSON.stringify({
       novel_id: novelId,
       chapter_id: chapterId,
@@ -130,7 +135,7 @@ export async function streamRewrite(
 ): Promise<void> {
   const response = await fetch('/api/v1/ai/rewrite', {
     method: 'POST',
-    headers: AUTH_HEADERS,
+    headers: authHeaders(),
     body: JSON.stringify({
       novel_id: novelId,
       chapter_id: chapterId,

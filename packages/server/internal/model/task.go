@@ -9,6 +9,7 @@ import (
 // Task represents an asynchronous AIGC task.
 type Task struct {
 	ID             string         `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	UserID         int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Type           string         `gorm:"type:varchar(50);not null" json:"type"`
 	Status         string         `gorm:"type:varchar(20);default:pending" json:"status"` // pending/running/success/failed/dead_letter
 	Priority       int16          `gorm:"default:1" json:"priority"`

@@ -13,12 +13,14 @@ import {
   Quote,
   Minus,
   Code2,
+  ImagePlus,
 } from 'lucide-react';
 import type { AIAction } from '@/services/ai-actions-client';
 
 export type SlashItem =
   | { kind: 'ai'; action: AIAction; title: string; desc: string; icon: React.ReactNode; keywords: string }
-  | { kind: 'format'; format: string; title: string; desc: string; icon: React.ReactNode; keywords: string };
+  | { kind: 'format'; format: string; title: string; desc: string; icon: React.ReactNode; keywords: string }
+  | { kind: 'image'; title: string; desc: string; icon: React.ReactNode; keywords: string };
 
 /** 斜杠命令清单：AI 动作在前，格式块在后 */
 export const SLASH_ITEMS: SlashItem[] = [
@@ -61,6 +63,13 @@ export const SLASH_ITEMS: SlashItem[] = [
     desc: '生成角色对白候选',
     icon: <MessagesSquare size={15} />,
     keywords: '对话 dialogue',
+  },
+  {
+    kind: 'image',
+    title: '图片',
+    desc: '上传或从图床选择插入',
+    icon: <ImagePlus size={15} />,
+    keywords: '图片 image 上传 图床',
   },
   { kind: 'format', format: 'h1', title: '标题 1', desc: '一级标题', icon: <Heading1 size={15} />, keywords: 'h1 标题' },
   { kind: 'format', format: 'h2', title: '标题 2', desc: '二级标题', icon: <Heading2 size={15} />, keywords: 'h2 标题' },
@@ -118,7 +127,7 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
         )}
         {items.map((item, i) => (
           <button
-            key={item.kind === 'ai' ? `ai-${item.action}` : `fmt-${item.format}`}
+            key={item.kind === 'ai' ? `ai-${item.action}` : item.kind === 'image' ? 'image' : `fmt-${item.format}`}
             onClick={() => onSelect(item)}
             onMouseEnter={() => onHover(i)}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
@@ -129,7 +138,9 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
               className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${
                 item.kind === 'ai'
                   ? 'bg-gradient-to-br from-indigo-500/25 to-purple-500/25 text-brand-300'
-                  : 'bg-white/5 text-neutral-400'
+                  : item.kind === 'image'
+                    ? 'bg-gradient-to-br from-pink-500/25 to-fuchsia-500/25 text-pink-300'
+                    : 'bg-white/5 text-neutral-400'
               }`}
             >
               {item.icon}

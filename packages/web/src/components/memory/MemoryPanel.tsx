@@ -4,13 +4,15 @@ import {
   Plus,
   Trash2,
   Loader2,
-  User,
-  Map as MapIcon,
-  ScrollText,
   Search,
   Pin,
   PinOff,
   Pencil,
+  ChevronRight,
+  ChevronDown,
+  GripVertical,
+  Maximize2,
+  X,
 } from 'lucide-react';
 import {
   useMemoryStore,
@@ -18,83 +20,174 @@ import {
   type MemoryType,
   type MemoryItem,
 } from '@/stores/memory-store';
+import { useMediaMemoryStore } from '@/stores/media-memory-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useToast } from '@/components/common/Toast';
-import Modal from '@/components/common/Modal';
+import { GROUP_CONFIG, GROUP_ORDER } from './memory-config';
+import MemoryEditorModal, { type MemoryEditorPayload } from './MemoryEditorModal';
+import MemoryExpandedView from './MemoryExpandedView';
+import { htmlToPlainText } from '@/utils/html';
 
-const TYPE_CONFIG: Record<
-  MemoryType,
-  { label: string; icon: React.ReactNode; color: string }
-> = {
-  character: { label: '人物卡', icon: <User size={12} />, color: 'text-pink-300' },
-  setting: { label: '设定集', icon: <MapIcon size={12} />, color: 'text-sky-300' },
-  summary: { label: '前情摘要', icon: <ScrollText size={12} />, color: 'text-amber-300' },
-};
+interface MemoryPanelProps {
+  /** 记忆作用域：novel = 按作品隔离；media = 自媒体全局记忆 */
+  scope?: 'novel' | 'media';
+}
 
-const fmtTime = (iso?: string) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return `${d.getMonth() + 1}/${d.getDate()} ${`${d.getHours()}`.padStart(2, '0')}:${`${d.getMinutes()}`.padStart(2, '0')}`;
-};
+/** 稳定空数组引用：作 `?? []` 回退，避免每次渲染新建数组触发依赖它的 effect 循环 */
+const EMPTY_ITEMS: MemoryItem[] = [];
 
-/** 作品记忆面板：人物卡 / 设定集 / 前情摘要，为 AI 提供长期上下文 */
-const MemoryPanel: React.FC = () => {
+/** 编辑窗口实例：多窗口并存，挂起（minimized）与全屏状态由面板集中管理 */
+interface MemoryWindowState {
+  key: string;
+  /** 编辑已有条目；缺省 = 新建 */
+  itemId?: string;
+  /** 新建时的默认分组 */
+  newType?: MemoryType;
+  minimized: boolean;
+  fullscreen: boolean;
+}
+
+/** 作品/自媒体记忆面板：人物卡 / 设定集 / 前情摘要 / 灵感素材，为 AI 提供长期上下文 */
+const MemoryPanel: React.FC<MemoryPanelProps> = ({ scope = 'novel' }) => {
+  const isMedia = scope === 'media';
   const currentNovel = useNovelStore((s) => s.currentNovel);
-  const { byNovel, loading, loadMemory, addItem, updateItem, togglePin, removeItem } =
-    useMemoryStore();
+  const {
+    byNovel,
+    loading: novelLoading,
+    loadMemory,
+    addItem,
+    updateItem,
+    togglePin,
+    removeItem,
+    reorderItems: reorderNovelItems,
+  } = useMemoryStore();
+  const {
+    items: mediaItems,
+    loading: mediaLoading,
+    loadMemory: loadMediaMemory,
+    addItem: addMediaItem,
+    updateItem: updateMediaItem,
+    togglePin: toggleMediaPin,
+    removeItem: removeMediaItem,
+    reorderItems: reorderMediaItems,
+  } = useMediaMemoryStore();
   const { showToast } = useToast();
 
-  // ── 查询与筛选 ───────────────────────────────────────────────────────
+  // ── 搜索与快捷标签 ─────────────────────────────────────────────────
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<MemoryType | 'all'>('all');
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const quickTagsKey = `inkbloom-quick-tags-${scope}`;
+  const [quickTags, setQuickTags] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(quickTagsKey);
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(quickTagsKey, JSON.stringify(quickTags));
+    } catch {
+      /* ignore */
+    }
+  }, [quickTags, quickTagsKey]);
 
-  // ── 表单弹窗（新建 / 编辑共用） ─────────────────────────────────────
-  const [formOpen, setFormOpen] = useState(false);
-  const [editTarget, setEditTarget] = useState<MemoryItem | null>(null);
-  const [formType, setFormType] = useState<MemoryType>('character');
-  const [formName, setFormName] = useState('');
-  const [formContent, setFormContent] = useState('');
-  const [formTags, setFormTags] = useState('');
-  const [formPinned, setFormPinned] = useState(false);
-
+  // ── 分组折叠 / 拖拽 / 弹窗 ─────────────────────────────────────────
+  const [collapsed, setCollapsed] = useState<Partial<Record<MemoryType, boolean>>>({});
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [addPickerOpen, setAddPickerOpen] = useState(false);
+  /** 编辑窗口列表：打开编辑/新建时 push，关闭时移除；支持最小化挂起与全屏 */
+  const [windows, setWindows] = useState<MemoryWindowState[]>([]);
+  const [expandedOpen, setExpandedOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const novelId = currentNovel?.id;
-  const items = (novelId ? byNovel[novelId] : undefined) ?? [];
+  // ── 作用域适配层：novel 绑定 currentNovel，media 为全局单份 ────────
+  const novelId = isMedia ? undefined : currentNovel?.id;
+  const items = isMedia ? mediaItems : (novelId ? byNovel[novelId] : undefined) ?? EMPTY_ITEMS;
+  const loading = isMedia ? mediaLoading : novelLoading;
 
-  /** 全部标签及出现次数（用于标签筛选） */
+  /** 统一增删改签名，两个 scope 共享下方渲染与交互逻辑 */
+  const doAdd = (payload: Omit<MemoryItem, 'id' | 'created_at' | 'updated_at'>) =>
+    isMedia ? addMediaItem(payload) : novelId ? addItem(novelId, payload) : Promise.resolve();
+  const doUpdate = (itemId: string, patch: Partial<Omit<MemoryItem, 'id'>>) =>
+    isMedia ? updateMediaItem(itemId, patch) : novelId ? updateItem(novelId, itemId, patch) : Promise.resolve();
+  const doTogglePin = (itemId: string) =>
+    isMedia ? toggleMediaPin(itemId) : novelId ? togglePin(novelId, itemId) : Promise.resolve();
+  const doRemove = (itemId: string) =>
+    isMedia ? removeMediaItem(itemId) : novelId ? removeItem(novelId, itemId) : Promise.resolve();
+  const doReorder = (orderedIds: string[]) =>
+    isMedia ? reorderMediaItems(orderedIds) : novelId ? reorderNovelItems(novelId, orderedIds) : Promise.resolve();
+
+  /** 全部标签及出现次数（快捷标签云数据源） */
   const allTags = useMemo(() => {
     const count = new Map<string, number>();
     items.forEach((i) => i.tags.forEach((t) => count.set(t, (count.get(t) ?? 0) + 1)));
     return [...count.entries()].sort((a, b) => b[1] - a[1]);
   }, [items]);
 
-  /** 搜索 + 类型筛选 + 标签筛选 + 置顶/更新时间排序 */
-  const filtered = useMemo(() => {
+  /** 条目是否命中 搜索 + 快捷标签筛选（快捷标签=交集，无选中=不过滤） */
+  const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return sortMemoryItems(
-      items.filter((i) => {
-        if (filter !== 'all' && i.type !== filter) return false;
-        if (tagFilter && !i.tags.includes(tagFilter)) return false;
-        if (!q) return true;
-        return (
-          i.name.toLowerCase().includes(q) ||
-          i.content.toLowerCase().includes(q) ||
-          i.tags.some((t) => t.toLowerCase().includes(q))
-        );
+    return (i: MemoryItem) => {
+      if (quickTags.length > 0 && !i.tags.some((t) => quickTags.includes(t))) return false;
+      if (!q) return true;
+      return (
+        i.name.toLowerCase().includes(q) ||
+        htmlToPlainText(i.content).toLowerCase().includes(q) ||
+        i.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    };
+  }, [query, quickTags]);
+
+  /** 无筛选时允许组内拖拽（避免过滤视图下排序语义歧义） */
+  const canDrag = quickTags.length === 0 && query.trim() === '';
+
+  /** 四分组：组内 sortMemoryItems + 当前筛选 */
+  const groups = useMemo(
+    () =>
+      GROUP_ORDER.map((type) => {
+        const groupItems = items.filter((i) => i.type === type);
+        return {
+          type,
+          cfg: GROUP_CONFIG[type],
+          total: groupItems.length,
+          items: sortMemoryItems(groupItems.filter(matches)),
+        };
       }),
-    );
-  }, [items, filter, tagFilter, query]);
+    [items, matches],
+  );
+
+  /** 未过滤的完整分组（拖拽排序基于此构建全局 order） */
+  const fullGroups = useMemo(() => {
+    const map = new Map<MemoryType, MemoryItem[]>();
+    for (const t of GROUP_ORDER) map.set(t, sortMemoryItems(items.filter((i) => i.type === t)));
+    return map;
+  }, [items]);
 
   useEffect(() => {
-    if (novelId) loadMemory(novelId);
+    if (isMedia) {
+      loadMediaMemory();
+    } else if (novelId) {
+      loadMemory(novelId);
+    }
     setQuery('');
-    setFilter('all');
-    setTagFilter(null);
-  }, [novelId]); // eslint-disable-line react-hooks/exhaustive-deps
+    setDeleteConfirm(null);
+    // 切换作用域/作品：既有编辑窗口的条目归属失效，统一关闭
+    setWindows([]);
+  }, [isMedia, novelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!novelId) {
+  // 条目被删除后，关闭对应的编辑窗口（加载完成后的空列表才算真删除）
+  useEffect(() => {
+    if (loading) return;
+    setWindows((ws) => {
+      const next = ws.filter((w) => !w.itemId || items.some((i) => i.id === w.itemId));
+      // 无变化时返回原引用，避免无谓重渲染
+      return next.length === ws.length ? ws : next;
+    });
+  }, [items, loading]);
+
+  if (!isMedia && !novelId) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-6 py-10">
         <Brain size={26} className="text-neutral-600 mb-3" />
@@ -107,74 +200,103 @@ const MemoryPanel: React.FC = () => {
     );
   }
 
-  const openCreate = () => {
-    setEditTarget(null);
-    setFormType(filter !== 'all' ? filter : 'character');
-    setFormName('');
-    setFormContent('');
-    setFormTags('');
-    setFormPinned(false);
-    setFormOpen(true);
+  // ── 交互 ───────────────────────────────────────────────────────────
+  const toggleQuickTag = (tag: string) =>
+    setQuickTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+
+  const openCreate = (type: MemoryType) => {
+    setAddPickerOpen(false);
+    setWindows((ws) => [
+      ...ws,
+      { key: crypto.randomUUID(), newType: type, minimized: false, fullscreen: false },
+    ]);
   };
 
   const openEdit = (item: MemoryItem) => {
-    setEditTarget(item);
-    setFormType(item.type);
-    setFormName(item.name);
-    setFormContent(item.content);
-    setFormTags(item.tags.join(', '));
-    setFormPinned(!!item.pinned);
-    setFormOpen(true);
     setDeleteConfirm(null);
+    setWindows((ws) => {
+      const existing = ws.find((w) => w.itemId === item.id);
+      if (existing) {
+        // 已存在同条目窗口：激活/恢复（取消挂起）
+        return ws.map((w) => (w.key === existing.key ? { ...w, minimized: false } : w));
+      }
+      return [...ws, { key: crypto.randomUUID(), itemId: item.id, minimized: false, fullscreen: false }];
+    });
   };
 
-  const closeForm = () => {
-    setFormOpen(false);
-    setEditTarget(null);
-  };
+  const closeWindow = (key: string) => setWindows((ws) => ws.filter((w) => w.key !== key));
 
-  const parseTags = (raw: string) =>
-    raw
-      .split(/[,，\s]+/)
-      .map((t) => t.trim())
-      .filter(Boolean);
+  const patchWindow = (key: string, patch: Partial<MemoryWindowState>) =>
+    setWindows((ws) => ws.map((w) => (w.key === key ? { ...w, ...patch } : w)));
 
-  const handleSubmit = async () => {
-    if (!formName.trim() || !novelId) return;
-    const payload = {
-      type: formType,
-      name: formName.trim(),
-      content: formContent.trim(),
-      tags: parseTags(formTags),
-      pinned: formPinned,
-    };
-    if (editTarget) {
-      await updateItem(novelId, editTarget.id, payload);
+  const handleEditorSubmit = async (win: MemoryWindowState, payload: MemoryEditorPayload) => {
+    if (!isMedia && !novelId) return;
+    if (win.itemId) {
+      await doUpdate(win.itemId, payload);
       showToast('记忆条目已更新', 'success');
     } else {
-      await addItem(novelId, payload);
-      showToast('已加入作品记忆', 'success');
+      await doAdd(payload);
+      showToast(isMedia ? '已加入全局记忆' : '已加入作品记忆', 'success');
     }
-    closeForm();
   };
 
   const handleDelete = async (item: MemoryItem) => {
-    if (!novelId) return;
-    await removeItem(novelId, item.id);
-    if (tagFilter && !items.some((i) => i.id !== item.id && i.tags.includes(tagFilter))) {
-      setTagFilter(null);
-    }
+    if (!isMedia && !novelId) return;
+    await doRemove(item.id);
     setDeleteConfirm(null);
     showToast(`已删除「${item.name}」`, 'info');
   };
 
-  const inputCls =
-    'w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-[13px] text-neutral-200 placeholder-neutral-600 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all';
+  /**
+   * 组内拖拽 drop：
+   * 1. 基于未过滤的完整组列表计算新 id 序列；
+   * 2. 合并为全局有序 id（拖拽组用新顺序，其他组保持当前顺序）；
+   * 3. 一次性调 reorderItems，保证 order=index 全局唯一，不与其他组碰撞。
+   */
+  const handleDrop = (type: MemoryType, targetId: string) => {
+    if (!draggingId || draggingId === targetId) return;
+    const groupIds = (fullGroups.get(type) ?? []).map((i) => i.id);
+    const from = groupIds.indexOf(draggingId);
+    const to = groupIds.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    groupIds.splice(to, 0, ...groupIds.splice(from, 1));
+    const merged: string[] = [];
+    for (const t of GROUP_ORDER) {
+      merged.push(...(t === type ? groupIds : (fullGroups.get(t) ?? []).map((i) => i.id)));
+    }
+    void doReorder(merged);
+  };
+
+  const visibleCount = groups.reduce((n, g) => n + g.items.length, 0);
 
   return (
     <div className="flex flex-col h-full">
+      {/* 面板头部 */}
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Brain size={14} className="text-brand-300" />
+        <span className="text-xs font-semibold text-neutral-200">
+          {isMedia ? '全局记忆' : '作品记忆'}
+        </span>
+        <span className="text-[10px] text-neutral-600">{items.length}</span>
+        <div className="flex-1" />
+        <button
+          onClick={() => setExpandedOpen(true)}
+          title="记忆管理 · 展开视图"
+          className="p-1 rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
+        >
+          <Maximize2 size={13} />
+        </button>
+        <button
+          onClick={() => setAddPickerOpen((v) => !v)}
+          title="添加记忆条目"
+          className="p-1 rounded-md text-brand-300 hover:bg-brand-500/15 transition-colors"
+        >
+          <Plus size={13} />
+        </button>
+      </div>
+
       {/* 搜索框 */}
-      <div className="px-3 pt-2">
+      <div className="px-3 pt-1">
         <div className="relative">
           <Search
             size={12}
@@ -189,266 +311,306 @@ const MemoryPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* 类型过滤 */}
-      <div className="flex items-center gap-1 px-3 py-2">
-        <button
-          onClick={() => setFilter('all')}
-          className={`text-[11px] px-2 py-1 rounded-md transition-colors ${
-            filter === 'all' ? 'bg-brand-600/25 text-brand-300' : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/5'
-          }`}
-        >
-          全部 {items.length}
-        </button>
-        {(Object.keys(TYPE_CONFIG) as MemoryType[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setFilter(filter === t ? 'all' : t)}
-            className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded-md transition-colors ${
-              filter === t ? 'bg-brand-600/25 text-brand-300' : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/5'
-            }`}
-          >
-            {TYPE_CONFIG[t].label} {items.filter((i) => i.type === t).length}
-          </button>
-        ))}
-        <div className="flex-1" />
-        <button
-          onClick={openCreate}
-          title="添加记忆条目"
-          className="p-1 rounded-md text-brand-300 hover:bg-brand-500/15 transition-colors"
-        >
-          <Plus size={13} />
-        </button>
-      </div>
-
-      {/* 标签筛选 */}
+      {/* 快捷标签筛选区：点选加入/移除，持久化 localStorage */}
       {allTags.length > 0 && (
-        <div className="flex flex-wrap gap-1 px-3 pb-2">
-          {allTags.slice(0, 8).map(([tag, count]) => (
+        <div className="flex flex-wrap items-center gap-1 px-3 py-2">
+          {allTags.slice(0, 12).map(([tag]) => {
+            const active = quickTags.includes(tag);
+            return (
+              <button
+                key={tag}
+                onClick={() => toggleQuickTag(tag)}
+                title={active ? '点击移除快捷标签' : '点击加入快捷标签筛选'}
+                className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
+                  active
+                    ? 'bg-brand-600/25 text-brand-300 border-brand-500/40'
+                    : 'bg-white/5 text-neutral-500 border-white/8 hover:text-neutral-300'
+                }`}
+              >
+                #{tag}
+                {active && <X size={8} />}
+              </button>
+            );
+          })}
+          {quickTags.length > 0 && (
             <button
-              key={tag}
-              onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
-              className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
-                tagFilter === tag
-                  ? 'bg-brand-600/25 text-brand-300 border-brand-500/40'
-                  : 'bg-white/5 text-neutral-500 border-white/8 hover:text-neutral-300'
-              }`}
+              onClick={() => setQuickTags([])}
+              className="text-[10px] text-neutral-600 hover:text-neutral-300 transition-colors"
             >
-              #{tag} {count > 1 ? count : ''}
+              清空
             </button>
-          ))}
+          )}
         </div>
       )}
 
-      {/* 列表 */}
+      {/* 添加条目：内联分组选择 */}
+      {addPickerOpen && (
+        <div className="px-3 pb-2">
+          <div className="flex items-center gap-1.5 flex-wrap rounded-lg border border-white/8 bg-white/3 p-2 animate-fade-in">
+            <span className="text-[11px] text-neutral-500">选择分组：</span>
+            {GROUP_ORDER.map((t) => {
+              const Icon = GROUP_CONFIG[t].icon;
+              return (
+                <button
+                  key={t}
+                  onClick={() => openCreate(t)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/8 text-neutral-400 hover:bg-white/10 hover:text-neutral-200 transition-colors"
+                >
+                  <Icon size={11} className={GROUP_CONFIG[t].color} />
+                  {GROUP_CONFIG[t].label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 分组折叠区块列表 */}
       <div className="flex-1 overflow-y-auto px-3 pb-3 min-h-0">
         {loading ? (
           <div className="flex items-center gap-2 px-2 py-4 text-xs text-neutral-500">
             <Loader2 size={13} className="animate-spin text-brand-400" />
-            加载作品记忆…
+            {isMedia ? '加载全局记忆…' : '加载作品记忆…'}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center px-4 py-10">
             <Brain size={24} className="text-neutral-700 mb-2.5" />
             <p className="text-xs text-neutral-500 leading-relaxed">
-              {query || tagFilter
-                ? '没有匹配的记忆条目'
-                : `暂无${filter !== 'all' ? TYPE_CONFIG[filter].label : '记忆条目'}`}
+              暂无记忆条目
               <br />
-              <span className="text-neutral-600">AI 对话与续写时会参考这些长期记忆</span>
+              <span className="text-neutral-600">
+                {isMedia ? '全局记忆，所有自媒体内容共享' : 'AI 对话与续写时会参考这些长期记忆'}
+              </span>
             </p>
-            {items.length === 0 && (
-              <button
-                onClick={openCreate}
-                className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-brand-600 to-fuchsia-600 hover:from-brand-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-brand-600/20"
-              >
-                <Plus size={12} />
-                添加第一条记忆
-              </button>
-            )}
+            <button
+              onClick={() => setAddPickerOpen(true)}
+              className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-brand-600 to-fuchsia-600 hover:from-brand-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-brand-600/20"
+            >
+              <Plus size={12} />
+              添加第一条记忆
+            </button>
           </div>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {filtered.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => openEdit(item)}
-                className={`group rounded-lg border px-2.5 py-2 cursor-pointer transition-colors ${
-                  item.pinned
-                    ? 'bg-brand-500/8 border-brand-500/25 hover:border-brand-500/40'
-                    : 'bg-white/3 border-white/6 hover:border-white/12'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 mb-1">
-                  {item.pinned && <Pin size={10} className="text-brand-300 shrink-0" />}
-                  <span className={`${TYPE_CONFIG[item.type].color}`}>
-                    {TYPE_CONFIG[item.type].icon}
-                  </span>
-                  <span className="flex-1 text-xs font-medium text-neutral-200 truncate">
-                    {item.name}
-                  </span>
-                  {/* 悬停操作 */}
-                  <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex flex-col gap-2">
+            {visibleCount === 0 && (
+              <p className="text-[11px] text-neutral-600 px-1 py-2">没有匹配的记忆条目</p>
+            )}
+            {groups.map(({ type, cfg, items: groupItems, total }) => {
+              const Icon = cfg.icon;
+              const isCollapsed = !!collapsed[type];
+              return (
+                <div key={type} className="rounded-lg border border-white/6 bg-white/2">
+                  {/* 组头：参照 OutlinePanel ActBlock */}
+                  <div className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-white/4 transition-colors">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (novelId) togglePin(novelId, item.id);
-                      }}
-                      title={item.pinned ? '取消置顶' : '置顶（AI 优先参考）'}
-                      className="p-0.5 rounded text-neutral-600 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
+                      onClick={() => setCollapsed((prev) => ({ ...prev, [type]: !isCollapsed }))}
+                      className="shrink-0 p-0.5 text-neutral-500 hover:text-neutral-300 transition-colors"
                     >
-                      {item.pinned ? <PinOff size={11} /> : <Pin size={11} />}
+                      {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                     </button>
+                    <Icon size={12} className={`${cfg.color} shrink-0`} />
+                    <span className="text-xs font-semibold text-neutral-200 truncate">{cfg.label}</span>
+                    <span className="text-[10px] text-neutral-600">{total}</span>
+                    <div className="flex-1" />
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEdit(item);
-                      }}
-                      title="编辑条目"
-                      className="p-0.5 rounded text-neutral-600 hover:text-neutral-200 hover:bg-white/8 transition-colors"
+                      onClick={() => openCreate(type)}
+                      title={`添加${cfg.label}条目`}
+                      className="p-0.5 rounded text-neutral-600 opacity-0 group-hover:opacity-100 hover:text-brand-300 hover:bg-brand-500/10 transition-all"
                     >
-                      <Pencil size={11} />
+                      <Plus size={11} />
                     </button>
-                    {deleteConfirm === item.id ? (
-                      <span className="flex gap-1 animate-fade-in" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleDelete(item)}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white transition-colors"
-                        >
-                          确认
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirm(null)}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-white/8 text-neutral-300 hover:bg-white/15 transition-colors"
-                        >
-                          取消
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirm(item.id);
-                        }}
-                        title="删除条目"
-                        className="p-0.5 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    )}
-                  </span>
-                </div>
-                {item.content && (
-                  <p className="text-[11px] text-neutral-500 leading-relaxed line-clamp-3 whitespace-pre-line">
-                    {item.content}
-                  </p>
-                )}
-                {(item.tags.length > 0 || item.updated_at) && (
-                  <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                    {item.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTagFilter(tagFilter === tag ? null : tag);
-                        }}
-                        className={`text-[9px] px-1.5 py-0.5 rounded-full cursor-pointer transition-colors ${
-                          tagFilter === tag
-                            ? 'bg-brand-600/25 text-brand-300'
-                            : 'bg-white/6 text-neutral-500 hover:text-neutral-300'
-                        }`}
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                    {item.updated_at && (
-                      <span className="ml-auto text-[9px] text-neutral-600 tabular-nums">
-                        {fmtTime(item.updated_at)}
-                      </span>
-                    )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* 组内条目卡 */}
+                  {!isCollapsed && (
+                    <div className="flex flex-col gap-1.5 px-1.5 pb-1.5">
+                      {groupItems.length === 0 ? (
+                        <p className="text-[11px] text-neutral-600 px-1.5 py-1.5">
+                          {total === 0 ? '暂无条目' : '无匹配条目'}
+                        </p>
+                      ) : (
+                        groupItems.map((item) => {
+                          const isDragging = draggingId === item.id;
+                          const isDragOver = dragOverId === item.id && draggingId !== item.id;
+                          const preview = htmlToPlainText(item.content);
+                          return (
+                            <div
+                              key={item.id}
+                              draggable={canDrag}
+                              onDragStart={(e) => {
+                                e.dataTransfer.effectAllowed = 'move';
+                                setDraggingId(item.id);
+                              }}
+                              onDragOver={(e) => {
+                                if (!canDrag) return;
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                                if (dragOverId !== item.id) setDragOverId(item.id);
+                              }}
+                              onDragLeave={() => {
+                                if (dragOverId === item.id) setDragOverId(null);
+                              }}
+                              onDrop={(e) => {
+                                if (!canDrag) return;
+                                e.preventDefault();
+                                handleDrop(type, item.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggingId(null);
+                                setDragOverId(null);
+                              }}
+                              onClick={() => openEdit(item)}
+                              className={`group relative rounded-lg border px-2.5 py-2 cursor-pointer transition-colors ${
+                                item.pinned
+                                  ? 'bg-brand-500/8 border-brand-500/25 hover:border-brand-500/40'
+                                  : 'bg-white/3 border-white/6 hover:border-white/12'
+                              } ${isDragging ? 'opacity-40' : ''} ${isDragOver ? 'ring-1 ring-brand-500/60' : ''}`}
+                            >
+                              {/* 拖拽 hover 目标：左侧"可移动"提示标 */}
+                              {isDragOver && (
+                                <span
+                                  title="可移动"
+                                  className="absolute left-0.5 top-1/2 -translate-y-1/2 text-brand-300 animate-fade-in"
+                                >
+                                  <GripVertical size={12} />
+                                </span>
+                              )}
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                {canDrag && (
+                                  <span
+                                    title="拖动调顺序"
+                                    className="shrink-0 text-neutral-700 opacity-0 group-hover:opacity-100 cursor-grab transition-opacity"
+                                  >
+                                    <GripVertical size={11} />
+                                  </span>
+                                )}
+                                {item.pinned && (
+                                  /* 置顶 / AI 优先 */
+                                  <Pin size={10} className="text-brand-300 shrink-0" />
+                                )}
+                                <span className="flex-1 text-xs font-medium text-neutral-200 truncate">
+                                  {item.name}
+                                </span>
+                                {/* 悬停操作 */}
+                                <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      doTogglePin(item.id);
+                                    }}
+                                    title={item.pinned ? '取消置顶' : '置顶（AI 优先参考）'}
+                                    className="p-0.5 rounded text-neutral-600 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
+                                  >
+                                    {item.pinned ? <PinOff size={11} /> : <Pin size={11} />}
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openEdit(item);
+                                    }}
+                                    title="编辑条目"
+                                    className="p-0.5 rounded text-neutral-600 hover:text-neutral-200 hover:bg-white/8 transition-colors"
+                                  >
+                                    <Pencil size={11} />
+                                  </button>
+                                  {deleteConfirm === item.id ? (
+                                    <span className="flex gap-1 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+                                      <button
+                                        onClick={() => handleDelete(item)}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white transition-colors"
+                                      >
+                                        确认
+                                      </button>
+                                      <button
+                                        onClick={() => setDeleteConfirm(null)}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-white/8 text-neutral-300 hover:bg-white/15 transition-colors"
+                                      >
+                                        取消
+                                      </button>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDeleteConfirm(item.id);
+                                      }}
+                                      title="删除条目"
+                                      className="p-0.5 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  )}
+                                </span>
+                              </div>
+                              {preview && (
+                                <p className="text-[11px] text-neutral-500 leading-relaxed line-clamp-2">
+                                  {preview}
+                                </p>
+                              )}
+                              {item.tags.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                                  {item.tags.map((tag) => (
+                                    <span
+                                      key={tag}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleQuickTag(tag);
+                                      }}
+                                      title="加入/移除快捷标签筛选"
+                                      className={`text-[9px] px-1.5 py-0.5 rounded-full cursor-pointer transition-colors ${
+                                        quickTags.includes(tag)
+                                          ? 'bg-brand-600/25 text-brand-300'
+                                          : 'bg-white/6 text-neutral-500 hover:text-neutral-300'
+                                      }`}
+                                    >
+                                      #{tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* 新建 / 编辑弹窗 */}
-      <Modal
-        open={formOpen}
-        onClose={closeForm}
-        title={editTarget ? '编辑记忆条目' : '添加记忆条目'}
-        width="480px"
-      >
-        <div className="px-5 py-4 flex flex-col gap-2.5">
-          <div className="flex items-center gap-2">
-            {(Object.keys(TYPE_CONFIG) as MemoryType[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setFormType(t)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                  formType === t
-                    ? 'bg-brand-600/25 text-brand-300 border-brand-500/40'
-                    : 'bg-white/5 text-neutral-400 border-white/8 hover:bg-white/10'
-                }`}
-              >
-                {TYPE_CONFIG[t].icon}
-                {TYPE_CONFIG[t].label}
-              </button>
-            ))}
-          </div>
-          <input
-            value={formName}
-            onChange={(e) => setFormName(e.target.value)}
-            placeholder="名称（如：林晚）"
-            className={inputCls}
-            autoFocus
-          />
-          <textarea
-            value={formContent}
-            onChange={(e) => setFormContent(e.target.value)}
-            placeholder={
-              formType === 'character'
-                ? '人物设定：性格、外貌、动机、与他人的关系…'
-                : formType === 'setting'
-                  ? '世界观 / 地点 / 规则 / 时代背景…'
-                  : '已发生的关键剧情，供后续章节保持连贯…'
-            }
-            rows={7}
-            className={`${inputCls} resize-none leading-6`}
-          />
-          <input
-            value={formTags}
-            onChange={(e) => setFormTags(e.target.value)}
-            placeholder="标签（逗号分隔，可选，如：主角, 反派, 关键道具）"
-            className={inputCls}
-          />
-          <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={formPinned}
-              onChange={(e) => setFormPinned(e.target.checked)}
-              className="accent-indigo-500"
-            />
-            置顶条目（始终排在最前，AI 生成时优先携带）
-          </label>
-          <div className="flex justify-end gap-2 mt-1">
-            <button
-              onClick={closeForm}
-              className="px-4 py-1.5 rounded-lg text-sm text-neutral-300 hover:bg-white/8 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={!formName.trim()}
-              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:pointer-events-none text-white transition-all shadow-lg shadow-indigo-600/20"
-            >
-              {editTarget ? '保存修改' : '保存条目'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      {/* 新建 / 编辑窗口列表：多实例并存，各自受控挂起/全屏 */}
+      {windows.map((w) => (
+        <MemoryEditorModal
+          key={w.key}
+          open
+          onClose={() => closeWindow(w.key)}
+          scope={scope}
+          novelId={novelId}
+          item={w.itemId ? (items.find((i) => i.id === w.itemId) ?? null) : null}
+          defaultType={w.newType ?? 'character'}
+          minimized={w.minimized}
+          onMinimize={(m) => patchWindow(w.key, { minimized: m })}
+          fullscreen={w.fullscreen}
+          onToggleFullscreen={() => patchWindow(w.key, { fullscreen: !w.fullscreen })}
+          allItems={items}
+          instanceKey={w.key}
+          onSubmit={(payload) => handleEditorSubmit(w, payload)}
+        />
+      ))}
+
+      {/* 展开大视图：点击卡片先关闭大视图再打开编辑弹窗（Modal Esc 为 window capture，禁止嵌套） */}
+      <MemoryExpandedView
+        open={expandedOpen}
+        onClose={() => setExpandedOpen(false)}
+        items={items}
+        onEdit={(item) => {
+          setExpandedOpen(false);
+          openEdit(item);
+        }}
+      />
     </div>
   );
 };

@@ -7,6 +7,7 @@ import (
 // KnowledgeEdge represents a relationship between two knowledge nodes.
 type KnowledgeEdge struct {
 	ID              int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID          int64     `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	NovelID         int64     `gorm:"not null;uniqueIndex:idx_knowledge_edges_unique" json:"novel_id"`
 	SourceID        int64     `gorm:"not null;uniqueIndex:idx_knowledge_edges_unique" json:"source_id"`
 	TargetID        int64     `gorm:"not null;uniqueIndex:idx_knowledge_edges_unique" json:"target_id"`

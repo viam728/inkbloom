@@ -44,7 +44,7 @@ func (h *ExportHandler) ExportChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterRepo.GetByID(c.Request.Context(), id)
+	chapter, err := h.chapterRepo.GetByID(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -90,7 +90,7 @@ func (h *ExportHandler) ExportNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelRepo.GetByID(c.Request.Context(), id)
+	novel, err := h.novelRepo.GetByID(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -100,7 +100,7 @@ func (h *ExportHandler) ExportNovel(c *gin.Context) {
 		return
 	}
 
-	chapters, err := h.chapterRepo.ListByNovelID(c.Request.Context(), id)
+	chapters, err := h.chapterRepo.ListByNovelID(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return

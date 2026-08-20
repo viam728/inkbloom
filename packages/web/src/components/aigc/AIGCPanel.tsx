@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Wand2,
   Sparkles,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useAIGCStore } from '@/stores/aigc-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { useUIStore } from '@/stores/ui-store';
 import { generateImagePromptFromChapter, type ImagePromptResult } from '@/services/prompt-client';
 import { useToast } from '@/components/common/Toast';
 import ImagePreview from './ImagePreview';
@@ -44,14 +45,23 @@ const AIGCPanel: React.FC = () => {
   const { showToast } = useToast();
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const currentChapter = useNovelStore((s) => s.currentChapter);
-  const { tasks, assets, generating, createImageTask, fetchAssets, deleteAsset } =
+  const { tasks, records, recordsLoading, generating, createImageTask, fetchRecords, deleteAsset, removeRecord } =
     useAIGCStore();
 
+  /** 生成记录维度：全部 AIGC / 仅当前作品 */
+  const [historyScope, setHistoryScope] = useState<'all' | 'current'>('all');
+
+  // 拉取生成记录（/aigc/records 只含 AIGC，不含 upload 图床图片）
   useEffect(() => {
-    if (currentNovel) {
-      fetchAssets(currentNovel.id);
+    void fetchRecords(historyScope === 'current' ? currentNovel?.id : undefined);
+  }, [historyScope, currentNovel?.id, fetchRecords]);
+
+  const visibleRecords = useMemo(() => {
+    if (historyScope === 'current' && currentNovel) {
+      return records.filter((r) => r.novel_id === currentNovel.id);
     }
-  }, [currentNovel?.id, fetchAssets]);
+    return records;
+  }, [records, historyScope, currentNovel]);
 
   const handleGenerate = useCallback(async () => {
     const text = prompt.trim();
@@ -135,6 +145,23 @@ const AIGCPanel: React.FC = () => {
   const activeTasks = tasks.filter(
     (t) => t.status === 'pending' || t.status === 'running',
   );
+
+  /** 跳转右栏图床 Tab（外部直达：activeRightTab 全局可写） */
+  const jumpToGallery = () => {
+    useUIStore.getState().setActiveRightTab('gallery');
+    if (useUIStore.getState().rightCollapsed) useUIStore.getState().toggleRight();
+  };
+
+  /** 删除生成记录：后端删 asset，前端同步移除记录 */
+  const handleDeleteRecord = async (recordId: number, assetId: number | null) => {
+    try {
+      if (assetId != null) await deleteAsset(assetId);
+      removeRecord(recordId);
+      showToast('已删除', 'info');
+    } catch {
+      showToast('删除失败，请稍后重试', 'error');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -310,60 +337,90 @@ const AIGCPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Asset gallery */}
+        {/* 生成记录（/aigc/records，仅 AIGC） */}
         <div className="px-3.5 py-3.5">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
               生成记录
             </p>
-            {assets.length > 0 && (
-              <span className="text-[10px] text-neutral-600">{assets.length} 张</span>
-            )}
+            <div className="flex items-center gap-2">
+              {/* 全部 / 当前作品 维度切换 */}
+              <div className="flex items-center gap-0.5 rounded-md bg-white/4 p-0.5">
+                {([
+                  { key: 'all', label: '全部' },
+                  { key: 'current', label: '当前作品' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setHistoryScope(opt.key)}
+                    disabled={opt.key === 'current' && !currentNovel}
+                    className={`px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-40 ${
+                      historyScope === opt.key
+                        ? 'bg-white/10 text-neutral-100'
+                        : 'text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={jumpToGallery}
+                className="text-[10px] text-brand-400/80 hover:text-brand-300 transition-colors"
+                title="在右栏图床 Tab 中查看全部图片"
+              >
+                在图床中查看
+              </button>
+            </div>
           </div>
 
-          {assets.length === 0 ? (
+          {visibleRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-500/20 to-fuchsia-500/20 flex items-center justify-center mb-3">
-                <ImageIcon size={22} className="text-brand-400/70" />
+                {recordsLoading ? (
+                  <Loader2 size={20} className="text-brand-400/70 animate-spin" />
+                ) : (
+                  <ImageIcon size={22} className="text-brand-400/70" />
+                )}
               </div>
-              <p className="text-sm text-neutral-400 mb-1">还没有作品</p>
-              <p className="text-[11px] text-neutral-600 leading-relaxed">
-                输入描述或使用「自动生成 Prompt」
-                <br />
-                为你的文章创作配图
+              <p className="text-sm text-neutral-400 mb-1">
+                {recordsLoading ? '正在加载…' : '还没有作品'}
               </p>
+              {!recordsLoading && (
+                <p className="text-[11px] text-neutral-600 leading-relaxed">
+                  输入描述或使用「自动生成 Prompt」
+                  <br />
+                  为你的文章创作配图
+                </p>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2">
-              {assets.map((asset) => (
+              {visibleRecords.map((rec) => (
                 <div
-                  key={asset.id}
+                  key={rec.id}
                   className="group relative rounded-xl overflow-hidden border border-white/6 hover:border-brand-500/50 transition-all cursor-pointer bg-surface-2 hover:shadow-[0_8px_24px_rgba(0,0,0,0.4)]"
-                  onClick={() => setPreviewAsset({ src: asset.file_path, prompt: asset.prompt })}
+                  onClick={() => setPreviewAsset({ src: rec.url, prompt: rec.prompt })}
                 >
                   <img
-                    src={asset.thumbnail_path || asset.file_path}
-                    alt={asset.prompt}
+                    src={rec.thumb_url || rec.url}
+                    alt={rec.prompt}
                     className="w-full aspect-square object-cover transition-transform duration-300 group-hover:scale-[1.04]"
                     loading="lazy"
                   />
-                  {/* size badge */}
-                  <span className="absolute top-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded-md bg-black/50 backdrop-blur text-neutral-300 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {asset.width}×{asset.height}
-                  </span>
                   {/* hover overlay */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2">
-                    <p className="text-[10px] text-white/90 line-clamp-2 mb-1.5">{asset.prompt}</p>
+                    <p className="text-[10px] text-white/90 line-clamp-2 mb-1.5">{rec.prompt}</p>
                     <div className="flex gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDownload(asset.file_path, asset.id);
+                          void handleDownload(rec.url, rec.id);
                         }}
                         className="flex-1 flex items-center justify-center gap-1 h-6 rounded-md bg-white/15 hover:bg-white/25 text-white text-[10px] backdrop-blur transition-colors"
                         title="下载"
                       >
-                        {downloadingId === asset.id ? (
+                        {downloadingId === rec.id ? (
                           <Loader2 size={10} className="animate-spin" />
                         ) : (
                           <Download size={10} />
@@ -373,8 +430,7 @@ const AIGCPanel: React.FC = () => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteAsset(asset.id);
-                          showToast('已删除', 'info');
+                          void handleDeleteRecord(rec.id, rec.asset_id);
                         }}
                         className="w-6 h-6 rounded-md bg-white/15 hover:bg-red-500/60 text-white backdrop-blur flex items-center justify-center transition-colors"
                         title="删除"
@@ -396,6 +452,18 @@ const AIGCPanel: React.FC = () => {
           src={previewAsset.src}
           prompt={previewAsset.prompt}
           onDownload={() => handleDownload(previewAsset.src, 0)}
+          onInsert={() => {
+            // AI 图插入：定向广播到最近聚焦编辑器（无 target → lastActiveEditorEl 匹配）
+            const safeSrc = previewAsset.src.replace(/"/g, '&quot;');
+            const safeAlt = previewAsset.prompt.replace(/"/g, '&quot;');
+            window.dispatchEvent(
+              new CustomEvent('inkbloom:insert-content', {
+                detail: { html: `<img src="${safeSrc}" alt="${safeAlt}" />` },
+              }),
+            );
+            setPreviewAsset(null);
+            showToast('已插入最近聚焦的编辑器', 'success');
+          }}
           onClose={() => setPreviewAsset(null)}
         />
       )}

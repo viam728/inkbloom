@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/scope"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -13,16 +15,17 @@ import (
 var emptyJSONArray = []byte("[]")
 
 // NovelDocRepository defines data access for per-novel document tables
-// (novel_outline / novel_memory) plus the novel deletion cascade.
+// (novel_outline / novel_memory) plus the novel deletion cascade. All
+// operations are scoped by user_id (M1 isolation).
 type NovelDocRepository interface {
 	// GetOutline returns the outline document for a novel. When no row
 	// exists, an empty document (acts = [], version = 0) is returned
 	// instead of an error.
-	GetOutline(ctx context.Context, novelID int64) (*model.NovelOutline, error)
+	GetOutline(ctx context.Context, userID, novelID int64) (*model.NovelOutline, error)
 	// GetMemory returns the memory document for a novel. When no row
 	// exists, an empty document (items = [], version = 0) is returned
 	// instead of an error.
-	GetMemory(ctx context.Context, novelID int64) (*model.NovelMemory, error)
+	GetMemory(ctx context.Context, userID, novelID int64) (*model.NovelMemory, error)
 	// UpsertOutline inserts or wholesale-replaces the outline. On conflict
 	// the version is incremented and updated_at refreshed; the document is
 	// populated with the resulting version/updated_at via RETURNING.
@@ -33,7 +36,7 @@ type NovelDocRepository interface {
 	// CascadeDeleteNovel removes everything owned by a novel in a single
 	// transaction: soft-deletes chapters and the novel itself, and
 	// hard-deletes the novel_outline / novel_memory rows.
-	CascadeDeleteNovel(ctx context.Context, novelID int64) error
+	CascadeDeleteNovel(ctx context.Context, userID, novelID int64) error
 }
 
 // novelDocRepository is the GORM implementation of NovelDocRepository.
@@ -46,24 +49,24 @@ func NewNovelDocRepository(db *gorm.DB) NovelDocRepository {
 	return &novelDocRepository{db: db}
 }
 
-func (r *novelDocRepository) GetOutline(ctx context.Context, novelID int64) (*model.NovelOutline, error) {
+func (r *novelDocRepository) GetOutline(ctx context.Context, userID, novelID int64) (*model.NovelOutline, error) {
 	var doc model.NovelOutline
-	err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).First(&doc).Error
+	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).First(&doc).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &model.NovelOutline{NovelID: novelID, Acts: emptyJSONArray}, nil
+			return &model.NovelOutline{UserID: userID, NovelID: novelID, Acts: emptyJSONArray}, nil
 		}
 		return nil, err
 	}
 	return &doc, nil
 }
 
-func (r *novelDocRepository) GetMemory(ctx context.Context, novelID int64) (*model.NovelMemory, error) {
+func (r *novelDocRepository) GetMemory(ctx context.Context, userID, novelID int64) (*model.NovelMemory, error) {
 	var doc model.NovelMemory
-	err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).First(&doc).Error
+	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).First(&doc).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &model.NovelMemory{NovelID: novelID, Items: emptyJSONArray}, nil
+			return &model.NovelMemory{UserID: userID, NovelID: novelID, Items: emptyJSONArray}, nil
 		}
 		return nil, err
 	}
@@ -76,9 +79,11 @@ func (r *novelDocRepository) UpsertOutline(ctx context.Context, doc *model.Novel
 			clause.OnConflict{
 				Columns: []clause.Column{{Name: "novel_id"}},
 				DoUpdates: clause.Assignments(map[string]interface{}{
-					"acts":       doc.Acts,
+					"acts": doc.Acts,
+					// Table-qualified self-reference: bare "version + 1" is ambiguous
+					// in PG's ON CONFLICT DO UPDATE (target row vs excluded), SQLSTATE 42702.
 					"version":    gorm.Expr("novel_outline.version + 1"),
-					"updated_at": gorm.Expr("now()"),
+					"updated_at": time.Now(),
 				}),
 			},
 			clause.Returning{Columns: []clause.Column{{Name: "version"}, {Name: "updated_at"}}},
@@ -92,9 +97,10 @@ func (r *novelDocRepository) UpsertMemory(ctx context.Context, doc *model.NovelM
 			clause.OnConflict{
 				Columns: []clause.Column{{Name: "novel_id"}},
 				DoUpdates: clause.Assignments(map[string]interface{}{
-					"items":      doc.Items,
+					"items": doc.Items,
+					// Table-qualified self-reference; see UpsertOutline for rationale.
 					"version":    gorm.Expr("novel_memory.version + 1"),
-					"updated_at": gorm.Expr("now()"),
+					"updated_at": time.Now(),
 				}),
 			},
 			clause.Returning{Columns: []clause.Column{{Name: "version"}, {Name: "updated_at"}}},
@@ -104,18 +110,20 @@ func (r *novelDocRepository) UpsertMemory(ctx context.Context, doc *model.NovelM
 
 // CascadeDeleteNovel performs the whole-novel teardown atomically. Chapters
 // and the novel carry DeletedAt so GORM soft-deletes them; the outline and
-// memory models have no DeletedAt field, so they are hard-deleted.
-func (r *novelDocRepository) CascadeDeleteNovel(ctx context.Context, novelID int64) error {
+// memory models have no DeletedAt field, so they are hard-deleted. Every
+// statement is additionally guarded by user_id so the cascade can never
+// touch another user's rows.
+func (r *novelDocRepository) CascadeDeleteNovel(ctx context.Context, userID, novelID int64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("novel_id = ?", novelID).Delete(&model.Chapter{}).Error; err != nil {
+		if err := tx.Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Delete(&model.Chapter{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("novel_id = ?", novelID).Delete(&model.NovelOutline{}).Error; err != nil {
+		if err := tx.Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Delete(&model.NovelOutline{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("novel_id = ?", novelID).Delete(&model.NovelMemory{}).Error; err != nil {
+		if err := tx.Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Delete(&model.NovelMemory{}).Error; err != nil {
 			return err
 		}
-		return tx.Delete(&model.Novel{}, novelID).Error
+		return tx.Scopes(scope.ForUser(userID)).Delete(&model.Novel{}, novelID).Error
 	})
 }

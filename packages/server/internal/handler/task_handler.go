@@ -28,7 +28,7 @@ func (h *TaskAPIHandler) ListTasks(c *gin.Context) {
 	status := c.DefaultQuery("status", "")
 	limit := 50
 
-	tasks, err := h.repo.List(c.Request.Context(), status, limit)
+	tasks, err := h.repo.ListByUser(c.Request.Context(), GetUserID(c), status, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{
 			Code:    500,
@@ -63,6 +63,14 @@ func (h *TaskAPIHandler) GetTask(c *gin.Context) {
 		})
 		return
 	}
+	// Ownership guard: foreign tasks look like missing ones (M1 isolation).
+	if task.UserID != GetUserID(c) {
+		c.JSON(http.StatusNotFound, dto.APIResponse{
+			Code:    404,
+			Message: "task not found",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, dto.APIResponse{
 		Code:    200,
@@ -70,4 +78,3 @@ func (h *TaskAPIHandler) GetTask(c *gin.Context) {
 		Data:    task,
 	})
 }
-

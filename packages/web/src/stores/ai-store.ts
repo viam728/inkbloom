@@ -54,7 +54,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
   messages: [],
   isStreaming: false,
   streamingContent: '',
-  currentModel: 'gpt-4o-mini',
+  currentModel: 'deepseek-v4-flash',
 
   inlineSuggestion: null,
   isInlineStreaming: false,

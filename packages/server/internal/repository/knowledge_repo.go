@@ -4,23 +4,26 @@ import (
 	"context"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/scope"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 // KnowledgeRepository defines the interface for knowledge graph data access.
+// Reads are scoped by user_id (M1 isolation); upserts rely on the caller
+// (service layer) populating node/edge.UserID.
 type KnowledgeRepository interface {
 	// Nodes
 	UpsertNode(ctx context.Context, node *model.KnowledgeNode) (*model.KnowledgeNode, error)
-	GetNodesByNovel(ctx context.Context, novelID int64) ([]model.KnowledgeNode, error)
-	GetNodesByType(ctx context.Context, novelID int64, nodeType string) ([]model.KnowledgeNode, error)
+	GetNodesByNovel(ctx context.Context, userID, novelID int64) ([]model.KnowledgeNode, error)
+	GetNodesByType(ctx context.Context, userID, novelID int64, nodeType string) ([]model.KnowledgeNode, error)
 
 	// Edges
 	UpsertEdge(ctx context.Context, edge *model.KnowledgeEdge) (*model.KnowledgeEdge, error)
-	GetEdgesByNovel(ctx context.Context, novelID int64) ([]model.KnowledgeEdge, error)
+	GetEdgesByNovel(ctx context.Context, userID, novelID int64) ([]model.KnowledgeEdge, error)
 
 	// Graph
-	GetGraph(ctx context.Context, novelID int64) (nodes []model.KnowledgeNode, edges []model.KnowledgeEdge, err error)
+	GetGraph(ctx context.Context, userID, novelID int64) (nodes []model.KnowledgeNode, edges []model.KnowledgeEdge, err error)
 }
 
 // knowledgeRepository is the GORM implementation of KnowledgeRepository.
@@ -48,6 +51,7 @@ func (r *knowledgeRepository) UpsertNode(ctx context.Context, node *model.Knowle
 	// Re-fetch to get the full record
 	var result model.KnowledgeNode
 	err = r.db.WithContext(ctx).
+		Scopes(scope.ForUser(node.UserID)).
 		Where("novel_id = ? AND name = ? AND type = ?", node.NovelID, node.Name, node.Type).
 		First(&result).Error
 	if err != nil {
@@ -56,15 +60,16 @@ func (r *knowledgeRepository) UpsertNode(ctx context.Context, node *model.Knowle
 	return &result, nil
 }
 
-func (r *knowledgeRepository) GetNodesByNovel(ctx context.Context, novelID int64) ([]model.KnowledgeNode, error) {
+func (r *knowledgeRepository) GetNodesByNovel(ctx context.Context, userID, novelID int64) ([]model.KnowledgeNode, error) {
 	var nodes []model.KnowledgeNode
-	err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).Find(&nodes).Error
+	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Find(&nodes).Error
 	return nodes, err
 }
 
-func (r *knowledgeRepository) GetNodesByType(ctx context.Context, novelID int64, nodeType string) ([]model.KnowledgeNode, error) {
+func (r *knowledgeRepository) GetNodesByType(ctx context.Context, userID, novelID int64, nodeType string) ([]model.KnowledgeNode, error) {
 	var nodes []model.KnowledgeNode
 	err := r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
 		Where("novel_id = ? AND type = ?", novelID, nodeType).
 		Find(&nodes).Error
 	return nodes, err
@@ -85,6 +90,7 @@ func (r *knowledgeRepository) UpsertEdge(ctx context.Context, edge *model.Knowle
 	// Re-fetch to get the full record
 	var result model.KnowledgeEdge
 	err = r.db.WithContext(ctx).
+		Scopes(scope.ForUser(edge.UserID)).
 		Where("novel_id = ? AND source_id = ? AND target_id = ? AND relation_type = ?",
 			edge.NovelID, edge.SourceID, edge.TargetID, edge.RelationType).
 		First(&result).Error
@@ -94,20 +100,20 @@ func (r *knowledgeRepository) UpsertEdge(ctx context.Context, edge *model.Knowle
 	return &result, nil
 }
 
-func (r *knowledgeRepository) GetEdgesByNovel(ctx context.Context, novelID int64) ([]model.KnowledgeEdge, error) {
+func (r *knowledgeRepository) GetEdgesByNovel(ctx context.Context, userID, novelID int64) ([]model.KnowledgeEdge, error) {
 	var edges []model.KnowledgeEdge
-	err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).Find(&edges).Error
+	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Find(&edges).Error
 	return edges, err
 }
 
-func (r *knowledgeRepository) GetGraph(ctx context.Context, novelID int64) ([]model.KnowledgeNode, []model.KnowledgeEdge, error) {
+func (r *knowledgeRepository) GetGraph(ctx context.Context, userID, novelID int64) ([]model.KnowledgeNode, []model.KnowledgeEdge, error) {
 	var nodes []model.KnowledgeNode
 	var edges []model.KnowledgeEdge
 
-	if err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).Find(&nodes).Error; err != nil {
+	if err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Find(&nodes).Error; err != nil {
 		return nil, nil, err
 	}
-	if err := r.db.WithContext(ctx).Where("novel_id = ?", novelID).Find(&edges).Error; err != nil {
+	if err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Where("novel_id = ?", novelID).Find(&edges).Error; err != nil {
 		return nil, nil, err
 	}
 

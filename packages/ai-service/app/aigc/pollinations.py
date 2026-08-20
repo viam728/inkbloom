@@ -30,7 +30,13 @@ class PollinationsProvider(BaseImageProvider):
     """
 
     def __init__(self, storage_root: str | None = None):
-        self.storage_root = Path(storage_root or os.path.expanduser("~/.inkbloom"))
+        # INKBLOOM_STORAGE_ROOT overrides the default ~/.inkbloom so the Go
+        # server and the ai-service can share one storage root (task #57).
+        self.storage_root = Path(
+            storage_root
+            or os.environ.get("INKBLOOM_STORAGE_ROOT")
+            or os.path.expanduser("~/.inkbloom")
+        )
 
     async def generate(
         self,
@@ -40,6 +46,7 @@ class PollinationsProvider(BaseImageProvider):
         **kwargs,
     ) -> ImageResult:
         novel_id = kwargs.get("novel_id", 0)
+        scope = kwargs.get("scope") or "novel"
         seed = kwargs.get("seed") or int(time.time()) % 100000
 
         # 1. Build the URL
@@ -49,13 +56,25 @@ class PollinationsProvider(BaseImageProvider):
             f"?width={width}&height={height}&seed={seed}&nologo=true"
         )
 
-        # 2. Ensure output directory exists
-        asset_dir = self.storage_root / "novels" / str(novel_id) / "assets"
+        # 2. Ensure output directory exists. Scope routes the directory
+        # (task #64); every scope lives under the Go StaticFS root
+        # ({storage_root}/novels) so files stay servable via
+        # /assets/files/* (same convention as the gallery, task #57).
+        if scope == "media":
+            asset_dir = self.storage_root / "novels" / "_media" / "aigc"
+            url_prefix = "/assets/files/_media/aigc"
+        elif scope == "memo":
+            asset_dir = self.storage_root / "novels" / "_memo" / "aigc"
+            url_prefix = "/assets/files/_memo/aigc"
+        else:  # novel
+            asset_dir = self.storage_root / "novels" / str(novel_id) / "assets"
+            url_prefix = f"/assets/files/{novel_id}/assets"
         asset_dir.mkdir(parents=True, exist_ok=True)
 
-        # 3. Download the image
+        # 3. Download the image (_aigc suffix marks AI-generated files,
+        # task #64)
         file_hash = hashlib.md5(f"{prompt}-{seed}".encode()).hexdigest()[:12]
-        filename = f"img_{file_hash}.png"
+        filename = f"img_{file_hash}_aigc.png"
         file_path = asset_dir / filename
 
         async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
@@ -67,7 +86,7 @@ class PollinationsProvider(BaseImageProvider):
         logger.info("Downloaded image to %s (%d bytes)", file_path, file_size)
 
         # 4. Generate thumbnail
-        thumb_path = asset_dir / f"thumb_{file_hash}.png"
+        thumb_path = asset_dir / f"thumb_{file_hash}_aigc.png"
         try:
             with Image.open(file_path) as img:
                 img.thumbnail((_THUMB_MAX, _THUMB_MAX))
@@ -77,10 +96,12 @@ class PollinationsProvider(BaseImageProvider):
             logger.warning("Failed to create thumbnail: %s", exc)
             thumb_path = Path("")
 
-        # 5. Build the relative URL path for frontend access
-        rel_path = f"/assets/files/novels/{novel_id}/assets/{filename}"
+        # 5. Build the relative URL path for frontend access. The Go
+        # StaticFS root is already {storage_root}/novels, so no "novels/"
+        # segment belongs in the URL (task #57 fix).
+        rel_path = f"{url_prefix}/{filename}"
         rel_thumb = (
-            f"/assets/files/novels/{novel_id}/assets/thumb_{file_hash}.png"
+            f"{url_prefix}/thumb_{file_hash}_aigc.png"
             if thumb_path.exists()
             else ""
         )

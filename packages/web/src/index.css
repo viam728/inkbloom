@@ -94,6 +94,23 @@ body {
   background-clip: content-box;
 }
 
+/* ===== 展示字体（墨韵衬线，用于品牌区） ===== */
+.font-display {
+  font-family: "Noto Serif SC", "Songti SC", "STSong", "SimSun", serif;
+}
+
+/* ===== 登录页背景动效 ===== */
+@keyframes bloom-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(24px, -18px, 0) scale(1.08); }
+}
+.animate-bloom-drift {
+  animation: bloom-drift 9s ease-in-out infinite;
+}
+.animate-bloom-drift-slow {
+  animation: bloom-drift 14s ease-in-out infinite reverse;
+}
+
 /* ===== 通用玻璃拟态面板 ===== */
 .glass-panel {
   background: rgba(24, 24, 38, 0.85);
@@ -115,13 +132,15 @@ body {
   border-radius: 6px;
 }
 
-/* ===== 拖拽分栏时禁用文本选择 ===== */
+/* ===== 拖拽分栏时禁用文本选择与过渡（防拖拽抖动） ===== */
 body.resizing {
   cursor: col-resize;
   user-select: none;
+  transition: none !important;
 }
 body.resizing * {
   cursor: col-resize !important;
+  transition: none !important;
 }
 
 /* ===== TipTap 编辑器样式 ===== */
@@ -210,8 +229,8 @@ body.resizing * {
 .tiptap img {
   max-width: 100%;
   height: auto;
-  border-radius: 0.5em;
-  margin: 1em 0;
+  vertical-align: middle;
+  border-radius: 4px;
 }
 
 .tiptap u {

@@ -12,6 +12,7 @@ import (
 // (item ids are frontend-generated UUID strings).
 type NovelMemory struct {
 	NovelID   int64          `gorm:"primaryKey" json:"novel_id"`
+	UserID    int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	Items     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"items"`
 	Version   int            `gorm:"not null;default:0" json:"version"`
 	UpdatedAt time.Time      `json:"updated_at"`

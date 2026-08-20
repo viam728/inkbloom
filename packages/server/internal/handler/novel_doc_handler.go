@@ -43,7 +43,7 @@ func (h *NovelDocHandler) GetOutline(c *gin.Context) {
 		return
 	}
 
-	doc, err := h.docService.GetOutline(c.Request.Context(), novelID)
+	doc, err := h.docService.GetOutline(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		h.writeError(c, "get outline failed", novelID, err)
 		return
@@ -65,7 +65,7 @@ func (h *NovelDocHandler) UpdateOutline(c *gin.Context) {
 		return
 	}
 
-	version, err := h.docService.UpdateOutline(c.Request.Context(), novelID, req.Acts, req.Version)
+	version, err := h.docService.UpdateOutline(c.Request.Context(), GetUserID(c), novelID, req.Acts, req.Version)
 	if err != nil {
 		h.writeError(c, "update outline failed", novelID, err)
 		return
@@ -81,7 +81,7 @@ func (h *NovelDocHandler) GetMemory(c *gin.Context) {
 		return
 	}
 
-	doc, err := h.docService.GetMemory(c.Request.Context(), novelID)
+	doc, err := h.docService.GetMemory(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		h.writeError(c, "get memory failed", novelID, err)
 		return
@@ -103,7 +103,7 @@ func (h *NovelDocHandler) UpdateMemory(c *gin.Context) {
 		return
 	}
 
-	version, err := h.docService.UpdateMemory(c.Request.Context(), novelID, req.Items, req.Version)
+	version, err := h.docService.UpdateMemory(c.Request.Context(), GetUserID(c), novelID, req.Items, req.Version)
 	if err != nil {
 		h.writeError(c, "update memory failed", novelID, err)
 		return
@@ -119,7 +119,7 @@ func (h *NovelDocHandler) GetRhythm(c *gin.Context) {
 		return
 	}
 
-	points, err := h.docService.GetRhythm(c.Request.Context(), novelID)
+	points, err := h.docService.GetRhythm(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		h.writeError(c, "get rhythm failed", novelID, err)
 		return

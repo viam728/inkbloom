@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 
 type ToastType = 'success' | 'error' | 'info';
@@ -19,6 +20,16 @@ let nextId = 0;
 
 export const useToast = () => useContext(ToastContext);
 
+// 命令式桥接：供 store 等非组件上下文弹 toast（Provider 未挂载时静默忽略）
+type ShowToastFn = (message: string, type?: ToastType) => void;
+let externalShow: ShowToastFn | null = null;
+
+export const toast = {
+  show: (message: string, type: ToastType = 'info') => {
+    externalShow?.(message, type);
+  },
+};
+
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
@@ -29,6 +40,13 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3000);
   }, []);
+
+  useEffect(() => {
+    externalShow = showToast;
+    return () => {
+      if (externalShow === showToast) externalShow = null;
+    };
+  }, [showToast]);
 
   const styleMap: Record<ToastType, { border: string; icon: React.ReactNode }> = {
     success: {
@@ -48,17 +66,21 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex flex-col items-center gap-2 pointer-events-none">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`glass-panel ${styleMap[t.type].border} flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm text-neutral-200 animate-slide-up`}
-          >
-            {styleMap[t.type].icon}
-            {t.message}
-          </div>
-        ))}
-      </div>
+      {/* Portal 到 body 且层级高于 Modal（z-[1000]），保证弹窗打开时反馈提示仍可见 */}
+      {createPortal(
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[1100] flex flex-col items-center gap-2 pointer-events-none">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`glass-panel ${styleMap[t.type].border} flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm text-neutral-200 animate-slide-up`}
+            >
+              {styleMap[t.type].icon}
+              {t.message}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
     </ToastContext.Provider>
   );
 };

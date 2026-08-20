@@ -30,7 +30,7 @@ func NewMediaHandler(ms *service.MediaService) *MediaHandler {
 // ListContents handles GET /media/contents
 // Response data: { contents: MediaContent[] }
 func (h *MediaHandler) ListContents(c *gin.Context) {
-	contents, err := h.mediaService.ListContents(c.Request.Context())
+	contents, err := h.mediaService.ListContents(c.Request.Context(), GetUserID(c))
 	if err != nil {
 		zap.L().Error("list media contents failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
@@ -47,7 +47,7 @@ func (h *MediaHandler) CreateContent(c *gin.Context) {
 		return
 	}
 
-	content, err := h.mediaService.CreateContent(c.Request.Context(), &req)
+	content, err := h.mediaService.CreateContent(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
 		zap.L().Error("create media content failed", zap.String("title", req.Title), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
@@ -70,7 +70,7 @@ func (h *MediaHandler) UpdateContent(c *gin.Context) {
 		return
 	}
 
-	content, err := h.mediaService.UpdateContent(c.Request.Context(), id, &req)
+	content, err := h.mediaService.UpdateContent(c.Request.Context(), GetUserID(c), id, &req)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "media content not found"})
@@ -91,7 +91,7 @@ func (h *MediaHandler) DeleteContent(c *gin.Context) {
 		return
 	}
 
-	if err := h.mediaService.DeleteContent(c.Request.Context(), id); err != nil {
+	if err := h.mediaService.DeleteContent(c.Request.Context(), GetUserID(c), id); err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "media content not found"})
 			return
@@ -113,7 +113,7 @@ func (h *MediaHandler) ReorderContents(c *gin.Context) {
 		return
 	}
 
-	if err := h.mediaService.ReorderContents(c.Request.Context(), req.OrderedIDs); err != nil {
+	if err := h.mediaService.ReorderContents(c.Request.Context(), GetUserID(c), req.OrderedIDs); err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput), errors.Is(err, repository.ErrMediaReorderIDMismatch):
 			zap.L().Warn("reorder media contents rejected", zap.Error(err))
@@ -130,7 +130,7 @@ func (h *MediaHandler) ReorderContents(c *gin.Context) {
 // ListTopics handles GET /media/topics
 // Response data: { topics: TopicItem[] }
 func (h *MediaHandler) ListTopics(c *gin.Context) {
-	topics, err := h.mediaService.ListTopics(c.Request.Context())
+	topics, err := h.mediaService.ListTopics(c.Request.Context(), GetUserID(c))
 	if err != nil {
 		zap.L().Error("list media topics failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
@@ -149,11 +149,51 @@ func (h *MediaHandler) SaveTopics(c *gin.Context) {
 		return
 	}
 
-	topics, err := h.mediaService.SaveTopics(c.Request.Context(), &req)
+	topics, err := h.mediaService.SaveTopics(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
 		zap.L().Error("save media topics failed", zap.Int("count", len(req.Topics)), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: gin.H{"topics": topics}})
+}
+
+// GetMediaMemory handles GET /media/memory
+// Response data: { items: MemoryItem[], version: number }
+func (h *MediaHandler) GetMediaMemory(c *gin.Context) {
+	doc, err := h.mediaService.GetMediaMemory(c.Request.Context(), GetUserID(c))
+	if err != nil {
+		zap.L().Error("get media memory failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: doc})
+}
+
+// UpdateMediaMemory handles PUT /media/memory
+// Request body: { items: MemoryItem[], version?: number } (whole replacement).
+// Error mapping: 409 version conflict / 422 payload rejected / 500 internal.
+func (h *MediaHandler) UpdateMediaMemory(c *gin.Context) {
+	var req dto.UpdateMediaMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+
+	doc, err := h.mediaService.UpdateMediaMemory(c.Request.Context(), GetUserID(c), req.Items, req.Version)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrVersionConflict):
+			zap.L().Warn("update media memory: version conflict")
+			c.JSON(http.StatusConflict, dto.APIResponse{Code: 409, Message: err.Error()})
+		case errors.Is(err, service.ErrPayloadTooLarge), errors.Is(err, service.ErrInvalidInput):
+			zap.L().Warn("update media memory: rejected", zap.Error(err))
+			c.JSON(http.StatusUnprocessableEntity, dto.APIResponse{Code: 422, Message: err.Error()})
+		default:
+			zap.L().Error("update media memory failed", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: doc})
 }

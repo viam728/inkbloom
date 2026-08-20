@@ -38,8 +38,9 @@ type GraphData struct {
 	Edges []dto.KnowledgeEdgeData `json:"edges"`
 }
 
-// ExtractFromChapter extracts entities and relations from a chapter and stores them.
-func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, novelID, chapterID int64, text string) error {
+// ExtractFromChapter extracts entities and relations from a chapter and stores
+// them under the given user's ownership.
+func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, userID, novelID, chapterID int64, text string) error {
 	// Call Python AI service to extract entities and relations
 	reqBody := map[string]interface{}{
 		"text":       text,
@@ -76,8 +77,8 @@ func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, novelID, chap
 			Description string `json:"description"`
 		} `json:"entities"`
 		Relations []struct {
-			SourceName  string `json:"source_name"`
-			TargetName  string `json:"target_name"`
+			SourceName   string `json:"source_name"`
+			TargetName   string `json:"target_name"`
 			RelationType string `json:"relation_type"`
 			Description  string `json:"description"`
 		} `json:"relations"`
@@ -92,6 +93,7 @@ func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, novelID, chap
 		nodeType := e.Type
 		props, _ := json.Marshal(map[string]string{"description": e.Description})
 		node := &model.KnowledgeNode{
+			UserID:          userID,
 			NovelID:         novelID,
 			Name:            e.Name,
 			Type:            &nodeType,
@@ -118,6 +120,7 @@ func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, novelID, chap
 		relationType := r.RelationType
 		description := r.Description
 		edge := &model.KnowledgeEdge{
+			UserID:          userID,
 			NovelID:         novelID,
 			SourceID:        sourceNode.ID,
 			TargetID:        targetNode.ID,
@@ -133,9 +136,9 @@ func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, novelID, chap
 	return nil
 }
 
-// GetGraph retrieves the full knowledge graph for a novel.
-func (s *KnowledgeService) GetGraph(ctx context.Context, novelID int64) (*GraphData, error) {
-	nodes, edges, err := s.repo.GetGraph(ctx, novelID)
+// GetGraph retrieves the full knowledge graph for a novel within the user's scope.
+func (s *KnowledgeService) GetGraph(ctx context.Context, userID, novelID int64) (*GraphData, error) {
+	nodes, edges, err := s.repo.GetGraph(ctx, userID, novelID)
 	if err != nil {
 		return nil, fmt.Errorf("get graph: %w", err)
 	}
@@ -179,10 +182,11 @@ func (s *KnowledgeService) GetGraph(ctx context.Context, novelID int64) (*GraphD
 	return &GraphData{Nodes: nodeData, Edges: edgeData}, nil
 }
 
-// CheckConsistency checks text consistency with existing knowledge.
-func (s *KnowledgeService) CheckConsistency(ctx context.Context, novelID, chapterID int64, text string) ([]dto.ConsistencyIssue, error) {
+// CheckConsistency checks text consistency with existing knowledge within
+// the user's scope.
+func (s *KnowledgeService) CheckConsistency(ctx context.Context, userID, novelID, chapterID int64, text string) ([]dto.ConsistencyIssue, error) {
 	// Get existing entities for this novel
-	existingNodes, err := s.repo.GetNodesByNovel(ctx, novelID)
+	existingNodes, err := s.repo.GetNodesByNovel(ctx, userID, novelID)
 	if err != nil {
 		return nil, fmt.Errorf("get existing nodes: %w", err)
 	}

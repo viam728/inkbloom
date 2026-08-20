@@ -8,6 +8,9 @@ type ImageGenRequest struct {
 	Provider  string `json:"provider"`
 	NovelID   *int64 `json:"novel_id"`
 	ChapterID *int64 `json:"chapter_id"`
+	// Scope groups the generated image: novel | media | memo (task #64).
+	// Defaults to "novel" when empty.
+	Scope string `json:"scope"`
 }
 
 // AIGCTaskResponse is the response for a created AIGC task.
@@ -26,6 +29,9 @@ type AIGCGeneratePayload struct {
 	Provider string `json:"provider"`
 	NovelID  int64  `json:"novel_id"`
 	Seed     int64  `json:"seed,omitempty"`
+	// Scope routes the ai-service output directory (task #64): novel |
+	// media | memo. Empty means legacy novel behavior.
+	Scope string `json:"scope,omitempty"`
 }
 
 // AIGCGenerateResult is the result returned by the Python AIGC service.

@@ -5,16 +5,18 @@ import (
 	"errors"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/scope"
 	"gorm.io/gorm"
 )
 
-// VolumeRepository defines the interface for volume data access.
+// VolumeRepository defines the interface for volume data access. All
+// reads/writes are scoped by the owning user (M1 isolation).
 type VolumeRepository interface {
 	Create(ctx context.Context, volume *model.Volume) error
-	GetByID(ctx context.Context, id int64) (*model.Volume, error)
-	ListByNovelID(ctx context.Context, novelID int64) ([]model.Volume, error)
-	Update(ctx context.Context, volume *model.Volume) error
-	Delete(ctx context.Context, id int64) error
+	GetByID(ctx context.Context, userID, id int64) (*model.Volume, error)
+	ListByNovelID(ctx context.Context, userID, novelID int64) ([]model.Volume, error)
+	Update(ctx context.Context, userID int64, volume *model.Volume) error
+	Delete(ctx context.Context, userID, id int64) error
 }
 
 // volumeRepository is the GORM implementation of VolumeRepository.
@@ -31,9 +33,9 @@ func (r *volumeRepository) Create(ctx context.Context, volume *model.Volume) err
 	return r.db.WithContext(ctx).Create(volume).Error
 }
 
-func (r *volumeRepository) GetByID(ctx context.Context, id int64) (*model.Volume, error) {
+func (r *volumeRepository) GetByID(ctx context.Context, userID, id int64) (*model.Volume, error) {
 	var volume model.Volume
-	if err := r.db.WithContext(ctx).First(&volume, id).Error; err != nil {
+	if err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).First(&volume, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -42,9 +44,10 @@ func (r *volumeRepository) GetByID(ctx context.Context, id int64) (*model.Volume
 	return &volume, nil
 }
 
-func (r *volumeRepository) ListByNovelID(ctx context.Context, novelID int64) ([]model.Volume, error) {
+func (r *volumeRepository) ListByNovelID(ctx context.Context, userID, novelID int64) ([]model.Volume, error) {
 	var volumes []model.Volume
 	if err := r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
 		Where("novel_id = ?", novelID).
 		Order("position ASC").
 		Find(&volumes).Error; err != nil {
@@ -53,10 +56,14 @@ func (r *volumeRepository) ListByNovelID(ctx context.Context, novelID int64) ([]
 	return volumes, nil
 }
 
-func (r *volumeRepository) Update(ctx context.Context, volume *model.Volume) error {
-	return r.db.WithContext(ctx).Save(volume).Error
+func (r *volumeRepository) Update(ctx context.Context, userID int64, volume *model.Volume) error {
+	volume.UserID = userID
+	return r.db.WithContext(ctx).
+		Model(volume).
+		Where("user_id = ?", userID).
+		Save(volume).Error
 }
 
-func (r *volumeRepository) Delete(ctx context.Context, id int64) error {
-	return r.db.WithContext(ctx).Delete(&model.Volume{}, id).Error
+func (r *volumeRepository) Delete(ctx context.Context, userID, id int64) error {
+	return r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).Delete(&model.Volume{}, id).Error
 }

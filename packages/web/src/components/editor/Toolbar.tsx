@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
   Bold,
@@ -22,18 +22,39 @@ import {
   BarChart3,
   Lightbulb,
   MessageSquareQuote,
+  Maximize2,
+  Minimize2,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
-import CopyMenu from '@/components/export/CopyMenu';
+import ExportModal from '@/components/export/ExportModal';
 import { useUIStore } from '@/stores/ui-store';
+import type { MediaPlatform } from '@/types/media';
 import type { EditorVariant } from './TipTapEditor';
 
 interface ToolbarProps {
   editor: Editor | null;
-  onExport?: () => void;
   /** 编辑器变体：非小说模式隐藏章节相关的 AI 洞察入口 */
   variant?: EditorVariant;
-  /** 导出按钮右侧的额外插槽（如自媒体模式的平台选择器） */
-  afterExport?: React.ReactNode;
+  /** 自媒体模式：当前发布平台（统一导出弹窗内选择） */
+  platform?: MediaPlatform;
+  onSelectPlatform?: (id: MediaPlatform) => void;
+  /** 自媒体模式：平台风格改写入口 */
+  onAdapt?: () => Promise<void>;
+  /** 工具栏预设：full = 完整右侧簇；plain = 仅纯文本格式化按钮（弹窗编辑器等精简场景） */
+  preset?: 'full' | 'plain';
+  /** 局部专注：是否提供受控专注开关（由宿主决定布局） */
+  focusable?: boolean;
+  /** 局部专注：当前是否处于专注态（受控，高亮展示） */
+  focused?: boolean;
+  /** 局部专注：切换回调（受控） */
+  onToggleFocus?: () => void;
+  /** AIGC 入口回调（传入时渲染 Sparkles 按钮） */
+  onAIGC?: () => void;
+  /** AIGC 调用中：按钮展示加载态并禁用 */
+  aigcLoading?: boolean;
+  /** 打开图片选择弹窗（仅 full 预设的「图片」按钮使用） */
+  onOpenImagePicker?: () => void;
 }
 
 interface ToolbarButton {
@@ -45,11 +66,15 @@ interface ToolbarButton {
 
 const iconCls = 'w-4 h-4';
 
-const Toolbar: React.FC<ToolbarProps> = ({ editor, onExport, variant = 'novel', afterExport }) => {
+const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, onSelectPlatform, onAdapt, preset = 'full', focusable, focused, onToggleFocus, onAIGC, aigcLoading, onOpenImagePicker }) => {
   const isNovel = variant === 'novel';
+  const isPlain = preset === 'plain';
+  const [exportOpen, setExportOpen] = useState(false);
   const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
   const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
+  const focusMode = useUIStore((s) => s.focusMode);
+  const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
 
   if (!editor) return null;
 
@@ -175,7 +200,45 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, onExport, variant = 'novel', 
         );
       })}
 
-      {/* Spacer + Export actions */}
+      {/* 局部专注 / AIGC 受控入口（plain 与 full 预设通用，宿主传入时才渲染） */}
+      {((focusable && onToggleFocus) || onAIGC) && (
+        <>
+          <div className="w-px h-4 bg-white/8 mx-1.5" />
+          {focusable && onToggleFocus && (
+            <button
+              type="button"
+              onClick={onToggleFocus}
+              title={focused ? '退出局部专注' : '局部专注'}
+              className={`${toolBtnCls} ${
+                focused
+                  ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
+                  : ''
+              }`}
+            >
+              {focused ? <Minimize2 className={iconCls} /> : <Maximize2 className={iconCls} />}
+            </button>
+          )}
+          {onAIGC && (
+            <button
+              type="button"
+              onClick={onAIGC}
+              disabled={aigcLoading}
+              title="AIGC"
+              className={`${toolBtnCls} disabled:opacity-40 disabled:pointer-events-none`}
+            >
+              {aigcLoading ? (
+                <Loader2 className={`${iconCls} animate-spin`} />
+              ) : (
+                <Sparkles className={iconCls} />
+              )}
+            </button>
+          )}
+        </>
+      )}
+
+      {/* Spacer + Export actions（plain 预设仅保留左侧格式化按钮，整体跳过右侧簇） */}
+      {!isPlain && (
+        <>
       <div className="flex-1" />
       <div className="w-px h-4 bg-white/8 mx-1.5" />
       {/* AI 洞察入口（节奏图/批注评审依赖章节，仅小说模式） */}
@@ -219,28 +282,51 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, onExport, variant = 'novel', 
       <button
         type="button"
         onClick={() => {
-          // Switch right panel to AIGC tab by dispatching custom event
-          window.dispatchEvent(new CustomEvent('inkbloom:show-aigc'));
+          if (onOpenImagePicker) {
+            onOpenImagePicker();
+          } else {
+            // 兼容：未接入选择弹窗时退化为跳转 AIGC 面板
+            window.dispatchEvent(new CustomEvent('inkbloom:show-aigc'));
+          }
         }}
         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${toolBtnCls}`}
-        title="AI 图片生成"
+        title="插入图片（上传 / 图床 / AI 生成）"
       >
         <ImagePlus className="w-3.5 h-3.5 text-pink-400" />
         图片
       </button>
-      <CopyMenu />
-      {onExport && (
-        <button
-          type="button"
-          onClick={onExport}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium ${toolBtnCls}`}
-          title="导出"
-        >
-          <Download className="w-3.5 h-3.5" />
-          导出
-        </button>
+      {/* 全局专注模式：进入/退出（Esc 退出由编辑器内核承担） */}
+      <button
+        type="button"
+        onClick={toggleFocusMode}
+        title={focusMode ? '退出专注模式 (Esc)' : '进入专注模式'}
+        className={`p-1.5 rounded-md transition-all duration-150 hover:bg-white/8 active:scale-95 ${
+          focusMode ? '!bg-brand-600/25 !text-brand-300' : 'text-neutral-400 hover:text-neutral-100'
+        }`}
+      >
+        {focusMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+      </button>
+      {/* 统一"导出"入口：复制 / 导出 / 平台选择均在弹窗内完成 */}
+      <button
+        type="button"
+        onClick={() => setExportOpen(true)}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium ${toolBtnCls}`}
+        title="导出 / 复制 / 平台"
+      >
+        <Download className="w-3.5 h-3.5" />
+        导出
+      </button>
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        editor={editor}
+        variant={variant}
+        platform={platform}
+        onSelectPlatform={onSelectPlatform}
+        onAdapt={onAdapt}
+      />
+        </>
       )}
-      {afterExport}
     </div>
   );
 };

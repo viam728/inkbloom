@@ -2,13 +2,15 @@ package cache
 
 import "time"
 
-// Key naming convention: ink:{type}:{id}[:{subtype}]
+// Key naming convention: ink:{type}:{user_id}:{id}[:{subtype}]
+// M1: every per-resource key carries the owning user id so cached views can
+// never leak across users.
 const (
-	NovelKey       = "ink:novel:%d"
-	NovelOutline   = "ink:novel:%d:outline"
-	ChapterContent = "ink:chapter:%d:content"
-	AssetsNovel    = "ink:assets:novel:%d"
-	NovelListKey   = "ink:novels:list:%d:%d" // page:pageSize
+	NovelKey       = "ink:novel:u%d:%d" // user_id:novel_id
+	NovelOutline   = "ink:novel:u%d:%d:outline"
+	ChapterContent = "ink:chapter:u%d:%d:content" // user_id:chapter_id
+	AssetsNovel    = "ink:assets:novel:u%d:%d"
+	NovelListKey   = "ink:novels:list:u%d:%d:%d" // user_id:page:pageSize
 	NullValue      = "__NULL__"
 )
 

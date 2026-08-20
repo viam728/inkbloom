@@ -34,10 +34,11 @@ func NewNovelService(nr repository.NovelRepository, cr repository.ChapterReposit
 	return s
 }
 
-// CreateNovel creates a new novel and returns the response DTO.
-func (s *NovelService) CreateNovel(ctx context.Context, req *dto.CreateNovelRequest) (*dto.NovelResponse, error) {
+// CreateNovel creates a new novel owned by userID and returns the response DTO.
+func (s *NovelService) CreateNovel(ctx context.Context, userID int64, req *dto.CreateNovelRequest) (*dto.NovelResponse, error) {
 	novel := &model.Novel{
-		Title: req.Title,
+		UserID: userID,
+		Title:  req.Title,
 	}
 	if req.Genre != "" {
 		novel.Genre = &req.Genre
@@ -55,13 +56,13 @@ func (s *NovelService) CreateNovel(ctx context.Context, req *dto.CreateNovelRequ
 	return toNovelResponse(novel), nil
 }
 
-// GetNovel retrieves a novel by ID (with cache).
-func (s *NovelService) GetNovel(ctx context.Context, id int64) (*dto.NovelResponse, error) {
-	key := fmt.Sprintf(cache.NovelKey, id)
+// GetNovel retrieves a novel by ID within the user's scope (with cache).
+func (s *NovelService) GetNovel(ctx context.Context, userID, id int64) (*dto.NovelResponse, error) {
+	key := fmt.Sprintf(cache.NovelKey, userID, id)
 	var resp dto.NovelResponse
 
 	err := s.cache.GetWithNullCache(ctx, key, &resp, cache.NovelTTL, func() (interface{}, error) {
-		novel, err := s.novelRepo.GetByID(ctx, id)
+		novel, err := s.novelRepo.GetByID(ctx, userID, id)
 		if err != nil {
 			return nil, err
 		}
@@ -80,8 +81,8 @@ func (s *NovelService) GetNovel(ctx context.Context, id int64) (*dto.NovelRespon
 	return &resp, nil
 }
 
-// ListNovels lists novels with pagination.
-func (s *NovelService) ListNovels(ctx context.Context, page, pageSize int) (*dto.ListNovelsResponse, error) {
+// ListNovels lists the user's novels with pagination.
+func (s *NovelService) ListNovels(ctx context.Context, userID int64, page, pageSize int) (*dto.ListNovelsResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -90,7 +91,7 @@ func (s *NovelService) ListNovels(ctx context.Context, page, pageSize int) (*dto
 	}
 	offset := (page - 1) * pageSize
 
-	novels, total, err := s.novelRepo.List(ctx, offset, pageSize)
+	novels, total, err := s.novelRepo.List(ctx, userID, offset, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +104,9 @@ func (s *NovelService) ListNovels(ctx context.Context, page, pageSize int) (*dto
 	return &dto.ListNovelsResponse{Novels: responses, Total: total}, nil
 }
 
-// UpdateNovel updates an existing novel.
-func (s *NovelService) UpdateNovel(ctx context.Context, id int64, req *dto.UpdateNovelRequest) (*dto.NovelResponse, error) {
-	novel, err := s.novelRepo.GetByID(ctx, id)
+// UpdateNovel updates an existing novel within the user's scope.
+func (s *NovelService) UpdateNovel(ctx context.Context, userID, id int64, req *dto.UpdateNovelRequest) (*dto.NovelResponse, error) {
+	novel, err := s.novelRepo.GetByID(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -129,11 +130,11 @@ func (s *NovelService) UpdateNovel(ctx context.Context, id int64, req *dto.Updat
 		novel.Status = *req.Status
 	}
 
-	if err := s.novelRepo.Update(ctx, novel); err != nil {
+	if err := s.novelRepo.Update(ctx, userID, novel); err != nil {
 		return nil, err
 	}
 	// Invalidate cache after update
-	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.NovelKey, id))
+	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.NovelKey, userID, id))
 	return toNovelResponse(novel), nil
 }
 
@@ -141,8 +142,8 @@ func (s *NovelService) UpdateNovel(ctx context.Context, id int64, req *dto.Updat
 // chapters are soft-deleted, novel_outline / novel_memory rows are hard-deleted,
 // and the novel itself keeps its existing soft-delete semantics. Any failure
 // rolls the whole cascade back.
-func (s *NovelService) DeleteNovel(ctx context.Context, id int64) error {
-	novel, err := s.novelRepo.GetByID(ctx, id)
+func (s *NovelService) DeleteNovel(ctx context.Context, userID, id int64) error {
+	novel, err := s.novelRepo.GetByID(ctx, userID, id)
 	if err != nil {
 		return err
 	}
@@ -151,19 +152,19 @@ func (s *NovelService) DeleteNovel(ctx context.Context, id int64) error {
 	}
 
 	if s.docRepo != nil {
-		err = s.docRepo.CascadeDeleteNovel(ctx, id)
+		err = s.docRepo.CascadeDeleteNovel(ctx, userID, id)
 	} else {
 		// Fallback without the doc repository: legacy non-transactional path.
-		if delErr := s.chapterRepo.DeleteByNovelID(ctx, id); delErr != nil {
+		if delErr := s.chapterRepo.DeleteByNovelID(ctx, userID, id); delErr != nil {
 			return delErr
 		}
-		err = s.novelRepo.Delete(ctx, id)
+		err = s.novelRepo.Delete(ctx, userID, id)
 	}
 	if err != nil {
 		zap.L().Error("failed to delete novel cascade", zap.Int64("novel_id", id), zap.Error(err))
 		return err
 	}
-	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.NovelKey, id))
+	_ = s.cache.Delete(ctx, fmt.Sprintf(cache.NovelKey, userID, id))
 	return nil
 }
 

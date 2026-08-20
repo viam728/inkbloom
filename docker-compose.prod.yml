@@ -1,0 +1,137 @@
+# InkBloom 生产部署编排（技术方案 v2 §4.1）
+#
+# 与 docker-compose.yml（开发用）的差异：
+#   - 全部密钥/域名经环境变量注入（.env.production，禁止提交真实值）
+#   - server release 模式 + 显式 CORS 白名单 + 强制 JWT secret
+#   - web 以 nginx 容器托管静态产物并反代 /api /assets /ws
+#   - 数据卷持久化 postgres / nats / 素材文件
+#
+# 使用：cp .env.production.example .env.production 后
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: inkbloom-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inkbloom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-inkbloom}
+    # 生产不对外暴露端口，仅编排内网访问
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inkbloom}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: inkbloom-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: nats:2
+    container_name: inkbloom-nats
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir", "/data"]
+    expose:
+      - "4222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application Services ────────────────────────────────────────────────
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+    container_name: inkbloom-server
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - INKBLOOM_MODE=cloud
+      - INKBLOOM_SERVER_MODE=release
+      - INKBLOOM_DATABASE_URL=postgres://${POSTGRES_USER:-inkbloom}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-inkbloom}?sslmode=disable
+      - INKBLOOM_REDIS_URL=redis://redis:6379/0
+      - INKBLOOM_NATS_URL=nats://nats:4222
+      - INKBLOOM_AI_SERVICE_URL=http://ai-service:8100
+      # 安全基线（v2 §5.2）：JWT 密钥必须显式注入，缺失时拒绝启动
+      - INKBLOOM_JWT_SECRET=${INKBLOOM_JWT_SECRET:?INKBLOOM_JWT_SECRET required}
+      # CORS 白名单（v2 §4.2）：逗号分隔的真实域名
+      - INKBLOOM_SERVER_CORS_ORIGINS=${INKBLOOM_SERVER_CORS_ORIGINS:?INKBLOOM_SERVER_CORS_ORIGINS required}
+      # 运营管理员手机号白名单（逗号分隔，可选）
+      - INKBLOOM_ADMIN_PHONES=${INKBLOOM_ADMIN_PHONES:-}
+    volumes:
+      # 素材/立绘/AIGC 文件持久化（storage.FileStorage 默认根）
+      - assets_data:/root/.inkbloom
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  ai-service:
+    build:
+      context: ./packages/ai-service
+      dockerfile: Dockerfile
+    container_name: inkbloom-ai-service
+    restart: unless-stopped
+    expose:
+      - "8100"
+    environment:
+      - INKBLOOM_HTTP_PORT=8100
+      - INKBLOOM_GO_SERVICE_URL=http://server:8080
+      # LLM Provider（DeepSeek 兼容 OpenAI API）
+      - INKBLOOM_OPENAI_API_KEY=${INKBLOOM_OPENAI_API_KEY:?INKBLOOM_OPENAI_API_KEY required}
+      - INKBLOOM_OPENAI_BASE_URL=${INKBLOOM_OPENAI_BASE_URL:-https://api.deepseek.com}
+      - INKBLOOM_DEFAULT_MODEL=${INKBLOOM_DEFAULT_MODEL:-deepseek-v4-flash}
+    depends_on:
+      - server
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: inkbloom-web
+    restart: unless-stopped
+    ports:
+      # 对外入口（前置 LB/网关终结 TLS 后回源到此端口）
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  assets_data:

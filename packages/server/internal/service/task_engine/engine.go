@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkbloom/server/internal/middleware"
 	"github.com/inkbloom/server/internal/model"
 	"github.com/inkbloom/server/internal/pkg/breaker"
 	"github.com/inkbloom/server/internal/pkg/dlock"
@@ -54,7 +55,7 @@ type TaskEngine struct {
 	db          *gorm.DB
 	redis       *redis.Client
 	nats        NATSPublisher
-	lock        *dlock.DistributedLock
+	lock        dlock.LockAcquirer
 	repo        repository.TaskRepository
 	registry    HandlerRegistry
 	breaker     *breaker.Breaker
@@ -67,7 +68,7 @@ func NewTaskEngine(
 	db *gorm.DB,
 	rdb *redis.Client,
 	nats NATSPublisher,
-	lock *dlock.DistributedLock,
+	lock dlock.LockAcquirer,
 	repo repository.TaskRepository,
 	cb *breaker.Breaker,
 	logger *zap.Logger,
@@ -102,26 +103,33 @@ func (e *TaskEngine) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 
-	// Subscribe to NATS for task.created events
-	_, err := e.nats.JetStream().Subscribe("aigc.task.created", func(msg *nats.Msg) {
-		var task model.Task
-		if err := json.Unmarshal(msg.Data, &task); err != nil {
-			e.logger.Error("failed to unmarshal task from NATS", zap.Error(err))
-			msg.Nak()
-			return
-		}
+	// Subscribe to NATS for task.created events. A nil JetStream (local
+	// embedded mode, task #37) means there is no remote task feed: workers
+	// still run so in-process retries work, and tasks arrive only via
+	// direct Submit.
+	if js := e.nats.JetStream(); js != nil {
+		_, err := js.Subscribe("aigc.task.created", func(msg *nats.Msg) {
+			var task model.Task
+			if err := json.Unmarshal(msg.Data, &task); err != nil {
+				e.logger.Error("failed to unmarshal task from NATS", zap.Error(err))
+				msg.Nak()
+				return
+			}
 
-		select {
-		case e.taskCh <- task:
-			msg.Ack()
-		default:
-			e.logger.Warn("task channel full, NAK message", zap.String("task_id", task.ID))
-			msg.Nak()
+			select {
+			case e.taskCh <- task:
+				msg.Ack()
+			default:
+				e.logger.Warn("task channel full, NAK message", zap.String("task_id", task.ID))
+				msg.Nak()
+			}
+		}, nats.ManualAck())
+		if err != nil {
+			cancel()
+			return fmt.Errorf("nats subscribe: %w", err)
 		}
-	}, nats.ManualAck())
-	if err != nil {
-		cancel()
-		return fmt.Errorf("nats subscribe: %w", err)
+	} else {
+		e.logger.Info("task engine running without NATS feed (local mode)")
 	}
 
 	e.logger.Info("task engine started", zap.Int("workers", e.workerCount))
@@ -132,6 +140,26 @@ func (e *TaskEngine) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// SubmitLocal enqueues an already-persisted task directly into the worker
+// pool (local embedded mode, tech plan v2 §3.2). The local mode has no
+// JetStream subscription, so the outbox-published creation event is routed
+// here via LocalBus.SetTaskSink. The taskJSON is the marshalled model.Task
+// written by Submit's outbox row. A full queue drops the task with an error
+// log — the pending row stays in the DB for the next recovery sweep.
+func (e *TaskEngine) SubmitLocal(taskJSON []byte) {
+	var task model.Task
+	if err := json.Unmarshal(taskJSON, &task); err != nil {
+		e.logger.Error("local task feed: failed to unmarshal task", zap.Error(err))
+		return
+	}
+	select {
+	case e.taskCh <- task:
+	default:
+		e.logger.Warn("local task feed: task channel full, task left pending",
+			zap.String("task_id", task.ID))
+	}
 }
 
 // Stop gracefully shuts down the task engine.
@@ -248,11 +276,15 @@ func (e *TaskEngine) processTask(ctx context.Context, task model.Task, logger *z
 		"progress":     100,
 		"completed_at": now,
 	})
+	middleware.ObserveTask(task.Type, "success") // v2 §8.1
 
-	// Publish completion event
+	// Publish completion event (user_id routes the WS push to the owner,
+	// tech plan v2 §3.2; empty user_id falls back to broadcast).
 	eventPayload, _ := json.Marshal(map[string]interface{}{
 		"task_id": task.ID,
+		"user_id": taskUserIDString(task.UserID),
 		"type":    task.Type,
+		"status":  "success",
 		"result":  result,
 	})
 	if pubErr := e.nats.Publish("aigc.task.completed", eventPayload); pubErr != nil {
@@ -301,14 +333,17 @@ func (e *TaskEngine) handleFailure(ctx context.Context, task model.Task, err err
 			"status":    "dead_letter",
 			"error_msg": err.Error(),
 		})
+		middleware.ObserveTask(task.Type, "dead_letter") // v2 §8.1
 		logger.Error("task moved to dead_letter after max retries")
 
 		// Publish dead letter event
 		eventPayload, _ := json.Marshal(map[string]interface{}{
-			"task_id":   task.ID,
-			"type":      task.Type,
-			"error":     err.Error(),
-			"retries":   task.RetryCount,
+			"task_id": task.ID,
+			"user_id": taskUserIDString(task.UserID),
+			"type":    task.Type,
+			"status":  "dead_letter",
+			"error":   err.Error(),
+			"retries": task.RetryCount,
 		})
 		e.nats.Publish("aigc.task.dead_letter", eventPayload)
 	}

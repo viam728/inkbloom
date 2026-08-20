@@ -8,6 +8,7 @@ dist/
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Go
 *.exe
@@ -57,6 +58,13 @@ build/
 out/
 coverage/
 .nyc_output/
+
+# Local-mode data roots (server embedded SQLite mode)
+.smoke-local/
+.smoke-desktop/
+inkbloom-data/
+packages/desktop/release/
+packages/desktop/dist-electron/
 
 # OS
 Thumbs.db

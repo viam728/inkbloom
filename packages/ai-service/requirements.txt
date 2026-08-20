@@ -7,3 +7,4 @@ openai>=1.55.0
 pydantic-settings>=2.6.0
 tiktoken>=0.8.0
 python-dotenv>=1.0.0
+prometheus-fastapi-instrumentator>=7.0.0

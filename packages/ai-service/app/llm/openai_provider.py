@@ -56,7 +56,13 @@ class OpenAIProvider(BaseLLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ) -> AsyncIterator[LLMChunk]:
-        """Stream chat completion chunks as they arrive."""
+        """Stream chat completion chunks as they arrive.
+
+        Tech plan v2 §6.3: request stream_options.include_usage so the
+        upstream emits a final usage chunk; the last yielded LLMChunk
+        carries prompt_tokens/completion_tokens for the Go-side billing
+        middleware to settle against.
+        """
         model = model or settings.default_model
 
         response = await self._client.chat.completions.create(
@@ -65,10 +71,20 @@ class OpenAIProvider(BaseLLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
         async for chunk in response:
+            # Final usage chunk: choices is empty, usage carries the totals.
             if not chunk.choices:
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    yield LLMChunk(
+                        content="",
+                        finish_reason="usage",
+                        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                    )
                 continue
 
             delta = chunk.choices[0].delta

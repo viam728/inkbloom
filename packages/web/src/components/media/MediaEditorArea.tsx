@@ -3,9 +3,6 @@ import {
   Megaphone,
   Wand2,
   Loader2,
-  Focus,
-  Minimize,
-  ChevronDown,
   Check,
   CircleDashed,
 } from 'lucide-react';
@@ -29,91 +26,10 @@ const plainToHtml = (text: string) =>
 const estimateReadMinutes = (words: number) => (words <= 0 ? 0 : Math.max(1, Math.round(words / 400)));
 
 type SaveStatus = 'saved' | 'dirty' | 'saving';
-
-// ── 平台选择下拉（收起态按钮，点击展开列表） ─────────────────────────
-interface PlatformDropdownProps {
-  platform: MediaPlatform;
-  onSelect: (id: MediaPlatform) => void;
-}
-
-const PlatformDropdown: React.FC<PlatformDropdownProps> = ({ platform, onSelect }) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = PLATFORMS.find((p) => p.id === platform);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onEsc);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onEsc);
-    };
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="选择发布平台"
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-          open
-            ? 'bg-brand-600/25 text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
-            : 'text-neutral-400 hover:bg-white/8 hover:text-neutral-100'
-        }`}
-      >
-        <span>{current?.emoji}</span>
-        {current?.label ?? '平台'}
-        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-50 w-52 glass-panel rounded-lg py-1.5 animate-scale-in origin-top-right shadow-xl shadow-black/40">
-          <p className="px-3 pb-1 text-[10px] uppercase tracking-wider text-neutral-600">
-            发布平台
-          </p>
-          {PLATFORMS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => {
-                onSelect(p.id);
-                setOpen(false);
-              }}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
-                platform === p.id
-                  ? 'text-brand-300 bg-brand-600/15'
-                  : 'text-neutral-300 hover:bg-white/6'
-              }`}
-            >
-              <span className="text-sm">{p.emoji}</span>
-              <span className="flex-1 min-w-0">
-                <span className="block font-medium">{p.label}</span>
-                <span className="block text-[10px] text-neutral-500 truncate">
-                  建议 ≤ {p.maxWords} 字 · {p.tone}
-                </span>
-              </span>
-              {platform === p.id && <Check size={12} className="text-brand-300 shrink-0" />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-/** 自媒体模式编辑区：标题 + 富文本正文 + 平台适配（平台选择收纳进工具栏下拉） */
+/** 自媒体模式编辑区：标题 + 富文本正文 + 平台适配（平台选择/复制/导出已收纳进统一导出弹窗） */
 const MediaEditorArea: React.FC = () => {
   const { currentContent, saveContent } = useMediaStore();
   const focusMode = useUIStore((s) => s.focusMode);
-  const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
   const { showToast } = useToast();
 
   const [title, setTitle] = useState('');
@@ -209,6 +125,7 @@ const MediaEditorArea: React.FC = () => {
       showToast(`已适配「${currentMeta?.label ?? platform}」风格`, 'success');
     } catch {
       showToast('平台适配失败', 'error');
+      throw new Error('adapt failed');
     } finally {
       setAdapting(false);
     }
@@ -250,51 +167,29 @@ const MediaEditorArea: React.FC = () => {
 
   return (
     <div className={`flex-1 flex flex-col min-w-0 bg-surface-0 ${focusMode ? 'focus-mode' : ''}`}>
-      {/* 顶栏：标题 + 操作（平台选择已收纳进编辑器工具栏右侧下拉） */}
-      {!focusMode && (
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-white/6 bg-surface-1/60">
-          <input
-            value={title}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              scheduleSave({ title: e.target.value });
-            }}
-            placeholder="内容标题…"
-            className="flex-1 min-w-0 bg-transparent text-sm font-medium text-neutral-200 placeholder-neutral-600 outline-none"
-          />
-          <button
-            onClick={handleAdapt}
-            disabled={adapting || isEmpty}
-            title="按当前平台风格改写全文"
-            className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-gradient-to-r from-pink-600/80 to-indigo-600/80 hover:from-pink-500 hover:to-indigo-500 text-white disabled:opacity-40 transition-all"
-          >
-            {adapting ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
-            平台适配
-          </button>
-          <button
-            onClick={toggleFocusMode}
-            title="进入专注模式 (Ctrl+Shift+F)"
-            className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
-          >
-            <Focus size={13} />
-          </button>
-        </div>
-      )}
+      {/* 顶栏：标题 + 操作（恒显；专注进出统一由工具栏按钮与 Esc 承担） */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-white/6 bg-surface-1/60">
+        <input
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            scheduleSave({ title: e.target.value });
+          }}
+          placeholder="内容标题…"
+          className="flex-1 min-w-0 bg-transparent text-sm font-medium text-neutral-200 placeholder-neutral-600 outline-none"
+        />
+        <button
+          onClick={() => handleAdapt().catch(() => {})}
+          disabled={adapting || isEmpty}
+          title="按当前平台风格改写全文"
+          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-gradient-to-r from-pink-600/80 to-indigo-600/80 hover:from-pink-500 hover:to-indigo-500 text-white disabled:opacity-40 transition-all"
+        >
+          {adapting ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
+          平台适配
+        </button>
+      </div>
 
-      {focusMode && (
-        <div className="absolute top-4 right-4 z-30 animate-fade-in">
-          <button
-            onClick={toggleFocusMode}
-            title="退出专注模式 (Esc)"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-panel text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-          >
-            <Minimize size={13} />
-            退出专注
-          </button>
-        </div>
-      )}
-
-      {/* 正文编辑（复用小说模式的富文本编辑器，平台选择器挂在工具栏导出右侧） */}
+      {/* 正文编辑（复用小说模式的富文本编辑器，平台选择/复制/导出收纳进统一导出弹窗） */}
       <div className="flex-1 min-h-0 overflow-hidden">
         <TipTapEditor
           key={currentContent.id}
@@ -302,7 +197,9 @@ const MediaEditorArea: React.FC = () => {
           onChange={handleContentChange}
           onWordCount={setWordCount}
           variant="media"
-          afterExport={<PlatformDropdown platform={platform} onSelect={handleSelectPlatform} />}
+          platform={platform}
+          onSelectPlatform={handleSelectPlatform}
+          onAdapt={handleAdapt}
           placeholder={
             currentMeta
               ? `为「${currentMeta.label}」写作（建议 ${currentMeta.maxWords} 字以内）：${currentMeta.tone}`

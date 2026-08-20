@@ -1,0 +1,66 @@
+"""Pydantic schemas for the agent-based scene generation endpoint.
+
+Request contract is assembled by the Go server; field names must stay
+exactly in sync with the Go side (snake_case, alias-free).
+"""
+
+from pydantic import BaseModel, Field
+
+
+class OutlineNodeCtx(BaseModel):
+    """A single outline node within an act."""
+
+    title: str
+    status: str
+    summary: str = ""
+
+
+class OutlineAct(BaseModel):
+    """One act of the novel outline with its nodes."""
+
+    title: str
+    nodes: list[OutlineNodeCtx] = []
+
+
+class ChapterExcerpt(BaseModel):
+    """An excerpt of a preceding chapter for continuity."""
+
+    title: str
+    excerpt: str
+
+
+class MemoryItemCtx(BaseModel):
+    """A memory item (character / setting / location / ...) from the memory panel."""
+
+    name: str
+    type: str
+    content: str = ""
+    fields: dict = {}
+    relations: list = []
+
+
+class AgentContext(BaseModel):
+    """All context the Go side assembles for an agent generation call."""
+
+    novel_title: str = ""
+    outline_acts: list[OutlineAct] = []
+    preceding_chapters: list[ChapterExcerpt] = []
+    memory_items: list[MemoryItemCtx] = []
+    target_item: dict | None = Field(default=None)
+
+
+class AgentGenerateRequest(BaseModel):
+    """POST /api/agents/generate request body."""
+
+    scene: str
+    instruction: str = ""
+    context: AgentContext
+
+
+class AgentGenerateResponse(BaseModel):
+    """POST /api/agents/generate response body."""
+
+    content: str
+    scene: str
+    model: str | None = None
+    elapsed_ms: int = 0

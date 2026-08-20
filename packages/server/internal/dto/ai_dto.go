@@ -165,3 +165,14 @@ type PromptBuildRequest struct {
 type PromptBuildResponse struct {
 	Messages json.RawMessage `json:"messages"`
 }
+
+// AgentGenerateRequest is the request body for POST /ai/agent/generate.
+// Scene must be one of: character, setting, summary, inspiration, outline.
+// ItemID/NodeID are optional scene-specific anchors.
+type AgentGenerateRequest struct {
+	NovelID     int64   `json:"novel_id" binding:"required"`
+	Scene       string  `json:"scene" binding:"required"`
+	ItemID      *string `json:"item_id,omitempty"`
+	NodeID      *string `json:"node_id,omitempty"`
+	Instruction string  `json:"instruction,omitempty"`
+}

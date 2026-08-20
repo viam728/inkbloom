@@ -28,7 +28,7 @@ func (h *VolumeHandler) CreateVolume(c *gin.Context) {
 		return
 	}
 
-	volume, err := h.volumeService.CreateVolume(c.Request.Context(), &req)
+	volume, err := h.volumeService.CreateVolume(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, dto.APIResponse{Code: 422, Message: err.Error()})
 		return
@@ -44,7 +44,7 @@ func (h *VolumeHandler) ListVolumes(c *gin.Context) {
 		return
 	}
 
-	volumes, err := h.volumeService.ListVolumes(c.Request.Context(), novelID)
+	volumes, err := h.volumeService.ListVolumes(c.Request.Context(), GetUserID(c), novelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -66,7 +66,7 @@ func (h *VolumeHandler) UpdateVolume(c *gin.Context) {
 		return
 	}
 
-	volume, err := h.volumeService.UpdateVolume(c.Request.Context(), id, &req)
+	volume, err := h.volumeService.UpdateVolume(c.Request.Context(), GetUserID(c), id, &req)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "volume not found"})
@@ -86,7 +86,7 @@ func (h *VolumeHandler) DeleteVolume(c *gin.Context) {
 		return
 	}
 
-	if err := h.volumeService.DeleteVolume(c.Request.Context(), id); err != nil {
+	if err := h.volumeService.DeleteVolume(c.Request.Context(), GetUserID(c), id); err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "volume not found"})
 			return

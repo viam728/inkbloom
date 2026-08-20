@@ -10,6 +10,7 @@ import (
 // Character represents a character entity within a novel.
 type Character struct {
 	ID          int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	NovelID     int64          `gorm:"not null" json:"novel_id"`
 	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
 	Role        *string        `gorm:"type:varchar(100)" json:"role,omitempty"`

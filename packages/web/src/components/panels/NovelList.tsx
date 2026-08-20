@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { BookOpen, Plus, Trash2, PenLine } from 'lucide-react';
+import { BookOpen, Plus, Trash2, PenLine, Maximize2 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import type { Novel } from '@/types';
 import Modal from '@/components/common/Modal';
 import { useToast } from '@/components/common/Toast';
+import LibraryExpandedView from './LibraryExpandedView';
 
 const NovelList: React.FC = () => {
   const { novels, currentNovel, loading, fetchNovels, createNovel, deleteNovel, selectNovel } =
@@ -13,6 +14,7 @@ const NovelList: React.FC = () => {
   const [newTitle, setNewTitle] = useState('');
   const [creating, setCreating] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [expandedOpen, setExpandedOpen] = useState(false);
 
   React.useEffect(() => {
     fetchNovels();
@@ -51,13 +53,22 @@ const NovelList: React.FC = () => {
         <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
           作品
         </span>
-        <button
-          onClick={() => setShowCreate(true)}
-          title="新建作品"
-          className="p-1 rounded-md text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
-        >
-          <Plus size={14} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setExpandedOpen(true)}
+            title="作品库 · 展开视图"
+            className="p-1 rounded-md text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
+          >
+            <Maximize2 size={13} />
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            title="新建作品"
+            className="p-1 rounded-md text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </div>
 
       {/* 加载骨架屏 */}
@@ -190,6 +201,18 @@ const NovelList: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      {/* 作品库展开大视图：点击卡片选中作品并关闭大视图 */}
+      <LibraryExpandedView
+        open={expandedOpen}
+        onClose={() => setExpandedOpen(false)}
+        novels={novels}
+        currentNovelId={currentNovel?.id}
+        onSelect={(novel) => {
+          setExpandedOpen(false);
+          selectNovel(novel);
+        }}
+      />
     </div>
   );
 };

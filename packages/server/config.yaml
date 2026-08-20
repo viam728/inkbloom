@@ -1,6 +1,10 @@
 server:
   port: 8080
   mode: debug  # debug/release
+  # CORS 白名单（v2 §4.2）：生产环境必须显式配置为真实域名，
+  # 或用 INKBLOOM_SERVER_CORS_ORIGINS 环境变量（逗号分隔）覆盖。
+  # 留空时使用内置 dev 白名单（localhost/127.0.0.1 常见端口）。
+  cors_origins: []
 
 database:
   url: postgres://inkbloom:inkbloom_dev@localhost:5432/inkbloom?sslmode=disable
@@ -17,6 +21,33 @@ log:
 
 auth:
   token: inkbloom-dev-token
+  # 过渡后门：置 true 时旧静态 token 仍可通过鉴权（回滚用，默认关闭）
+  legacy_token: false
+
+jwt:
+  # HS256 签名密钥。cloud 模式禁止占位/缺失（启动拒绝，v2 §5.2），
+  # 生产一律用 INKBLOOM_JWT_SECRET 环境变量注入；local 桌面模式自动随机生成。
+  secret: ""
+  access_ttl: 2h
+  refresh_ttl: 720h
 
 ai_service:
   url: http://localhost:8100
+
+admin:
+  # 手机号命中者在登录/注册时自动提升为运营角色（role>=1）
+  phones: ["13800000000"]
+
+rollout:
+  # 灰度百分比（0-100）：已登录用户 uid % 100 < percent 时 flags.enabled=true
+  percent: 100
+  # 功能总开关（GET /api/v1/public/flags 返回）
+  features:
+    token_billing: true
+    desktop_download: true
+    feedback: true
+
+desktop:
+  # 桌面端安装包路径：可为文件或直接指向目录（扫描首个 *.exe）；
+  # 留空时回退到 ../desktop/dist 扫描（相对 server 工作目录）。
+  installer_path: ""

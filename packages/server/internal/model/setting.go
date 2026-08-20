@@ -10,6 +10,7 @@ import (
 // Setting represents a world-building setting entity for a novel.
 type Setting struct {
 	ID        int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    int64          `gorm:"not null;default:1;column:user_id" json:"user_id"`
 	NovelID   int64          `gorm:"not null" json:"novel_id"`
 	Title     string         `gorm:"type:varchar(255);not null" json:"title"`
 	Category  *string        `gorm:"type:varchar(100)" json:"category,omitempty"`
