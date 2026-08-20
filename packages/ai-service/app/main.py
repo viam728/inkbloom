@@ -21,6 +21,7 @@ from app.knowledge.consistency_checker import ConsistencyChecker
 from app.llm.openai_provider import OpenAIProvider
 from app.ai_actions.routes import create_router as create_ai_actions_router
 from app.agents.routes import create_agent_router
+from app.agents.team.routes import create_team_router
 from app.aigc.pollinations import PollinationsProvider
 from app.aigc.dalle import DallEProvider
 from app.prompt.builder import PromptBuilder
@@ -123,6 +124,9 @@ app.include_router(create_ai_actions_router(_llm))
 
 # ── Agent scene generation endpoint (character / setting / summary / …) ─
 app.include_router(create_agent_router(_llm))
+
+# ── Agent team collaboration endpoint (task routing / pipeline) ─────────
+app.include_router(create_team_router())
 
 
 @app.get("/health")

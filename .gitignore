@@ -9,6 +9,7 @@ dist/
 .env.local
 .env.*.local
 .env.production
+packages/ai-service/.env
 
 # Go
 *.exe
