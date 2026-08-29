@@ -55,6 +55,9 @@ type Handlers struct {
 	// Events ingests product-analytics batches (plan A40). Mounted on the
 	// anonymous group so unauthenticated readers are measurable too. Optional.
 	Events *handler.EventHandler
+	// Foreshadow serves the E2 foreshadow tracking endpoints (plan A12).
+	// Optional.
+	Foreshadow *handler.ForeshadowHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -318,6 +321,19 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		}
 		if h.Payment != nil {
 			api.GET("/payment/orders", h.Payment.ListOrders)
+		}
+
+		// Foreshadow tracking (E2, plan A12). Static segments (pending /
+		// detect / scan) must be registered before the `:fid` wildcard per
+		// contract C5 — otherwise "/foreshadows/detect" would match ":fid".
+		if h.Foreshadow != nil {
+			api.GET("/novels/:id/foreshadows", h.Foreshadow.List)
+			api.GET("/novels/:id/foreshadows/pending", h.Foreshadow.ListPending)
+			api.POST("/novels/:id/foreshadows", h.Foreshadow.Create)
+			api.POST("/novels/:id/foreshadows/detect", h.Foreshadow.DetectPlants)
+			api.POST("/novels/:id/foreshadows/scan", h.Foreshadow.ScanChapter)
+			api.PUT("/foreshadows/:fid", h.Foreshadow.UpdateStatus)
+			api.DELETE("/foreshadows/:fid", h.Foreshadow.Delete)
 		}
 
 		// Token billing (M4, task #43): balance / ledger / stats / orders.

@@ -242,6 +242,8 @@ func main() {
 	chapterVersionRepo := repository.NewChapterVersionRepository(db)
 	// Product analytics (business plan v3 appendix B, plan A40).
 	eventRepo := repository.NewEventRepository(db)
+	// E2 foreshadow tracking (business plan v3, plan A10/A12).
+	foreshadowRepo := repository.NewForeshadowRepository(db)
 
 	// Initialize services
 	novelService := service.NewNovelService(novelRepo, chapterRepo, cacheMgr, docRepo)
@@ -250,6 +252,8 @@ func main() {
 	historyService := service.NewHistoryService(chapterRepo, chapterVersionRepo, cacheMgr, cfg.VersionHistory, subService, cfg.IsLocal())
 	// Product analytics (plan A40).
 	eventService := service.NewEventService(eventRepo)
+	// E2 foreshadow tracking (plan A12).
+	foreshadowService := service.NewForeshadowService(foreshadowRepo, chapterRepo, novelRepo, cfg.AIService.URL)
 	volumeService := service.NewVolumeService(volumeRepo)
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
@@ -278,6 +282,8 @@ func main() {
 	historyHandler := handler.NewHistoryHandler(historyService)
 	// Product analytics (plan A40): nil tokens keeps every batch anonymous.
 	eventHandler := handler.NewEventHandler(eventService, tokenMgr)
+	// E2 foreshadow tracking (plan A12).
+	foreshadowHandler := handler.NewForeshadowHandler(foreshadowService)
 	portraitHandler := handler.NewPortraitHandler(fileStorage)
 	// Unified image store (task #57): ingest/dedupe/list/delete gallery
 	// images under /api/v1/images.
@@ -358,6 +364,7 @@ func main() {
 		Public:       publicHandler,
 		History:      historyHandler,
 		Events:       eventHandler,
+		Foreshadow:   foreshadowHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

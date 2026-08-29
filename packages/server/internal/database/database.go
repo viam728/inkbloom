@@ -47,6 +47,9 @@ func automigrateModels() []interface{} {
 		&model.Feedback{},
 		// Product analytics (business plan v3 appendix B, plan A40).
 		&model.Event{},
+		// E2 foreshadow tracking (business plan v3, plan A10).
+		&model.Foreshadow{},
+		&model.CharacterState{},
 	}
 }
 

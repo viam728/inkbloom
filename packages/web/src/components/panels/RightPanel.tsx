@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo } from 'react';
-import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images } from 'lucide-react';
+import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images, Anchor } from 'lucide-react';
 import AIChatPanel from '@/components/ai/AIChatPanel';
 import AIGCPanel from '@/components/aigc/AIGCPanel';
 import ReviewPanel from '@/components/review/ReviewPanel';
 import TitleFactoryPanel from '@/components/media/TitleFactoryPanel';
 import GalleryGrid from '@/components/gallery/GalleryGrid';
+import ForeshadowTracker from '@/components/knowledge/ForeshadowTracker';
 import { useUIStore, type RightTab } from '@/stores/ui-store';
 
 const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'AI 助手', icon: <MessageSquareText size={14} /> },
   { id: 'review', label: '批注评审', icon: <MessageSquareQuote size={14} /> },
+  { id: 'tracker', label: '伏笔', icon: <Anchor size={14} /> },
   { id: 'aigc', label: '图片生成', icon: <Palette size={14} /> },
   { id: 'gallery', label: '图床', icon: <Images size={14} /> },
 ];
@@ -79,6 +81,7 @@ const RightPanel: React.FC = () => {
       <div className="flex-1 overflow-hidden min-h-0">
         {activeTab === 'chat' && <AIChatPanel />}
         {activeTab === 'review' && <ReviewPanel />}
+        {activeTab === 'tracker' && <ForeshadowTracker />}
         {activeTab === 'title' && <TitleFactoryPanel />}
         {activeTab === 'aigc' && <AIGCPanel />}
         {activeTab === 'gallery' && (

@@ -18,6 +18,7 @@ from app.grpc_server.generated import ai_service_pb2_grpc
 from app.knowledge.entity_extractor import EntityExtractor
 from app.knowledge.relation_extractor import RelationExtractor
 from app.knowledge.consistency_checker import ConsistencyChecker
+from app.knowledge.foreshadow_extractor import ForeshadowExtractor
 from app.llm.openai_provider import OpenAIProvider
 from app.ai_actions.routes import create_router as create_ai_actions_router
 from app.agents.routes import create_agent_router
@@ -78,6 +79,8 @@ _llm = OpenAIProvider()
 _entity_extractor = EntityExtractor(_llm)
 _relation_extractor = RelationExtractor(_llm)
 _consistency_checker = ConsistencyChecker(_llm)
+# E2 foreshadow tracking (business plan v3, plan A11)
+_foreshadow_extractor = ForeshadowExtractor(_llm)
 _prompt_builder = PromptBuilder()
 _image_prompt_builder = ImagePromptBuilder(_llm)
 
@@ -212,6 +215,21 @@ class ConsistencyHTTPRequest(BaseModel):
     entities: list[dict]
 
 
+class ForeshadowDetectHTTPRequest(BaseModel):
+    """Request body for detecting foreshadow planted in one chapter."""
+    text: str
+    novel_id: int
+    chapter_id: int
+
+
+class ForeshadowResolveHTTPRequest(BaseModel):
+    """Request body for checking which open threads a chapter pays off."""
+    text: str
+    novel_id: int
+    chapter_id: int
+    threads: list[dict] = []
+
+
 @app.post("/api/knowledge/extract")
 async def extract_knowledge(request: ExtractHTTPRequest):
     """Extract entities and relations from text."""
@@ -241,6 +259,46 @@ async def check_consistency(request: ConsistencyHTTPRequest):
         return {"issues": issues}
     except Exception as exc:
         return {"issues": [], "error": str(exc)}
+
+
+@app.post("/api/knowledge/foreshadows/detect")
+async def detect_foreshadow_plants(request: ForeshadowDetectHTTPRequest):
+    """Find candidate setups planted in a chapter.
+
+    Returns candidates for author confirmation; nothing is persisted here.
+    """
+    try:
+        candidates = await _foreshadow_extractor.detect_plants(
+            text=request.text,
+            novel_id=request.novel_id,
+            chapter_id=request.chapter_id,
+        )
+        return {"candidates": candidates}
+    except Exception as exc:
+        # degraded=true (not an HTTP error) so the caller can tell "AI is
+        # down" apart from "this chapter genuinely has no setups". Without it
+        # an outage silently renders as an empty list, which reads to the
+        # author as "nothing found".
+        logger.warning("Foreshadow detect endpoint failed: %s", exc)
+        return {"candidates": [], "degraded": True, "error": str(exc)}
+
+
+@app.post("/api/knowledge/foreshadows/resolve")
+async def detect_foreshadow_resolutions(request: ForeshadowResolveHTTPRequest):
+    """Decide which open threads this chapter pays off.
+
+    Only high-confidence hits whose id appears in the supplied threads are
+    returned, so the caller can safely write them back.
+    """
+    try:
+        resolved = await _foreshadow_extractor.detect_resolutions(
+            text=request.text,
+            threads=request.threads,
+        )
+        return {"resolved": resolved}
+    except Exception as exc:
+        logger.warning("Foreshadow resolve endpoint failed: %s", exc)
+        return {"resolved": [], "degraded": True, "error": str(exc)}
 
 
 # ── Prompt engineering endpoints ─────────────────────────────────────────
