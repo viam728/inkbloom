@@ -64,7 +64,7 @@ const TopSearch: React.FC = () => {
   };
 
   return (
-    <div ref={wrapRef} className="relative flex-1 max-w-[480px] mx-auto">
+    <div ref={wrapRef} className="relative w-full">
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/4 border border-white/6 focus-within:border-brand-500/50 focus-within:bg-white/6 focus-within:shadow-[0_0_0_3px_rgba(99,102,241,0.12)] transition-all">
         <Search size={13} className="text-neutral-500 shrink-0" />
         <input
@@ -124,7 +124,8 @@ const TopSearch: React.FC = () => {
 };
 
 /**
- * 全局顶栏（约 44px）：Logo → RoleSwitcher → 居中搜索 → 最大化按钮 → UserMenu。
+ * 全局顶栏（约 44px）：左区 Logo + 创作场景切换 → 中区居中搜索 → 右区最大化 + UserMenu。
+ * 左右两区等宽，中区因此真正居中。
  * 专注模式下整体隐藏；随记模式同样挂载（MemoPad 内部重复元素已移除）。
  */
 const TopBar: React.FC = () => {
@@ -135,49 +136,58 @@ const TopBar: React.FC = () => {
 
   if (focusMode) return null;
 
+  // 三段式布局：左右两区等宽（flex-1），中间搜索固定宽度，从而真正居中。
+  // 之前搜索框用 flex-1 + mx-auto，flex-1 已经吃满剩余空间，mx-auto 无空间
+  // 可分配，实际表现是紧贴左侧元素、视觉偏左。
   return (
-    <div className="shrink-0 h-11 flex items-center gap-3 px-3 border-b border-white/6 bg-surface-1/80 backdrop-blur">
-      {/* Logo（复用 LeftPanel 既有样式） */}
-      <div className="flex items-center gap-2 shrink-0">
-        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center text-[15px] shadow-lg shadow-indigo-500/20">
-          🌸
+    <div className="relative z-30 shrink-0 h-11 flex items-center gap-3 px-3 border-b border-white/6 bg-surface-1/80 backdrop-blur">
+      {/* 左区：Logo + 创作场景切换 */}
+      <div className="flex-1 flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center text-[15px] shadow-lg shadow-indigo-500/20">
+            🌸
+          </div>
+          <h1 className="text-[15px] font-bold bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 bg-clip-text text-transparent">
+            InkBloom
+          </h1>
+          <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20">
+            <Sparkles size={10} />
+            AI
+          </span>
         </div>
-        <h1 className="text-[15px] font-bold bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 bg-clip-text text-transparent">
-          InkBloom
-        </h1>
-        <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20">
-          <Sparkles size={10} />
-          AI
-        </span>
+
+        {/* 创作场景切换：平铺分段控件（原下拉会被顶栏层级遮蔽） */}
+        <div className="shrink-0">
+          <RoleSwitcher />
+        </div>
       </div>
 
-      {/* 创作场景切换（自 LeftPanel 迁来，组件未改） */}
-      <div className="shrink-0">
-        <RoleSwitcher />
+      {/* 中区：居中搜索（宽度随视口收敛，避免与左右区挤压） */}
+      <div className="shrink-0 w-[min(480px,38vw)]">
+        <TopSearch />
       </div>
 
-      {/* 居中搜索 */}
-      <TopSearch />
+      {/* 右区：最大化 + 用户入口 */}
+      <div className="flex-1 flex items-center justify-end gap-2 min-w-0">
+        {/* 编辑区最大化/还原（随记模式无侧栏，不参与） */}
+        {role !== 'memo' && (
+          <button
+            type="button"
+            onClick={toggleEditorMaximized}
+            title={editorMaximized ? '还原布局 (退出编辑区最大化)' : '最大化编辑区（隐藏侧栏）'}
+            className={`shrink-0 p-1.5 rounded-md transition-all duration-150 hover:bg-white/8 active:scale-95 ${
+              editorMaximized
+                ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
+                : 'text-neutral-400 hover:text-neutral-100'
+            }`}
+          >
+            {editorMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
+        )}
 
-      {/* 编辑区最大化/还原（随记模式无侧栏，不参与） */}
-      {role !== 'memo' && (
-        <button
-          type="button"
-          onClick={toggleEditorMaximized}
-          title={editorMaximized ? '还原布局 (退出编辑区最大化)' : '最大化编辑区（隐藏侧栏）'}
-          className={`shrink-0 p-1.5 rounded-md transition-all duration-150 hover:bg-white/8 active:scale-95 ${
-            editorMaximized
-              ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
-              : 'text-neutral-400 hover:text-neutral-100'
-          }`}
-        >
-          {editorMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-        </button>
-      )}
-
-      {/* 用户入口（自 LeftPanel 底部迁来，紧凑横排） */}
-      <div className="shrink-0">
-        <UserMenu compact />
+        <div className="shrink-0">
+          <UserMenu compact />
+        </div>
       </div>
     </div>
   );
