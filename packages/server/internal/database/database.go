@@ -23,6 +23,8 @@ func automigrateModels() []interface{} {
 		&model.Novel{},
 		&model.Volume{},
 		&model.Chapter{},
+		// E1 chapter version history (business plan v3, construction plan A01).
+		&model.ChapterVersion{},
 		&model.Setting{},
 		&model.Character{},
 		&model.Task{},
@@ -43,6 +45,8 @@ func automigrateModels() []interface{} {
 		&model.TokenLedger{},
 		&model.TokenOrder{},
 		&model.Feedback{},
+		// Product analytics (business plan v3 appendix B, plan A40).
+		&model.Event{},
 	}
 }
 

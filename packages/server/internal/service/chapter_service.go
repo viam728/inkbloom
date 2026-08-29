@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"unicode/utf8"
 
+	"github.com/inkbloom/server/internal/config"
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/model"
 	"github.com/inkbloom/server/internal/repository"
@@ -24,11 +28,88 @@ type ChapterService struct {
 	chapterRepo repository.ChapterRepository
 	novelRepo   repository.NovelRepository
 	cache       *cache.CacheManager
+	// E1 version history (business plan v3). versionRepo is optional: when
+	// nil the service behaves exactly as before, which keeps existing tests
+	// and local-mode wiring working without the new dependency.
+	versionRepo repository.ChapterVersionRepository
+	versionCfg  config.VersionHistoryConfig
 }
 
 // NewChapterService creates a new ChapterService.
-func NewChapterService(cr repository.ChapterRepository, nr repository.NovelRepository, cm *cache.CacheManager) *ChapterService {
-	return &ChapterService{chapterRepo: cr, novelRepo: nr, cache: cm}
+func NewChapterService(cr repository.ChapterRepository, nr repository.NovelRepository, cm *cache.CacheManager, vr repository.ChapterVersionRepository, vh config.VersionHistoryConfig) *ChapterService {
+	return &ChapterService{chapterRepo: cr, novelRepo: nr, cache: cm, versionRepo: vr, versionCfg: vh}
+}
+
+// snapshotBeforeUpdate writes an automatic snapshot of the chapter's current
+// (pre-update) content when the E1 auto-snapshot policy allows it.
+//
+// Two guards keep the version table from exploding on a long writing session:
+//   - throttle: no snapshot if the previous one is younger than the configured
+//     interval (default 5 min);
+//   - dedupe: no snapshot if the content hash is unchanged since the last one.
+//
+// Snapshotting is best-effort by design: a failure here must never block the
+// author's save, so every error is logged and swallowed (plan A03).
+func (s *ChapterService) snapshotBeforeUpdate(ctx context.Context, userID int64, chapter *model.Chapter) {
+	if s.versionRepo == nil || !s.versionCfg.Enabled {
+		return
+	}
+	if chapter.Content == nil {
+		return
+	}
+
+	content := *chapter.Content
+	hash := contentHash(content)
+
+	latest, err := s.versionRepo.Latest(ctx, userID, chapter.ID)
+	if err != nil {
+		zap.L().Warn("version history: latest snapshot lookup failed",
+			zap.Int64("chapter_id", chapter.ID), zap.Error(err))
+		return
+	}
+
+	interval := time.Duration(s.versionCfg.AutoIntervalMinutes) * time.Minute
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	if latest != nil {
+		if latest.ContentHash == hash {
+			return // content unchanged since the last snapshot
+		}
+		if time.Since(latest.CreatedAt) < interval {
+			return // inside the throttle window
+		}
+	}
+
+	v := &model.ChapterVersion{
+		UserID:      userID,
+		ChapterID:   chapter.ID,
+		NovelID:     chapter.NovelID,
+		Title:       chapter.Title,
+		Content:     chapter.Content,
+		ContentJSON: chapter.ContentJSON,
+		WordCount:   chapter.WordCount,
+		Kind:        model.VersionKindAuto,
+		ContentHash: hash,
+	}
+	if err := s.versionRepo.Create(ctx, v); err != nil {
+		zap.L().Warn("version history: auto snapshot failed",
+			zap.Int64("chapter_id", chapter.ID), zap.Error(err))
+		return
+	}
+
+	if _, err := s.versionRepo.PruneAuto(ctx, userID, chapter.ID, s.versionCfg.AutoKeepPerChapter); err != nil {
+		zap.L().Warn("version history: auto snapshot prune failed",
+			zap.Int64("chapter_id", chapter.ID), zap.Error(err))
+	}
+}
+
+// contentHash returns the leading 16 hex chars of sha256(content), used for
+// snapshot dedupe. 16 chars (64 bits) is ample here: collisions would only
+// cause a missed snapshot, never data loss.
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // CreateChapter creates a new chapter and returns the response DTO. The
@@ -176,6 +257,13 @@ func (s *ChapterService) UpdateChapter(ctx context.Context, userID, id int64, re
 	}
 	if chapter == nil {
 		return nil, ErrNotFound
+	}
+
+	// E1 (business plan v3, plan A03): snapshot the pre-update content before
+	// any field is overwritten. This single hook covers every write path —
+	// editor autosave, title rename, API clients — with no frontend change.
+	if req.Content != nil {
+		s.snapshotBeforeUpdate(ctx, userID, chapter)
 	}
 
 	if req.Title != nil {

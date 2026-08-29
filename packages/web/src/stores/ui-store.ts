@@ -48,6 +48,8 @@ interface UIState {
   tokenOpen: boolean;
   dataOpen: boolean;
   feedbackOpen: boolean;
+  /** 章节版本历史抽屉（业务方案 v3 E1） */
+  historyOpen: boolean;
 
   setLeftWidth: (w: number) => void;
   setRightWidth: (w: number) => void;
@@ -72,6 +74,7 @@ interface UIState {
   setTokenOpen: (open: boolean) => void;
   setDataOpen: (open: boolean) => void;
   setFeedbackOpen: (open: boolean) => void;
+  setHistoryOpen: (open: boolean) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -99,6 +102,7 @@ export const useUIStore = create<UIState>()(
       tokenOpen: false,
       dataOpen: false,
       feedbackOpen: false,
+      historyOpen: false,
 
       setLeftWidth: (w) =>
         set({ leftWidth: Math.min(LEFT_MAX, Math.max(LEFT_MIN, w)), leftCollapsed: false }),
@@ -142,6 +146,7 @@ export const useUIStore = create<UIState>()(
       setTokenOpen: (open) => set({ tokenOpen: open }),
       setDataOpen: (open) => set({ dataOpen: open }),
       setFeedbackOpen: (open) => set({ feedbackOpen: open }),
+      setHistoryOpen: (open) => set({ historyOpen: open }),
     }),
     {
       name: 'inkbloom-ui',

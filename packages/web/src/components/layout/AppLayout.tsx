@@ -12,6 +12,7 @@ import MemoPad from '@/components/memo/MemoPad';
 import DashboardModal from '@/components/insights/DashboardModal';
 import RhythmModal from '@/components/insights/RhythmModal';
 import InspirationModal from '@/components/insights/InspirationModal';
+import HistoryPanel from '@/components/history/HistoryPanel';
 
 /** 拖拽调整宽度的手柄：raf 节流 + 双击折叠/还原 */
 const ResizeHandle: React.FC<{
@@ -267,6 +268,8 @@ const AppLayout: React.FC = () => {
       <DashboardModal />
       <RhythmModal />
       <InspirationModal />
+      {/* 章节版本历史（业务方案 v3 E1） */}
+      <HistoryPanel />
     </div>
   );
 };

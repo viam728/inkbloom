@@ -5,6 +5,8 @@ import type { AIMessage, ChatMessage, RewriteAction } from '@/types';
 interface RewriteResult {
   original: string;
   modified: string;
+  /** 触发本次改写的动作，用于采纳率分析（业务方案 v3 附录 B） */
+  action?: RewriteAction;
 }
 
 interface AIStore {
@@ -189,7 +191,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
         action,
         (chunk) => {
           accumulated += chunk;
-          set({ rewriteResult: { original: selectedText, modified: accumulated } });
+          set({ rewriteResult: { original: selectedText, modified: accumulated, action } });
         },
         () => {
           set({ isRewriteStreaming: false, showDiffViewer: true });

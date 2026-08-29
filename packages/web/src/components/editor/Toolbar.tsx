@@ -26,6 +26,7 @@ import {
   Minimize2,
   Sparkles,
   Loader2,
+  History,
 } from 'lucide-react';
 import ExportModal from '@/components/export/ExportModal';
 import { useUIStore } from '@/stores/ui-store';
@@ -73,6 +74,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
   const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
   const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
+  const setHistoryOpen = useUIStore((s) => s.setHistoryOpen);
   const focusMode = useUIStore((s) => s.focusMode);
   const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
 
@@ -241,6 +243,17 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         <>
       <div className="flex-1" />
       <div className="w-px h-4 bg-white/8 mx-1.5" />
+      {/* 版本历史（业务方案 v3 E1）：章节依赖，仅小说模式 */}
+      {isNovel && (
+        <button
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+          className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-sky-300 active:scale-95`}
+          title="版本历史"
+        >
+          <History className="w-3.5 h-3.5" />
+        </button>
+      )}
       {/* AI 洞察入口（节奏图/批注评审依赖章节，仅小说模式） */}
       {isNovel && (
         <>

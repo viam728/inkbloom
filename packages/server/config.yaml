@@ -51,3 +51,13 @@ desktop:
   # 桌面端安装包路径：可为文件或直接指向目录（扫描首个 *.exe）；
   # 留空时回退到 ../desktop/dist 扫描（相对 server 工作目录）。
   installer_path: ""
+
+# 章节版本历史（业务方案 v3 E1 / 施工任务 A01-A03）
+# 自动快照策略：节流间隔内不重复打点，内容 hash 未变也不打点。
+# A07 的订阅分层会按档位覆盖这里的保留条数与期限（免费 3 天 / 订阅 90 天）。
+version_history:
+  enabled: true
+  # 同一章节两次自动快照的最小间隔（分钟）
+  auto_interval_minutes: 5
+  # 每章节保留的自动快照条数上限（milestone 版本不受此限，永不清理）
+  auto_keep_per_chapter: 20

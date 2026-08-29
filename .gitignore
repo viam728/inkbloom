@@ -67,6 +67,9 @@ inkbloom-data/
 packages/desktop/release/
 packages/desktop/dist-electron/
 
+# WorkBuddy local agent data (memory, session logs) — per-developer, not shared
+.workbuddy/
+
 # OS
 Thumbs.db
 .DS_Store

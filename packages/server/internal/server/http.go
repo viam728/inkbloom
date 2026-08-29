@@ -49,6 +49,12 @@ type Handlers struct {
 	// Feedback serves user feedback submission plus the back-office
 	// feedback list/status endpoints (M6, task #51). Optional.
 	Feedback *handler.FeedbackHandler
+	// History serves the E1 chapter version history endpoints (business plan
+	// v3, plan A05). Optional.
+	History *handler.HistoryHandler
+	// Events ingests product-analytics batches (plan A40). Mounted on the
+	// anonymous group so unauthenticated readers are measurable too. Optional.
+	Events *handler.EventHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -221,6 +227,17 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		}
 	}
 
+	// Analytics ingestion (plan A40): intentionally anonymous — a reader who
+	// never logs in is exactly the funnel P1 is measured on. Registered before
+	// AuthJWT so the endpoint stays reachable without a session.
+	if h.Events != nil {
+		eventsGroup := engine.Group("/api/v1/events")
+		if h.RateLimiter != nil {
+			eventsGroup.Use(h.RateLimiter.Scope(middleware.ScopeAnon))
+		}
+		eventsGroup.POST("", h.Events.Ingest)
+	}
+
 	// Auth middleware: JWT access tokens (with optional legacy static-token backdoor).
 	// Local embedded mode additionally admits headerless requests as the
 	// anonymous local user (uid=0) — offline creation without a cloud
@@ -329,6 +346,15 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		api.GET("/chapters/:id/content", h.Chapter.GetChapterContent)
 		api.PUT("/chapters/:id", h.Chapter.UpdateChapter)
 		api.DELETE("/chapters/:id", h.Chapter.DeleteChapter)
+
+		// Chapter version history (E1, plan A05). The static `restore`
+		// segment must be registered before the `:vid` wildcard (contract C5).
+		if h.History != nil {
+			api.GET("/chapters/:id/versions", h.History.ListVersions)
+			api.POST("/chapters/:id/versions", h.History.CreateSnapshot)
+			api.POST("/chapters/:id/versions/:vid/restore", h.History.RestoreVersion)
+			api.GET("/chapters/:id/versions/:vid", h.History.GetVersion)
+		}
 
 		// Volumes (nested under novel)
 		api.GET("/novels/:id/volumes", h.Volume.ListVolumes)

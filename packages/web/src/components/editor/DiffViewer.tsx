@@ -5,6 +5,13 @@ interface DiffViewerProps {
   modified: string;
   onAccept: () => void;
   onReject: () => void;
+  /**
+   * 以下三项为可选文案覆盖（业务方案 v3 E1）。
+   * 缺省时保持 AI 改写场景的原文案，版本历史对比复用本组件时传入自己的措辞。
+   */
+  title?: string;
+  acceptText?: string;
+  rejectText?: string;
 }
 
 interface DiffSegment {
@@ -77,7 +84,15 @@ function computeDiff(original: string, modified: string): DiffSegment[] {
   return segments;
 }
 
-const DiffViewer: React.FC<DiffViewerProps> = ({ original, modified, onAccept, onReject }) => {
+const DiffViewer: React.FC<DiffViewerProps> = ({
+  original,
+  modified,
+  onAccept,
+  onReject,
+  title,
+  acceptText,
+  rejectText,
+}) => {
   const segments = useMemo(() => computeDiff(original, modified), [original, modified]);
 
   return (
@@ -85,7 +100,7 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ original, modified, onAccept, o
       <div className="bg-neutral-800 border border-neutral-600 rounded-lg shadow-2xl w-[720px] max-w-[90vw] max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-700">
-          <h3 className="text-sm font-medium text-neutral-200">AI 改写预览</h3>
+          <h3 className="text-sm font-medium text-neutral-200">{title ?? 'AI 改写预览'}</h3>
           <button
             type="button"
             onClick={onReject}
@@ -130,14 +145,14 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ original, modified, onAccept, o
             onClick={onReject}
             className="px-4 py-1.5 rounded text-sm font-medium text-neutral-300 bg-neutral-700 hover:bg-neutral-600 transition-colors"
           >
-            拒绝
+            {rejectText ?? '拒绝'}
           </button>
           <button
             type="button"
             onClick={onAccept}
             className="px-4 py-1.5 rounded text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
           >
-            接受
+            {acceptText ?? '接受'}
           </button>
         </div>
       </div>

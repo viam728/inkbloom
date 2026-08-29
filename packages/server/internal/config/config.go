@@ -37,6 +37,25 @@ type Config struct {
 	Desktop DesktopConfig `mapstructure:"desktop"`
 	// ContentSafety gates the AIGC moderation gateway (tech plan v2 §9.1).
 	ContentSafety ContentSafetyConfig `mapstructure:"contentsafety"`
+	// VersionHistory tunes the E1 chapter snapshot engine (business plan v3).
+	VersionHistory VersionHistoryConfig `mapstructure:"version_history"`
+}
+
+// VersionHistoryConfig tunes the automatic chapter snapshot engine (E1, A03).
+//
+// The values below are the free-tier defaults. A07 overrides the retention
+// window per subscription tier; these are the fallback when no entitlement
+// resolution is available.
+type VersionHistoryConfig struct {
+	// AutoIntervalMinutes is the minimum gap between two automatic snapshots
+	// of the same chapter. A save inside the window is not snapshotted.
+	AutoIntervalMinutes int `mapstructure:"auto_interval_minutes"`
+	// AutoKeepPerChapter caps how many automatic snapshots are retained per
+	// chapter. The oldest beyond the cap are pruned after each insert.
+	AutoKeepPerChapter int `mapstructure:"auto_keep_per_chapter"`
+	// Enabled turns automatic snapshotting off entirely. Manual milestones
+	// and AI-rewrite checkpoints stay available so "undo" never disappears.
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // IsLocal reports whether the server runs in the embedded local mode.
@@ -192,6 +211,10 @@ func Load() (*Config, error) {
 	v.SetDefault("contentsafety.access_key", "")
 	v.SetDefault("contentsafety.secret_key", "")
 	v.SetDefault("ai_service.url", "http://localhost:8100")
+	// E1 version history (business plan v3, construction plan A03).
+	v.SetDefault("version_history.enabled", true)
+	v.SetDefault("version_history.auto_interval_minutes", 5)
+	v.SetDefault("version_history.auto_keep_per_chapter", 20)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

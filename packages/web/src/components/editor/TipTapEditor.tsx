@@ -18,6 +18,8 @@ import ImagePickerModal from './ImagePickerModal';
 import CandidatesPanel, { setLastCandidatesContext } from './CandidatesPanel';
 import { toast } from '@/components/common/Toast';
 import { uploadImage } from '@/services/image-client';
+import { snapshotChapter } from '@/services/history-client';
+import { track } from '@/services/analytics';
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -412,9 +414,31 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     [editor],
   );
 
+  /**
+   * AI 改写落库前存点（业务方案 v3 E1，施工任务 A04）。
+   *
+   * 后端无法区分「AI 改写」与「手动编辑」，因此存点只能由前端在覆盖正文前
+   * 显式触发。必须 await：否则可能先落库后存点，存到的就是改写后的新内容。
+   * 存点失败不阻断改写（snapshotChapter 内部已吞异常），仅提示不可回滚。
+   */
+  const snapshotBeforeAIRewrite = useCallback(async () => {
+    const chapterId = currentChapter?.id;
+    if (!chapterId) return;
+    const v = await snapshotChapter(chapterId, 'ai_rewrite');
+    if (!v) {
+      toast.show('改写前存点失败，本次改写将无法回滚', 'error');
+    }
+  }, [currentChapter?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Handle accepting rewrite: replace selected text in editor
-  const handleAcceptRewrite = useCallback(() => {
+  const handleAcceptRewrite = useCallback(async () => {
     if (!editor || !rewriteResult) return;
+    // E1 (A04)：覆盖原文前存点，失败不阻断（提示见 snapshotBeforeAIRewrite）
+    await snapshotBeforeAIRewrite();
+    // 埋点：AI 改写被采纳（采纳率是 AI 价值的北极星指标，附录 B）
+    track('ai_rewrite_accepted', {
+      action: rewriteResult.action ?? 'unknown',
+    });
     const { state } = editor;
     state.doc.nodesBetween(0, state.doc.content.size, (node, offset) => {
       if (node.isText && node.text?.includes(rewriteResult.original)) {
@@ -428,7 +452,7 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
       }
     });
     acceptRewrite();
-  }, [editor, rewriteResult, acceptRewrite]);
+  }, [editor, rewriteResult, acceptRewrite, snapshotBeforeAIRewrite]);
 
   // Filter characters by query for mention popup
   const filteredChars = characters.filter(
@@ -507,15 +531,17 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
 
   /** 采纳候选：按行拆分插入为段落 */
   const handleAcceptCandidate = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if (!editor) return;
+      await snapshotBeforeAIRewrite();
+      track('ai_candidate_accepted', {});
       const nodes = text.split('\n').map((line) => ({
         type: 'paragraph',
         content: line.trim() ? [{ type: 'text', text: line }] : [],
       }));
       editor.chain().focus().insertContent(nodes).run();
     },
-    [editor],
+    [editor, snapshotBeforeAIRewrite],
   );
 
   // 定位跳转：AI 批注等外部面板通知编辑器选中指定文本

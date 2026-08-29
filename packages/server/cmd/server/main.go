@@ -238,10 +238,18 @@ func main() {
 	aigcRecordRepo := repository.NewAIGCRecordRepository(db)
 	docRepo := repository.NewNovelDocRepository(db)
 	mediaRepo := repository.NewMediaRepository(db)
+	// E1 chapter version history (business plan v3, plan A01/A03).
+	chapterVersionRepo := repository.NewChapterVersionRepository(db)
+	// Product analytics (business plan v3 appendix B, plan A40).
+	eventRepo := repository.NewEventRepository(db)
 
 	// Initialize services
 	novelService := service.NewNovelService(novelRepo, chapterRepo, cacheMgr, docRepo)
-	chapterService := service.NewChapterService(chapterRepo, novelRepo, cacheMgr)
+	chapterService := service.NewChapterService(chapterRepo, novelRepo, cacheMgr, chapterVersionRepo, cfg.VersionHistory)
+	// E1 version history (business plan v3, plan A05).
+	historyService := service.NewHistoryService(chapterRepo, chapterVersionRepo, cacheMgr, cfg.VersionHistory, subService, cfg.IsLocal())
+	// Product analytics (plan A40).
+	eventService := service.NewEventService(eventRepo)
 	volumeService := service.NewVolumeService(volumeRepo)
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
@@ -266,6 +274,10 @@ func main() {
 	docHandler := handler.NewNovelDocHandler(docService)
 	mediaHandler := handler.NewMediaHandler(mediaService)
 	syncHandler := handler.NewSyncHandler(syncService, logger)
+	// E1 chapter version history (business plan v3, plan A05).
+	historyHandler := handler.NewHistoryHandler(historyService)
+	// Product analytics (plan A40): nil tokens keeps every batch anonymous.
+	eventHandler := handler.NewEventHandler(eventService, tokenMgr)
 	portraitHandler := handler.NewPortraitHandler(fileStorage)
 	// Unified image store (task #57): ingest/dedupe/list/delete gallery
 	// images under /api/v1/images.
@@ -344,6 +356,8 @@ func main() {
 		Admin:        adminHandler,
 		Feedback:     feedbackHandler,
 		Public:       publicHandler,
+		History:      historyHandler,
+		Events:       eventHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,
@@ -394,6 +408,37 @@ func main() {
 	g.Go(func() error {
 		sugar.Infof("HTTP server listening on %s", addr)
 		return httpServer.Start(addr)
+	})
+
+	// E1 version retention sweep (business plan v3 A07): prune automatic
+	// snapshots past each user's retention window. First run is delayed so it
+	// never competes with startup; afterwards it repeats every 24h.
+	g.Go(func() error {
+		runSweep := func() {
+			deleted, users, err := historyService.SweepExpiredVersions(context.Background())
+			switch {
+			case err != nil:
+				sugar.Warnw("version retention sweep failed", "error", err)
+			case deleted > 0:
+				sugar.Infow("version retention sweep", "deleted", deleted, "users", users)
+			}
+		}
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		select {
+		case <-gctx.Done():
+			return nil
+		case <-time.After(30 * time.Second):
+		}
+		runSweep()
+		for {
+			select {
+			case <-gctx.Done():
+				return nil
+			case <-ticker.C:
+				runSweep()
+			}
+		}
 	})
 
 	// Wait for shutdown signal
