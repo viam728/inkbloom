@@ -59,6 +59,7 @@ build/
 out/
 coverage/
 .nyc_output/
+*.tsbuildinfo
 
 # Local-mode data roots (server embedded SQLite mode)
 .smoke-local/
