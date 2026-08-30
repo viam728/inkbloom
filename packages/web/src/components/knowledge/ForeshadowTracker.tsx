@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useForeshadowStore } from '@/stores/foreshadow-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { useUIStore } from '@/stores/ui-store';
 import { locateTextInEditor } from '@/stores/review-store';
 import type { Foreshadow, ForeshadowStatus } from '@/services/foreshadow-client';
 import { toast } from '@/components/common/Toast';
@@ -58,6 +59,10 @@ const ForeshadowTracker: React.FC = () => {
 
   const [draft, setDraft] = useState('');
   const [showResolved, setShowResolved] = useState(false);
+
+  // 主动提示开关：提示条被关掉后，台账是重新开启的唯一入口
+  const hintBarEnabled = useUIStore((s) => s.hintBarEnabled);
+  const setHintBarEnabled = useUIStore((s) => s.setHintBarEnabled);
 
   const novelId = currentNovel?.id ?? null;
 
@@ -219,6 +224,16 @@ const ForeshadowTracker: React.FC = () => {
             检测回收
           </button>
         </div>
+
+        <label className="flex items-center gap-1.5 px-0.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hintBarEnabled}
+            onChange={(e) => setHintBarEnabled(e.target.checked)}
+            className="w-3 h-3 rounded accent-brand-500 cursor-pointer"
+          />
+          <span className="text-[11px] text-neutral-400">写作时主动提醒未回收的伏笔</span>
+        </label>
 
         {degraded && (
           <div className="flex items-start gap-1.5 px-2 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">

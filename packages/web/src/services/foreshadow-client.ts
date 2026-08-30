@@ -51,6 +51,27 @@ export interface ScanResult {
   degraded: boolean;
 }
 
+/** 主动提示（A15）：overdue 已超期 / upcoming 临近回收 */
+export interface ForeshadowHint {
+  type: 'overdue' | 'upcoming';
+  severity: 'warn' | 'info';
+  foreshadow_id: number;
+  message: string;
+  chapters_overdue: number;
+  chapters_until_due: number;
+}
+
+/** 拉取当前章节应展示的提示，服务端已按紧急度排序（前端取第一条） */
+export async function fetchHints(
+  novelId: number,
+  chapterId: number,
+): Promise<ForeshadowHint[]> {
+  const data = (await apiClient.get(
+    `/novels/${novelId}/foreshadows/hints?chapter_id=${chapterId}`,
+  )) as unknown as { hints?: ForeshadowHint[] };
+  return data?.hints ?? [];
+}
+
 export async function listForeshadows(novelId: number): Promise<Foreshadow[]> {
   const data = (await apiClient.get(
     `/novels/${novelId}/foreshadows`,

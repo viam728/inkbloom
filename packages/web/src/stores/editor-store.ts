@@ -56,6 +56,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       if (currentNovel) {
         await useNovelStore.getState().fetchChapters(currentNovel.id);
       }
+      // 通知主动提示条刷新：刚写完，伏笔的超期状态可能刚变化（业务方案 v3 A15）
+      window.dispatchEvent(
+        new CustomEvent('inkbloom:chapter-saved', { detail: { chapterId } }),
+      );
     } catch (e) {
       console.error('saveChapter failed', e);
       if (DEV_MOCK) {

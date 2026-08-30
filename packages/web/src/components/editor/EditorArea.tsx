@@ -13,6 +13,7 @@ import { useStatsStore } from '@/stores/stats-store';
 import { useTabStore, countDraftWords } from '@/stores/tab-store';
 import TipTapEditor from './TipTapEditor';
 import Kbd from '@/components/common/Kbd';
+import ForeshadowHintBar from '@/components/knowledge/ForeshadowHintBar';
 
 /** 正文自动保存防抖（per-tab 独立计时） */
 const SAVE_DEBOUNCE_MS = 2000;
@@ -253,6 +254,8 @@ const EditorArea: React.FC = () => {
 
   return (
     <div className={`flex-1 flex flex-col min-w-0 bg-surface-0 ${focusMode ? 'focus-mode' : ''}`}>
+      {/* 主动提示条（业务方案 v3 A15）：无提示时返回 null，不占版面 */}
+      <ForeshadowHintBar />
       {/* 编辑板 TabBar（原章节标题位置）：点击切换 / × 或中键关闭，关闭前 flush 保存 */}
       {tabs.length > 0 && (
         <div className="flex items-center gap-1 px-2 h-9 shrink-0 border-b border-white/6 bg-surface-1/50 overflow-x-auto select-none">

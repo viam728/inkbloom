@@ -55,6 +55,30 @@ func (h *ForeshadowHandler) List(c *gin.Context) {
 }
 
 // ListPending handles GET /api/v1/novels/:id/foreshadows/pending
+// Hints handles GET /api/v1/novels/:id/foreshadows/hints?chapter_id=X
+func (h *ForeshadowHandler) Hints(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterID, err := strconv.ParseInt(c.Query("chapter_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "chapter_id is required"})
+		return
+	}
+	resp, err := h.fs.Hints(c.Request.Context(), GetUserID(c), novelID, chapterID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel or chapter not found"})
+			return
+		}
+		zap.L().Error("foreshadow hints failed", zap.Int64("chapter_id", chapterID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: resp})
+}
+
 func (h *ForeshadowHandler) ListPending(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {

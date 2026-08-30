@@ -329,6 +329,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		if h.Foreshadow != nil {
 			api.GET("/novels/:id/foreshadows", h.Foreshadow.List)
 			api.GET("/novels/:id/foreshadows/pending", h.Foreshadow.ListPending)
+			api.GET("/novels/:id/foreshadows/hints", h.Foreshadow.Hints)
 			api.POST("/novels/:id/foreshadows", h.Foreshadow.Create)
 			api.POST("/novels/:id/foreshadows/detect", h.Foreshadow.DetectPlants)
 			api.POST("/novels/:id/foreshadows/scan", h.Foreshadow.ScanChapter)

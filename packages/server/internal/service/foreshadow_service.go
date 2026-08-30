@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -146,6 +147,83 @@ func (s *ForeshadowService) Delete(ctx context.Context, userID, id int64) error 
 		return ErrNotFound
 	}
 	return s.repo.Delete(ctx, userID, id)
+}
+
+// hintUpcomingWindow is how many chapters ahead still counts as "due soon".
+const hintUpcomingWindow = 2
+
+// Hints returns proactive nudges for the writing surface (plan A15), ordered
+// most-urgent first so the UI can simply render hints[0].
+//
+// Only threads still in `planted` produce hints. A thread that has moved to
+// `reminded` was already surfaced once — nudging about it again is exactly the
+// nagging that makes people switch the whole feature off.
+func (s *ForeshadowService) Hints(ctx context.Context, userID, novelID, chapterID int64) (*dto.HintsResponse, error) {
+	if err := s.ownedNovel(ctx, userID, novelID); err != nil {
+		return nil, err
+	}
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if chapter == nil {
+		return nil, ErrNotFound
+	}
+	current := chapter.Position
+
+	open, err := s.repo.ListByStatus(ctx, userID, novelID, []string{model.ForeshadowPlanted})
+	if err != nil {
+		return nil, err
+	}
+
+	var overdue, upcoming []dto.ForeshadowHint
+	for i := range open {
+		f := &open[i]
+		if f.ExpectChapter == nil {
+			continue // no expectation → nothing to be late for
+		}
+		expect := *f.ExpectChapter
+		switch {
+		case current > expect:
+			overdue = append(overdue, dto.ForeshadowHint{
+				Type:            "overdue",
+				Severity:        "warn",
+				ForeshadowID:    f.ID,
+				Message:         fmt.Sprintf("第 %d 章该回收「%s」了，已超期 %d 章", expect, f.Description, current-expect),
+				ChaptersOverdue: current - expect,
+			})
+		case expect-current <= hintUpcomingWindow:
+			// A zero-distance thread is due in the chapter being written, so
+			// "还有 0 章" would read as nonsense; say "本章" instead.
+			untilDue := expect - current
+			msg := fmt.Sprintf("还有 %d 章就到第 %d 章了，记得回收「%s」", untilDue, expect, f.Description)
+			if untilDue == 0 {
+				msg = fmt.Sprintf("本章就该回收「%s」了", f.Description)
+			}
+			upcoming = append(upcoming, dto.ForeshadowHint{
+				Type:             "upcoming",
+				Severity:         "info",
+				ForeshadowID:     f.ID,
+				Message:          msg,
+				ChaptersUntilDue: untilDue,
+			})
+		}
+	}
+
+	// Overdue always outranks upcoming; inside each bucket the nearest
+	// deadline comes first.
+	sort.Slice(overdue, func(i, j int) bool {
+		return overdue[i].ChaptersOverdue > overdue[j].ChaptersOverdue
+	})
+	sort.Slice(upcoming, func(i, j int) bool {
+		return upcoming[i].ChaptersUntilDue < upcoming[j].ChaptersUntilDue
+	})
+
+	hints := append(overdue, upcoming...)
+	if hints == nil {
+		hints = []dto.ForeshadowHint{}
+	}
+	return &dto.HintsResponse{Hints: hints}, nil
 }
 
 // DetectPlants asks the AI service for candidate setups in one chapter.

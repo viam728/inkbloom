@@ -61,6 +61,29 @@ type DetectPlantsResponse struct {
 	Degraded bool `json:"degraded"`
 }
 
+// ForeshadowHint is one proactive nudge for the writing surface (plan A15).
+// The bar renders the highest-priority hint only, so this ordering is what
+// the author actually sees.
+type ForeshadowHint struct {
+	// Type is "overdue" (past its expected payoff chapter) or "upcoming"
+	// (payoff due within the next couple of chapters).
+	Type string `json:"type"`
+	// Severity drives the bar's colour: "warn" for overdue, "info" for upcoming.
+	Severity string `json:"severity"`
+	// ForeshadowID lets the UI jump the tracker to this exact thread.
+	ForeshadowID int64 `json:"foreshadow_id"`
+	// Message is composed server-side so wording stays consistent across clients.
+	Message string `json:"message"`
+	// Only one of the two distance fields is meaningful per Type.
+	ChaptersOverdue  int `json:"chapters_overdue"`
+	ChaptersUntilDue int `json:"chapters_until_due"`
+}
+
+// HintsResponse carries the ordered nudges for one chapter.
+type HintsResponse struct {
+	Hints []ForeshadowHint `json:"hints"`
+}
+
 // ScanChapterResponse reports which threads were auto-resolved.
 type ScanChapterResponse struct {
 	Resolved []ForeshadowResponse `json:"resolved"`

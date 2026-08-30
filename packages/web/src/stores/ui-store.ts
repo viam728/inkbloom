@@ -50,6 +50,12 @@ interface UIState {
   feedbackOpen: boolean;
   /** 章节版本历史抽屉（业务方案 v3 E1） */
   historyOpen: boolean;
+  /**
+   * 写作侧边主动提示条开关（业务方案 v3 A15）。
+   * 默认开启：主动提醒的价值就在于"不用你记得去看"，默认关闭等于没有。
+   * 关闭后持久化，不再打扰。
+   */
+  hintBarEnabled: boolean;
 
   setLeftWidth: (w: number) => void;
   setRightWidth: (w: number) => void;
@@ -75,6 +81,7 @@ interface UIState {
   setDataOpen: (open: boolean) => void;
   setFeedbackOpen: (open: boolean) => void;
   setHistoryOpen: (open: boolean) => void;
+  setHintBarEnabled: (enabled: boolean) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -103,6 +110,7 @@ export const useUIStore = create<UIState>()(
       dataOpen: false,
       feedbackOpen: false,
       historyOpen: false,
+      hintBarEnabled: true,
 
       setLeftWidth: (w) =>
         set({ leftWidth: Math.min(LEFT_MAX, Math.max(LEFT_MIN, w)), leftCollapsed: false }),
@@ -147,6 +155,7 @@ export const useUIStore = create<UIState>()(
       setDataOpen: (open) => set({ dataOpen: open }),
       setFeedbackOpen: (open) => set({ feedbackOpen: open }),
       setHistoryOpen: (open) => set({ historyOpen: open }),
+      setHintBarEnabled: (enabled) => set({ hintBarEnabled: enabled }),
     }),
     {
       name: 'inkbloom-ui',
@@ -162,6 +171,8 @@ export const useUIStore = create<UIState>()(
         role: s.role,
         leftTab: s.leftTab,
         activeRightTab: s.activeRightTab,
+        // 主动提示开关：持久化，关闭后不再打扰（业务方案 v3 A15）
+        hintBarEnabled: s.hintBarEnabled,
       }),
     },
   ),
