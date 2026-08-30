@@ -72,3 +72,25 @@ export interface WorkStats {
   reader_count: number;
   chapters: ChapterStats[];
 }
+
+/** 读者互动（plan A28：划线评论 / 情绪点击） */
+export interface Interaction {
+  id: number;
+  chapter_id: number;
+  user_id: number;
+  nickname?: string;
+  type: 'comment' | 'mood';
+  block_index: number;
+  anchor?: string;
+  payload?: { text?: string; mood?: string };
+  status: 'pending' | 'adopted' | 'hidden';
+  like_count: number;
+  liked_by_me: boolean;
+  is_author: boolean;
+  created_at: string;
+}
+
+export interface InteractionList {
+  interactions: Interaction[];
+  is_author: boolean;
+}

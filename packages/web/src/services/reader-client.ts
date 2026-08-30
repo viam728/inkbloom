@@ -7,6 +7,8 @@ import type {
   PublishedChapter,
   ReadingProgress,
   WorkStats,
+  Interaction,
+  InteractionList,
 } from '@/types/published';
 
 /**
@@ -85,6 +87,47 @@ export async function unpublishChapter(pid: number): Promise<void> {
 
 export async function getWorkStats(wid: number): Promise<WorkStats> {
   return (await apiClient.get(`/publish/works/${wid}/stats`)) as unknown as WorkStats;
+}
+
+// ── 读者互动（A28）────────────────────────────────────────────────────
+
+export async function listInteractions(pid: number): Promise<InteractionList> {
+  return (await apiClient.get(
+    `/read/chapters/${pid}/interactions`,
+  )) as unknown as InteractionList;
+}
+
+export async function createInteraction(
+  pid: number,
+  payload: {
+    type: 'comment' | 'mood';
+    block_index?: number;
+    anchor?: string;
+    payload?: { text?: string; mood?: string };
+  },
+): Promise<Interaction> {
+  return (await apiClient.post(
+    `/read/chapters/${pid}/interactions`,
+    payload,
+  )) as unknown as Interaction;
+}
+
+export async function likeInteraction(
+  iid: number,
+): Promise<{ interaction_id: number; like_count: number; liked: boolean }> {
+  return (await apiClient.post(`/interactions/${iid}/like`)) as unknown as {
+    interaction_id: number;
+    like_count: number;
+    liked: boolean;
+  };
+}
+
+export async function adoptInteraction(iid: number): Promise<void> {
+  await apiClient.post(`/publish/interactions/${iid}/adopt`);
+}
+
+export async function hideInteraction(iid: number): Promise<void> {
+  await apiClient.delete(`/interactions/${iid}`);
 }
 
 // ── 阅读进度与追更（需登录）─────────────────────────────────────────────

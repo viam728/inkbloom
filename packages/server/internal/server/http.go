@@ -64,6 +64,8 @@ type Handlers struct {
 	// Reader serves the E4 public reading surface (plan A18): anonymous
 	// reads of published works plus logged-in progress/follows. Optional.
 	Reader *handler.ReaderHandler
+	// Interaction serves the E5 reader-interaction endpoints (plan A28). Optional.
+	Interaction *handler.InteractionHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -248,6 +250,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		readerGroup.GET("/works/:slug", h.Reader.GetWork)
 		readerGroup.GET("/works/:slug/chapters", h.Reader.ListChapters)
 		readerGroup.GET("/chapters/:pid", h.Reader.GetChapter)
+		readerGroup.GET("/chapters/:pid/interactions", h.Interaction.List)
 	}
 
 	// Analytics ingestion (plan A40): intentionally anonymous — a reader who
@@ -380,6 +383,11 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.PUT("/read/progress", h.Reader.UpsertProgress)
 			api.POST("/read/follows", h.Reader.Follow)
 			api.DELETE("/read/follows/:wid", h.Reader.Unfollow)
+			// Reader interactions (plan A28): comment/mood/like/adopt.
+			api.POST("/read/chapters/:pid/interactions", h.Interaction.Create)
+			api.POST("/interactions/:iid/like", h.Interaction.Like)
+			api.DELETE("/interactions/:iid", h.Interaction.Hide)
+			api.POST("/publish/interactions/:iid/adopt", h.Interaction.Adopt)
 		}
 
 		// Token billing (M4, task #43): balance / ledger / stats / orders.

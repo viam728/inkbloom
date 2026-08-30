@@ -1,11 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Settings, List as ListIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Settings, List as ListIcon, MessageSquare } from 'lucide-react';
 import type { PublicChapter, PublicChapterSummary } from '@/types/published';
 import { useReaderStore } from '@/stores/reader-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { upsertReadingProgress } from '@/services/reader-client';
+import { useReaderInteractionStore } from '@/stores/reader-interaction-store';
+import { upsertReadingProgress, createInteraction } from '@/services/reader-client';
 import { track } from '@/services/analytics';
+import { toast } from '@/components/common/Toast';
 import ReaderSettings from './ReaderSettings';
+import ReaderInteractions from './ReaderInteractions';
+
+/** 情绪键映射（与后端 model.Mood* 一致），用于段落悬停情绪条 */
+const MOODS: { key: string; emoji: string; label: string }[] = [
+  { key: 'fire', emoji: '🔥', label: '燃' },
+  { key: 'knife', emoji: '💔', label: '刀' },
+  { key: 'sweet', emoji: '🍬', label: '甜' },
+  { key: 'mystery', emoji: '❓', label: '谜' },
+];
 
 interface ChapterReaderProps {
   chapter: PublicChapter;
@@ -33,6 +44,15 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
   const lastReportRef = useRef<{ pos: number; at: number }>({ pos: 0, at: 0 });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  // 段落悬停情绪条（E5）
+  const [hoverBlock, setHoverBlock] = useState<{ index: number; rect: DOMRect } | null>(null);
+  // 选中划线评论（E5）
+  const [selection, setSelection] = useState<{
+    anchor: string;
+    blockIndex: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // 主题色映射
   const themeClass = theme === 'sepia' ? 'reader-sepia' : theme === 'light' ? 'reader-light' : '';
@@ -63,6 +83,81 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
       }
     }
   }, [chapter.id]);
+
+  // 段落悬停：事件委托定位最近 data-block-index，供情绪条定位（E5）
+  useEffect(() => {
+    const container = scrollRef.current?.querySelector('.reader-body');
+    if (!container) return;
+    const onOver = (e: Event) => {
+      const el = (e.target as HTMLElement).closest?.('[data-block-index]') as HTMLElement | null;
+      if (el) {
+        setHoverBlock({ index: Number(el.getAttribute('data-block-index')), rect: el.getBoundingClientRect() });
+      } else {
+        setHoverBlock(null);
+      }
+    };
+    container.addEventListener('mouseover', onOver);
+    return () => container.removeEventListener('mouseover', onOver);
+  }, [chapter.id]);
+
+  // 选中文本：浮出「划线评论」按钮（E5）
+  useEffect(() => {
+    const container = scrollRef.current?.querySelector('.reader-body');
+    if (!container) return;
+    const onUp = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setSelection(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const node = range.commonAncestorContainer;
+      const anchorEl = (node.nodeType === 1 ? (node as HTMLElement) : (node.parentElement as HTMLElement | null))
+        ?.closest?.('[data-block-index]') as HTMLElement | null;
+      if (!anchorEl) {
+        setSelection(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      setSelection({
+        anchor: sel.toString().trim().slice(0, 500),
+        blockIndex: Number(anchorEl.getAttribute('data-block-index')),
+        x: rect.left,
+        y: rect.top,
+      });
+    };
+    document.addEventListener('mouseup', onUp);
+    return () => document.removeEventListener('mouseup', onUp);
+  }, [chapter.id]);
+
+  // 情绪点击：一次点击记录段落情绪（E5）
+  const recordMood = useCallback(
+    async (blockIndex: number, mood: string) => {
+      if (status !== 'authed') {
+        toast.show('登录后即可参与情绪互动', 'info');
+        return;
+      }
+      try {
+        await createInteraction(chapter.id, {
+          type: 'mood',
+          block_index: blockIndex,
+          payload: { mood },
+        });
+        track('interaction_created', { type: 'mood', chapter_id: chapter.id });
+        useReaderInteractionStore.getState().bump();
+      } catch (e) {
+        toast.show(e instanceof Error ? e.message : '情绪提交失败', 'error');
+      }
+    },
+    [chapter.id, status],
+  );
+
+  const openComment = useCallback(
+    (blockIndex: number, anchor: string) => {
+      useReaderInteractionStore.getState().openComposer({ block_index: blockIndex, anchor });
+    },
+    [],
+  );
 
   // 进度计算与上报
   const reportProgress = useCallback(
@@ -216,6 +311,64 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
       </div>
 
       {settingsOpen && <ReaderSettings onClose={() => setSettingsOpen(false)} />}
+
+      {/* 段落悬停情绪条（E5） */}
+      {hoverBlock && (
+        <div
+          style={{
+            position: 'fixed',
+            left: Math.min(hoverBlock.rect.right + 8, window.innerWidth - 200),
+            top: Math.max(8, hoverBlock.rect.top + hoverBlock.rect.height / 2 - 18),
+            zIndex: 45,
+          }}
+          onMouseLeave={() => setHoverBlock(null)}
+          className="flex items-center gap-0.5 px-1.5 py-1 rounded-full bg-surface-1 border border-white/10 shadow-lg shadow-black/40"
+        >
+          {MOODS.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              title={`${m.label}`}
+              onClick={() => void recordMood(hoverBlock.index, m.key)}
+              className="w-7 h-7 flex items-center justify-center rounded-full text-sm hover:bg-white/10 transition-colors"
+            >
+              {m.emoji}
+            </button>
+          ))}
+          <span className="w-px h-4 bg-white/10 mx-0.5" />
+          <button
+            type="button"
+            title="评论此段"
+            onClick={() => openComment(hoverBlock.index, '')}
+            className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-300 hover:bg-white/10 transition-colors"
+          >
+            <MessageSquare size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* 选中划线评论按钮（E5） */}
+      {selection && (
+        <button
+          type="button"
+          onClick={() => {
+            openComment(selection.blockIndex, selection.anchor);
+            setSelection(null);
+            window.getSelection()?.removeAllRanges();
+          }}
+          style={{
+            position: 'fixed',
+            left: Math.min(selection.x, window.innerWidth - 120),
+            top: Math.max(8, selection.y - 34),
+            zIndex: 45,
+          }}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs shadow-lg shadow-black/40"
+        >
+          <MessageSquare size={12} /> 划线评论
+        </button>
+      )}
+
+      <ReaderInteractions chapterId={chapter.id} />
     </div>
   );
 };

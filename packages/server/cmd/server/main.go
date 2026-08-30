@@ -327,6 +327,9 @@ func main() {
 	// for the cross-user reads — one service, two handlers, no duplication.
 	publishHandler := handler.NewPublishHandler(publishService)
 	readerHandler := handler.NewReaderHandler(publishService)
+	// E5 reader interactions (plan A28).
+	interactionService := service.NewInteractionService(repository.NewInteractionRepository(db), publishedReadRepo, userRepo, csChecker)
+	interactionHandler := handler.NewInteractionHandler(interactionService)
 
 	// Local mode (v2 §3.2): the LocalBus doubles as the task feed — route
 	// outbox-published creation events into the engine's in-process queue.
@@ -384,6 +387,7 @@ func main() {
 		Foreshadow:   foreshadowHandler,
 		Publish:       publishHandler,
 		Reader:        readerHandler,
+		Interaction:   interactionHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

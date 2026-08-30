@@ -72,6 +72,9 @@ type PublishedReadRepository interface {
 	ReadingDistribution(ctx context.Context, workID int64) ([]ReadingDistributionRow, error)
 	// DistinctReaders returns the number of distinct readers with any progress.
 	DistinctReaders(ctx context.Context, workID int64) (int64, error)
+	// WorkOwner returns the owner user_id of a published work (internal, for
+	// author-action checks on interactions).
+	WorkOwner(ctx context.Context, workID int64) (int64, error)
 }
 
 // ReadingDistributionRow is a projection of reading_progress grouped by
@@ -349,4 +352,11 @@ func (r *publishedReadRepository) DistinctReaders(ctx context.Context, workID in
 		Select("COUNT(DISTINCT user_id)").
 		Scan(&n).Error
 	return n, err
+}
+
+func (r *publishedReadRepository) WorkOwner(ctx context.Context, workID int64) (int64, error) {
+	var owner int64
+	err := r.db.WithContext(ctx).Model(&model.PublishedWork{}).
+		Where("id = ?", workID).Select("user_id").Scan(&owner).Error
+	return owner, err
 }

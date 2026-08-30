@@ -57,6 +57,9 @@ func automigrateModels() []interface{} {
 		&model.ReaderFollow{},
 		// T2 session persistence (business plan v3, plan A22).
 		&model.UserSession{},
+		// E5 interactive micro-creation (business plan v3, plan A28).
+		&model.Interaction{},
+		&model.InteractionVote{},
 	}
 }
 
