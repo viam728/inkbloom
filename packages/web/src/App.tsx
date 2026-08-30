@@ -7,6 +7,7 @@ import { ToastProvider } from '@/components/common/Toast';
 import AuthPage from '@/components/auth/AuthPage';
 import LandingPage from '@/components/landing/LandingPage';
 import LegalPage from '@/components/legal/LegalPage';
+import ReaderPage from '@/components/reader/ReaderPage';
 import SubscriptionModal from '@/components/billing/SubscriptionModal';
 import TokenModal from '@/components/billing/TokenModal';
 import AdminPanel from '@/components/admin/AdminPanel';
@@ -131,6 +132,12 @@ function App() {
         const legalMatch = window.location.pathname.match(/^\/legal\/([\w-]+)/);
         if (legalMatch) {
           return <LegalPage slug={legalMatch[1]} />;
+        }
+        // 公开阅读页（业务方案 v3 E4，施工任务 A19）：/read/:slug[/:pid]
+        // 免登录，必须在 status 判断之前——未登录读者正是它的用户
+        const readMatch = window.location.pathname.match(/^\/read\/([\w-]+)(?:\/(\d+))?/);
+        if (readMatch) {
+          return <ReaderPage slug={readMatch[1]} chapterId={readMatch[2]} />;
         }
         return status === 'authed' ? <AuthenticatedApp /> : status === 'guest' ? <GuestApp /> : <BootSplash />;
       })()}

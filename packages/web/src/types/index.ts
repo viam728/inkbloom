@@ -29,3 +29,11 @@ export type {
   GenerateOptions,
   ImageGenResponse,
 } from './aigc';
+export type {
+  PublicWork,
+  PublicChapterSummary,
+  PublicChapter,
+  PublishedWork,
+  PublishedChapter,
+  ReadingProgress,
+} from './published';

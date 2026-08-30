@@ -248,3 +248,30 @@ body.resizing * {
   font-size: 1.0625rem;
   line-height: 1.9;
 }
+
+/* ── 阅读器主题（业务方案 v3 E4，施工任务 A19）────────────────────────── */
+/* 深色是默认（沿用 surface-0）；护眼与日间覆盖背景与文字色。
+   只改阅读器容器，不影响编辑器与全局 UI。 */
+.reader-sepia {
+  background: #f4ecd8;
+}
+.reader-sepia .tiptap,
+.reader-sepia header {
+  color: #5b4636 !important;
+}
+.reader-sepia header {
+  background: rgba(244, 236, 216, 0.8) !important;
+  border-color: rgba(91, 70, 54, 0.12) !important;
+}
+
+.reader-light {
+  background: #ffffff;
+}
+.reader-light .tiptap,
+.reader-light header {
+  color: #1a1a1a !important;
+}
+.reader-light header {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}

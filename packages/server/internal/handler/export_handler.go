@@ -56,7 +56,19 @@ func (h *ExportHandler) ExportChapter(c *gin.Context) {
 
 	contentJSON := json.RawMessage(chapter.ContentJSON)
 	if len(contentJSON) == 0 && chapter.Content != nil {
-		// Wrap plain text content as a simple TipTap doc
+		// chapter.Content is the editor's getHTML() output — an HTML fragment,
+		// NOT plain text. The old code wrapped it as a text node, which made
+		// every export render the tags literally (e.g. "<p>正文</p>" shown
+		// as text). For HTML output we can return it directly; for other
+		// formats there is no HTML→AST converter available, so we fall back
+		// to the text-node wrap (lossy but no worse than before).
+		if req.Format == "html" {
+			c.JSON(http.StatusOK, dto.APIResponse{
+				Code: 200, Message: "ok",
+				Data: map[string]string{"content": *chapter.Content},
+			})
+			return
+		}
 		contentJSON = json.RawMessage(fmt.Sprintf(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":%q}]}]}`, *chapter.Content))
 	}
 	if len(contentJSON) == 0 {
