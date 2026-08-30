@@ -67,3 +67,19 @@ type AuthResponse struct {
 type MeResponse struct {
 	User UserDTO `json:"user"`
 }
+
+// UserSessionDTO is a device/session row for the device management page.
+type UserSessionDTO struct {
+	ID           int64     `json:"id"`
+	DeviceName   string    `json:"device_name"`
+	DeviceType   string    `json:"device_type"`
+	IP           string    `json:"ip"`
+	LastActiveAt time.Time `json:"last_active_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// SessionsResponse is returned by GET /api/v1/auth/sessions.
+type SessionsResponse struct {
+	Sessions []UserSessionDTO `json:"sessions"`
+}

@@ -283,6 +283,9 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			// Account deregistration (v2 §9.2): cool-down + cancel.
 			authGroup.POST("/deregister", authMiddleware, h.Auth.Deregister)
 			authGroup.POST("/deregister/cancel", authMiddleware, h.Auth.CancelDeregister)
+			// Session/device management (plan A22).
+			authGroup.GET("/sessions", authMiddleware, h.Auth.ListSessions)
+			authGroup.DELETE("/sessions/:id", authMiddleware, h.Auth.DeleteSession)
 		}
 		// sms-code carries the stricter per-phone scope on top of the
 		// group-level anon-IP limit.

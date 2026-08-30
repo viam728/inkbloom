@@ -60,13 +60,27 @@ type TokenPair struct {
 	ExpiresIn int64 `json:"expires_in"`
 }
 
+// DeviceInfo captures request metadata recorded against a session (plan A22).
+// The handler derives it from User-Agent and remote address.
+type DeviceInfo struct {
+	DeviceName string
+	DeviceType string
+	IP         string
+}
+
+// maxSessionsPerUser caps concurrent sessions per account (plan A22: three
+// devices online; a new login evicts the least-recently-active one).
+const maxSessionsPerUser = 3
+
 // AuthService implements registration, login, token refresh/logout and the
 // SMS verification code flow (kvstore-backed, no table). Cloud mode wires a
 // Redis adapter; the local embedded mode wires the in-memory store.
 type AuthService struct {
-	users       repository.UserRepository
-	kv          kvstore.Store
-	tokens      *authtoken.Manager
+	users    repository.UserRepository
+	kv       kvstore.Store
+	tokens   *authtoken.Manager
+	sessions repository.UserSessionRepository
+	// smsProvider sends verification codes (kvstore-backed, no device dim).
 	smsProvider sms.Provider
 	// subs opens the 14-day trial on registration (task #39). Optional:
 	// when nil registration skips trial creation (defensive fallback).
@@ -81,7 +95,8 @@ type AuthService struct {
 
 // NewAuthService creates an AuthService. subs and tokenSvc may be nil.
 func NewAuthService(users repository.UserRepository, kv kvstore.Store,
-	tokens *authtoken.Manager, smsProvider sms.Provider, subs *SubscriptionService, tokenSvc *TokenService,
+	tokens *authtoken.Manager, sessions repository.UserSessionRepository,
+	smsProvider sms.Provider, subs *SubscriptionService, tokenSvc *TokenService,
 	adminPhones []string, logger *zap.Logger) *AuthService {
 	adminSet := make(map[string]bool, len(adminPhones))
 	for _, p := range adminPhones {
@@ -93,6 +108,7 @@ func NewAuthService(users repository.UserRepository, kv kvstore.Store,
 		users:       users,
 		kv:          kv,
 		tokens:      tokens,
+		sessions:    sessions,
 		smsProvider: smsProvider,
 		subs:        subs,
 		tokenSvc:    tokenSvc,
@@ -103,9 +119,8 @@ func NewAuthService(users repository.UserRepository, kv kvstore.Store,
 
 // ── Redis key helpers ──────────────────────────────────────────────────────
 
-func smsCodeKey(phone string) string          { return "smscode:" + phone }
-func smsRateKey(phone string) string          { return "smscode:rate:" + phone }
-func refreshKey(uid int64, jti string) string { return fmt.Sprintf("refresh:%d:%s", uid, jti) }
+func smsCodeKey(phone string) string { return "smscode:" + phone }
+func smsRateKey(phone string) string { return "smscode:rate:" + phone }
 
 // ── SMS code ───────────────────────────────────────────────────────────────
 
@@ -154,7 +169,7 @@ func (s *AuthService) verifyCode(ctx context.Context, phone, code string) error 
 
 // Register creates a new account after verifying the SMS code, then issues a
 // token pair. nickname defaults to "创作者" + phone tail.
-func (s *AuthService) Register(ctx context.Context, phone, code, pwd, nickname string, agreedTerms bool) (*model.User, *TokenPair, error) {
+func (s *AuthService) Register(ctx context.Context, phone, code, pwd, nickname string, agreedTerms bool, device DeviceInfo) (*model.User, *TokenPair, error) {
 	if !agreedTerms {
 		return nil, nil, ErrTermsNotAgreed
 	}
@@ -221,7 +236,7 @@ func (s *AuthService) Register(ctx context.Context, phone, code, pwd, nickname s
 		}
 	}
 
-	pair, err := s.issueTokens(ctx, user.ID)
+	pair, err := s.issueTokens(ctx, user.ID, device)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -231,7 +246,7 @@ func (s *AuthService) Register(ctx context.Context, phone, code, pwd, nickname s
 
 // Login authenticates by SMS code (preferred) or password, updates
 // last_login_at and issues a token pair.
-func (s *AuthService) Login(ctx context.Context, phone, pwd, code string) (*model.User, *TokenPair, error) {
+func (s *AuthService) Login(ctx context.Context, phone, pwd, code string, device DeviceInfo) (*model.User, *TokenPair, error) {
 	if code == "" && pwd == "" {
 		return nil, nil, ErrMissingCredential
 	}
@@ -275,7 +290,7 @@ func (s *AuthService) Login(ctx context.Context, phone, pwd, code string) (*mode
 	}
 	user.LastLoginAt = &now
 
-	pair, err := s.issueTokens(ctx, user.ID)
+	pair, err := s.issueTokens(ctx, user.ID, device)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -285,8 +300,9 @@ func (s *AuthService) Login(ctx context.Context, phone, pwd, code string) (*mode
 // ── Refresh / Logout ───────────────────────────────────────────────────────
 
 // Refresh rotates the token pair: the presented refresh token's jti must
-// still exist in Redis; it is deleted and a fresh pair is issued.
-func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.User, *TokenPair, error) {
+// still exist as a live session; it is atomically consumed and a fresh pair
+// is issued (carrying the same device metadata forward).
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string, device DeviceInfo) (*model.User, *TokenPair, error) {
 	claims, err := s.tokens.ParseTyped(refreshToken, authtoken.TypeRefresh)
 	if err != nil {
 		return nil, nil, ErrTokenRevoked
@@ -296,11 +312,11 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.
 		return nil, nil, ErrTokenRevoked
 	}
 
-	deleted, err := s.kv.Del(ctx, refreshKey(uid, claims.ID))
+	old, ok, err := s.sessions.Consume(ctx, claims.ID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if deleted == 0 {
+	if !ok || old.UserID != uid || old.ExpiresAt.Before(time.Now()) {
 		// Already rotated, logged out or expired.
 		return nil, nil, ErrTokenRevoked
 	}
@@ -316,7 +332,19 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.
 		return nil, nil, ErrUserDisabled
 	}
 
-	pair, err := s.issueTokens(ctx, uid)
+	// Carry the device identity forward so a refresh doesn't spawn a brand-new
+	// device entry (which would trip the 3-device limit on every rotation).
+	if device.DeviceName == "" {
+		device.DeviceName = old.DeviceName
+	}
+	if device.DeviceType == "" {
+		device.DeviceType = old.DeviceType
+	}
+	if device.IP == "" {
+		device.IP = old.IP
+	}
+
+	pair, err := s.issueTokens(ctx, uid, device)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -335,19 +363,10 @@ func (s *AuthService) Logout(ctx context.Context, uid int64, refreshToken string
 		if err != nil || target != uid {
 			return nil
 		}
-		_, err = s.kv.Del(ctx, refreshKey(target, claims.ID))
+		_, _, err = s.sessions.Consume(ctx, claims.ID)
 		return err
 	}
-
-	keys, err := s.kv.KeysWithPrefix(ctx, fmt.Sprintf("refresh:%d:", uid))
-	if err != nil {
-		return err
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	_, err = s.kv.Del(ctx, keys...)
-	return err
+	return s.sessions.DeleteByUser(ctx, uid)
 }
 
 // Me returns the authenticated user's profile.
@@ -422,9 +441,10 @@ func (s *AuthService) EnsureDemoUser(ctx context.Context) error {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// issueTokens signs a fresh access/refresh pair and records the new refresh
-// jti in Redis (sliding 30-day window = refresh token TTL).
-func (s *AuthService) issueTokens(ctx context.Context, uid int64) (*TokenPair, error) {
+// issueTokens signs a fresh access/refresh pair, records a persistent
+// session row (sliding 30-day window = refresh token TTL) and enforces the
+// per-account device limit.
+func (s *AuthService) issueTokens(ctx context.Context, uid int64, device DeviceInfo) (*TokenPair, error) {
 	access, err := s.tokens.IssueAccess(uid)
 	if err != nil {
 		return nil, err
@@ -433,15 +453,56 @@ func (s *AuthService) issueTokens(ctx context.Context, uid int64) (*TokenPair, e
 	if err != nil {
 		return nil, err
 	}
-	if err := s.kv.Set(ctx, refreshKey(uid, jti), "1", s.tokens.RefreshTTL()); err != nil {
-		return nil, err
+
+	now := time.Now()
+	// Enforce the 3-device cap before persisting the new session. Best effort:
+	// an eviction failure must not block login, so we only warn.
+	if s.sessions != nil {
+		if n, err := s.sessions.CountActive(ctx, uid); err == nil && n >= maxSessionsPerUser {
+			if err := s.sessions.DeleteOldest(ctx, uid); err != nil {
+				s.logger.Warn("failed to evict oldest session", zap.Int64("user_id", uid), zap.Error(err))
+			}
+		}
+		if device.DeviceName == "" {
+			device.DeviceName = "未命名设备"
+		}
+		sess := &model.UserSession{
+			UserID:       uid,
+			JTI:          jti,
+			DeviceName:   device.DeviceName,
+			DeviceType:   device.DeviceType,
+			IP:           device.IP,
+			LastActiveAt: now,
+			ExpiresAt:    now.Add(s.tokens.RefreshTTL()),
+		}
+		if err := s.sessions.Create(ctx, sess); err != nil {
+			return nil, err
+		}
 	}
+
 	return &TokenPair{
 		AccessToken:  access,
 		RefreshToken: refresh,
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(s.tokens.AccessTTL().Seconds()),
 	}, nil
+}
+
+// ListSessions returns the user's live sessions for the device management
+// page (plan A22).
+func (s *AuthService) ListSessions(ctx context.Context, uid int64) ([]model.UserSession, error) {
+	if s.sessions == nil {
+		return nil, nil
+	}
+	return s.sessions.ListByUser(ctx, uid)
+}
+
+// DeleteSession revokes one session by id (plan A22).
+func (s *AuthService) DeleteSession(ctx context.Context, uid, id int64) error {
+	if s.sessions == nil {
+		return nil
+	}
+	return s.sessions.DeleteByID(ctx, uid, id)
 }
 
 // ValidatePassword enforces the password policy: 8-64 chars, letters + digits.

@@ -55,6 +55,8 @@ func automigrateModels() []interface{} {
 		&model.PublishedChapter{},
 		&model.ReadingProgress{},
 		&model.ReaderFollow{},
+		// T2 session persistence (business plan v3, plan A22).
+		&model.UserSession{},
 	}
 }
 

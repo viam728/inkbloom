@@ -3,6 +3,8 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkbloom/server/internal/dto"
@@ -44,7 +46,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, pair, err := h.authService.Register(c.Request.Context(), req.Phone, req.Code, req.Password, req.Nickname, req.AgreedTerms)
+	user, pair, err := h.authService.Register(c.Request.Context(), req.Phone, req.Code, req.Password, req.Nickname, req.AgreedTerms, deviceInfoFromRequest(c))
 	if err != nil {
 		status, code := mapAuthError(err)
 		c.JSON(status, dto.APIResponse{Code: code, Message: err.Error()})
@@ -61,7 +63,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, pair, err := h.authService.Login(c.Request.Context(), req.Phone, req.Password, req.Code)
+	user, pair, err := h.authService.Login(c.Request.Context(), req.Phone, req.Password, req.Code, deviceInfoFromRequest(c))
 	if err != nil {
 		status, code := mapAuthError(err)
 		c.JSON(status, dto.APIResponse{Code: code, Message: err.Error()})
@@ -78,7 +80,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		return
 	}
 
-	user, pair, err := h.authService.Refresh(c.Request.Context(), req.RefreshToken)
+	user, pair, err := h.authService.Refresh(c.Request.Context(), req.RefreshToken, deviceInfoFromRequest(c))
 	if err != nil {
 		status, code := mapAuthError(err)
 		c.JSON(status, dto.APIResponse{Code: code, Message: err.Error()})
@@ -151,6 +153,42 @@ func (h *AuthHandler) CancelDeregister(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "deregistration cancelled"})
 }
 
+// ListSessions handles GET /api/v1/auth/sessions (device management, plan A22).
+func (h *AuthHandler) ListSessions(c *gin.Context) {
+	uid, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	list, err := h.authService.ListSessions(c.Request.Context(), uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	out := make([]dto.UserSessionDTO, 0, len(list))
+	for i := range list {
+		out = append(out, toSessionDTO(&list[i]))
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: dto.SessionsResponse{Sessions: out}})
+}
+
+// DeleteSession handles DELETE /api/v1/auth/sessions/:id (plan A22).
+func (h *AuthHandler) DeleteSession(c *gin.Context) {
+	uid, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid session id"})
+		return
+	}
+	if err := h.authService.DeleteSession(c.Request.Context(), uid, id); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "session revoked"})
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 // userIDFromContext reads the user id injected by the AuthJWT middleware.
@@ -166,6 +204,68 @@ func userIDFromContext(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func toSessionDTO(s *model.UserSession) dto.UserSessionDTO {
+	return dto.UserSessionDTO{
+		ID:           s.ID,
+		DeviceName:   s.DeviceName,
+		DeviceType:   s.DeviceType,
+		IP:           s.IP,
+		LastActiveAt: s.LastActiveAt,
+		CreatedAt:    s.CreatedAt,
+		ExpiresAt:    s.ExpiresAt,
+	}
+}
+
+// deviceInfoFromRequest derives session metadata from the request. The
+// desktop app is recognised by its Electron User-Agent; mobile by common
+// mobile tokens; everything else counts as web.
+func deviceInfoFromRequest(c *gin.Context) service.DeviceInfo {
+	ua := c.Request.UserAgent()
+	lower := strings.ToLower(ua)
+	info := service.DeviceInfo{
+		DeviceName: deviceNameFromUA(ua),
+		IP:         c.ClientIP(),
+	}
+	switch {
+	case strings.Contains(lower, "electron") || strings.Contains(lower, "inkbloom-desktop"):
+		info.DeviceType = model.DeviceDesktop
+	case strings.Contains(lower, "mobile") || strings.Contains(lower, "android") ||
+		strings.Contains(lower, "iphone") || strings.Contains(lower, "ipad"):
+		info.DeviceType = model.DeviceMobile
+	default:
+		info.DeviceType = model.DeviceWeb
+	}
+	if info.DeviceName == "" {
+		info.DeviceName = "未知设备"
+	}
+	return info
+}
+
+// deviceNameFromUA extracts a short human-readable device label from a
+// User-Agent string, falling back to the raw string when unrecognised.
+func deviceNameFromUA(ua string) string {
+	lower := strings.ToLower(ua)
+	switch {
+	case strings.Contains(lower, "electron") || strings.Contains(lower, "inkbloom-desktop"):
+		return "桌面客户端"
+	case strings.Contains(lower, "edg"):
+		return "Edge 浏览器"
+	case strings.Contains(lower, "chrome"):
+		return "Chrome 浏览器"
+	case strings.Contains(lower, "firefox"):
+		return "Firefox 浏览器"
+	case strings.Contains(lower, "safari"):
+		return "Safari 浏览器"
+	case strings.Contains(lower, "wechat") || strings.Contains(lower, "micromessenger"):
+		return "微信"
+	default:
+		if len(ua) > 60 {
+			return ua[:60]
+		}
+		return ua
+	}
 }
 
 func toUserDTO(u *model.User) dto.UserDTO {

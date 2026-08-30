@@ -146,6 +146,7 @@ func main() {
 	tokenMgr := authtoken.NewManager(cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
 	smsProvider := sms.NewDevProvider(logger)
 	userRepo := repository.NewUserRepository(db)
+	userSessionRepo := repository.NewUserSessionRepository(db)
 
 	// Initialize M3 billing (task #39): subscription state machine + payment
 	// orders. Only the sandbox channel is open; alipay/wechat are TODO stubs.
@@ -167,7 +168,7 @@ func main() {
 	tokenOrderRepo := repository.NewTokenOrderRepository(db)
 	tokenService := service.NewTokenService(tokenAccountRepo, tokenLedgerRepo, tokenOrderRepo, logger)
 
-	authService := service.NewAuthService(userRepo, kv, tokenMgr, smsProvider, subService, tokenService, cfg.Admin.Phones, logger)
+	authService := service.NewAuthService(userRepo, kv, tokenMgr, userSessionRepo, smsProvider, subService, tokenService, cfg.Admin.Phones, logger)
 
 	// M5 back-office (task #49): admin endpoints + the per-request account
 	// state guard (ban enforcement + admin role gate, 60s cached).
