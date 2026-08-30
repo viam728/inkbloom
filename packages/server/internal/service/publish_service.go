@@ -233,6 +233,51 @@ func (s *PublishService) UnpublishChapter(ctx context.Context, userID, pid int64
 	return s.workRepo.DeleteChapter(ctx, userID, pid)
 }
 
+// GetWorkStats returns the author's read-statistics for a work (plan A23):
+// follow count, distinct readers, and the per-chapter read-through funnel.
+func (s *PublishService) GetWorkStats(ctx context.Context, userID, workID int64) (*dto.WorkStatsResponse, error) {
+	w, err := s.workRepo.WorkByID(ctx, userID, workID)
+	if err != nil {
+		return nil, err
+	}
+	if w == nil {
+		return nil, ErrNotFound
+	}
+	chapters, err := s.workRepo.ListChaptersByWork(ctx, userID, workID)
+	if err != nil {
+		return nil, err
+	}
+	dist, err := s.readRepo.ReadingDistribution(ctx, workID)
+	if err != nil {
+		return nil, err
+	}
+	readers, err := s.readRepo.DistinctReaders(ctx, workID)
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[int64]int64, len(dist))
+	for _, d := range dist {
+		counts[d.ChapterID] = d.ReaderCount
+	}
+
+	out := &dto.WorkStatsResponse{
+		WorkID:      workID,
+		FollowCount: int64(w.FollowCount),
+		ReaderCount: readers,
+		Chapters:    make([]dto.ChapterStatsDTO, 0, len(chapters)),
+	}
+	for i := range chapters {
+		out.Chapters = append(out.Chapters, dto.ChapterStatsDTO{
+			ChapterID:   chapters[i].ID,
+			Title:       chapters[i].Title,
+			Position:    chapters[i].Position,
+			ReaderCount: counts[chapters[i].ID],
+		})
+	}
+	return out, nil
+}
+
 // UpdateVisibility changes a work's visibility without touching its chapters.
 func (s *PublishService) UpdateVisibility(ctx context.Context, userID, workID int64, visibility string) (*dto.WorkResponse, error) {
 	w, err := s.workRepo.WorkByID(ctx, userID, workID)
@@ -281,6 +326,15 @@ func (s *PublishService) UpsertProgress(ctx context.Context, userID, workID, cha
 }
 
 func (s *PublishService) Follow(ctx context.Context, userID, workID int64, notify bool) error {
+	existing, err := s.workRepo.GetFollow(ctx, userID, workID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		// Already following: only refresh the notify preference. Do NOT bump
+		// the counter again, otherwise toggling follow on/off inflates it.
+		return s.workRepo.UpsertFollow(ctx, userID, &model.ReaderFollow{WorkID: workID, Notify: notify})
+	}
 	if err := s.workRepo.UpsertFollow(ctx, userID, &model.ReaderFollow{WorkID: workID, Notify: notify}); err != nil {
 		return err
 	}
@@ -288,6 +342,13 @@ func (s *PublishService) Follow(ctx context.Context, userID, workID int64, notif
 }
 
 func (s *PublishService) Unfollow(ctx context.Context, userID, workID int64) error {
+	existing, err := s.workRepo.GetFollow(ctx, userID, workID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return nil // nothing to unfollow
+	}
 	if err := s.workRepo.DeleteFollow(ctx, userID, workID); err != nil {
 		return err
 	}

@@ -117,6 +117,20 @@ func (h *PublishHandler) UnpublishChapter(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok"})
 }
 
+// GetWorkStats handles GET /api/v1/publish/works/:wid/stats (plan A23).
+func (h *PublishHandler) GetWorkStats(c *gin.Context) {
+	wid, ok := parseID(c, "wid")
+	if !ok {
+		return
+	}
+	stats, err := h.ps.GetWorkStats(c.Request.Context(), GetUserID(c), wid)
+	if err != nil {
+		h.respondPublishError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: stats})
+}
+
 // respondPublishError maps domain errors to HTTP status codes.
 func (h *PublishHandler) respondPublishError(c *gin.Context, err error) {
 	switch {

@@ -67,6 +67,18 @@ type PublishedReadRepository interface {
 	// ChapterPublic returns one visible chapter. scheduled_at in the future
 	// returns nil (404), even for the author — the whole point of scheduling.
 	ChapterPublic(ctx context.Context, pid int64) (*model.PublishedChapter, error)
+	// ReadingDistribution returns, per published chapter, how many readers'
+	// latest position falls there — the read-through funnel (plan A23).
+	ReadingDistribution(ctx context.Context, workID int64) ([]ReadingDistributionRow, error)
+	// DistinctReaders returns the number of distinct readers with any progress.
+	DistinctReaders(ctx context.Context, workID int64) (int64, error)
+}
+
+// ReadingDistributionRow is a projection of reading_progress grouped by
+// chapter (plan A23).
+type ReadingDistributionRow struct {
+	ChapterID   int64
+	ReaderCount int64
 }
 
 type publishedRepository struct {
@@ -233,7 +245,7 @@ func (r *publishedRepository) UpsertFollow(ctx context.Context, userID int64, f 
 	f.UserID = userID
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "work_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"notify", "created_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"notify"}),
 	}).Create(f).Error
 }
 
@@ -315,4 +327,26 @@ func (r *publishedReadRepository) ChapterPublic(ctx context.Context, pid int64) 
 		return nil, nil
 	}
 	return &c, nil
+}
+
+func (r *publishedReadRepository) ReadingDistribution(ctx context.Context, workID int64) ([]ReadingDistributionRow, error) {
+	var rows []ReadingDistributionRow
+	err := r.db.WithContext(ctx).
+		Model(&model.ReadingProgress{}).
+		Select("chapter_id, COUNT(*) AS reader_count").
+		Where("work_id = ?", workID).
+		Group("chapter_id").
+		Order("chapter_id ASC").
+		Scan(&rows).Error
+	return rows, err
+}
+
+func (r *publishedReadRepository) DistinctReaders(ctx context.Context, workID int64) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).
+		Model(&model.ReadingProgress{}).
+		Where("work_id = ?", workID).
+		Select("COUNT(DISTINCT user_id)").
+		Scan(&n).Error
+	return n, err
 }

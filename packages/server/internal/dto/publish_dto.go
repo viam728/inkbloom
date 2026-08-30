@@ -63,3 +63,23 @@ type PublishedChapterResponse struct {
 	ScheduledAt  *time.Time `json:"scheduled_at,omitempty"`
 	PublishedAt  time.Time  `json:"published_at"`
 }
+
+// ChapterStatsDTO is one bar of the read-through funnel (plan A23).
+// ReaderCount is how many readers' latest reading position currently sits on
+// this chapter — an honest proxy for the drop-off funnel given the
+// progress model stores only each reader's last position.
+type ChapterStatsDTO struct {
+	ChapterID   int64  `json:"chapter_id"`
+	Title       string `json:"title"`
+	Position    int    `json:"position"`
+	ReaderCount int64  `json:"reader_count"`
+}
+
+// WorkStatsResponse is the author dashboard's read-statistics payload (A23).
+type WorkStatsResponse struct {
+	WorkID      int64             `json:"work_id"`
+	FollowCount int64             `json:"follow_count"`
+	// ReaderCount is the number of distinct readers who have any progress.
+	ReaderCount int64             `json:"reader_count"`
+	Chapters    []ChapterStatsDTO `json:"chapters"`
+}

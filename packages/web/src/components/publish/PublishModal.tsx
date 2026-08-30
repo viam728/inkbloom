@@ -9,6 +9,7 @@ import {
 import type { PublishedWork } from '@/types/published';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
+import WorkStatsPanel from './WorkStatsPanel';
 
 /**
  * 作者侧发布弹窗（业务方案 v3 E4，施工任务 A20）
@@ -220,6 +221,11 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                   </a>
                 </div>
                 <span className="text-[10px] text-neutral-500">关注 {published.follow_count}</span>
+              </div>
+
+              {/* 读者数据回流（A23） */}
+              <div className="px-3 py-2.5 rounded-lg bg-white/4 border border-white/6">
+                <WorkStatsPanel workId={published.id} />
               </div>
 
               {/* 章节列表 */}

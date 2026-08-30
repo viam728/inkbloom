@@ -6,6 +6,7 @@ import type {
   PublishedWork,
   PublishedChapter,
   ReadingProgress,
+  WorkStats,
 } from '@/types/published';
 
 /**
@@ -78,6 +79,12 @@ export async function publishChapter(
 
 export async function unpublishChapter(pid: number): Promise<void> {
   await apiClient.delete(`/publish/chapters/${pid}`);
+}
+
+// ── 作者侧阅读数据（A23）────────────────────────────────────────────────
+
+export async function getWorkStats(wid: number): Promise<WorkStats> {
+  return (await apiClient.get(`/publish/works/${wid}/stats`)) as unknown as WorkStats;
 }
 
 // ── 阅读进度与追更（需登录）─────────────────────────────────────────────

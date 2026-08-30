@@ -369,6 +369,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.DELETE("/publish/works/:wid", h.Publish.Unpublish)
 			api.POST("/publish/works/:wid/chapters", h.Publish.PublishChapter)
 			api.DELETE("/publish/chapters/:pid", h.Publish.UnpublishChapter)
+			api.GET("/publish/works/:wid/stats", h.Publish.GetWorkStats)
 		}
 
 		// E4 reader logged-in endpoints (plan A18): progress & follows.

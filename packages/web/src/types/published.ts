@@ -56,3 +56,19 @@ export interface ReadingProgress {
   chapter_id: number;
   position: number;
 }
+
+/** 作者侧单章读者漏斗（plan A23） */
+export interface ChapterStats {
+  chapter_id: number;
+  title: string;
+  position: number;
+  reader_count: number;
+}
+
+/** 作者侧作品阅读数据（plan A23） */
+export interface WorkStats {
+  work_id: number;
+  follow_count: number;
+  reader_count: number;
+  chapters: ChapterStats[];
+}
