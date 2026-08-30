@@ -50,6 +50,11 @@ func automigrateModels() []interface{} {
 		// E2 foreshadow tracking (business plan v3, plan A10).
 		&model.Foreshadow{},
 		&model.CharacterState{},
+		// E4 publishing & reading (business plan v3, plan A16).
+		&model.PublishedWork{},
+		&model.PublishedChapter{},
+		&model.ReadingProgress{},
+		&model.ReaderFollow{},
 	}
 }
 
