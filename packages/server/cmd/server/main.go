@@ -244,6 +244,9 @@ func main() {
 	eventRepo := repository.NewEventRepository(db)
 	// E2 foreshadow tracking (business plan v3, plan A10/A12).
 	foreshadowRepo := repository.NewForeshadowRepository(db)
+	// E4 publishing & reading (business plan v3, plan A16).
+	publishedRepo := repository.NewPublishedRepository(db)
+	publishedReadRepo := repository.NewPublishedReadRepository(db)
 
 	// Initialize services
 	novelService := service.NewNovelService(novelRepo, chapterRepo, cacheMgr, docRepo)
@@ -284,6 +287,8 @@ func main() {
 	eventHandler := handler.NewEventHandler(eventService, tokenMgr)
 	// E2 foreshadow tracking (plan A12).
 	foreshadowHandler := handler.NewForeshadowHandler(foreshadowService)
+	// E4 publish/reader handlers are instantiated after publishService,
+	// which itself must wait for csChecker (see below).
 	portraitHandler := handler.NewPortraitHandler(fileStorage)
 	// Unified image store (task #57): ingest/dedupe/list/delete gallery
 	// images under /api/v1/images.
@@ -310,6 +315,17 @@ func main() {
 		sugar.Warn("content safety gateway DISABLED in cloud mode — enable before production launch")
 	}
 	csChecker = contentsafety.NewRecordingChecker(csChecker, db, logger)
+
+	// E4 publishing (plan A17). Constructed after csChecker because
+	// PublishChapter runs every chapter through the safety checker before
+	// storing the public copy. historyService provides the milestone
+	// snapshot written before each published chapter (so "which draft state
+	// did readers see" stays answerable).
+	publishService := service.NewPublishService(publishedRepo, publishedReadRepo, chapterRepo, novelRepo, chapterVersionRepo, tokenLedgerRepo, historyService, csChecker, cfg.IsLocal())
+	// E4 publishing & reading (plan A17/A18). Reader reuses publishService
+	// for the cross-user reads — one service, two handlers, no duplication.
+	publishHandler := handler.NewPublishHandler(publishService)
+	readerHandler := handler.NewReaderHandler(publishService)
 
 	// Local mode (v2 §3.2): the LocalBus doubles as the task feed — route
 	// outbox-published creation events into the engine's in-process queue.
@@ -365,6 +381,8 @@ func main() {
 		History:      historyHandler,
 		Events:       eventHandler,
 		Foreshadow:   foreshadowHandler,
+		Publish:       publishHandler,
+		Reader:        readerHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

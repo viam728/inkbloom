@@ -34,6 +34,12 @@ type ChapterVersionRepository interface {
 	// CountByChapter counts every snapshot of one chapter (any kind). Used to
 	// drive list pagination totals.
 	CountByChapter(ctx context.Context, userID, chapterID int64) (int64, error)
+	// ExistsAIMark reports whether the chapter has at least one ai_rewrite
+	// snapshot. Drives the AIInspired disclosure flag when publishing (A17):
+	// an ai_rewrite snapshot is written right before every AI rewrite, so its
+	// presence is a precise, chapter-level signal that the author used AI on
+	// this specific chapter.
+	ExistsAIMark(ctx context.Context, userID, chapterID int64) (bool, error)
 	// CountSince counts snapshots created at or after `since` for the user
 	// (across all chapters). Used by the retention sweep.
 	CountSince(ctx context.Context, userID int64, since time.Time) (int64, error)
@@ -184,6 +190,16 @@ func (r *chapterVersionRepository) CountByChapter(ctx context.Context, userID, c
 		Where("chapter_id = ?", chapterID).
 		Count(&n).Error
 	return n, err
+}
+
+func (r *chapterVersionRepository) ExistsAIMark(ctx context.Context, userID, chapterID int64) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).
+		Model(&model.ChapterVersion{}).
+		Scopes(scope.ForUser(userID)).
+		Where("chapter_id = ? AND kind = ?", chapterID, model.VersionKindAIMark).
+		Count(&n).Error
+	return n > 0, err
 }
 
 func (r *chapterVersionRepository) CountSince(ctx context.Context, userID int64, since time.Time) (int64, error) {

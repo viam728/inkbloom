@@ -58,6 +58,12 @@ type Handlers struct {
 	// Foreshadow serves the E2 foreshadow tracking endpoints (plan A12).
 	// Optional.
 	Foreshadow *handler.ForeshadowHandler
+	// Publish serves the E4 author-facing publishing endpoints (plan A17).
+	// Optional.
+	Publish *handler.PublishHandler
+	// Reader serves the E4 public reading surface (plan A18): anonymous
+	// reads of published works plus logged-in progress/follows. Optional.
+	Reader *handler.ReaderHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -230,6 +236,20 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		}
 	}
 
+	// Public reading surface (plan A18): anonymous GET reads of published
+	// works/chapters. Registered before AuthJWT on purpose — a reader who
+	// never logs in is the whole point. Rate-limited per-IP via ScopeAnon so
+	// the reading traffic cannot drown the authenticated API.
+	if h.Reader != nil {
+		readerGroup := engine.Group("/api/v1/read")
+		if h.RateLimiter != nil {
+			readerGroup.Use(h.RateLimiter.Scope(middleware.ScopeAnon))
+		}
+		readerGroup.GET("/works/:slug", h.Reader.GetWork)
+		readerGroup.GET("/works/:slug/chapters", h.Reader.ListChapters)
+		readerGroup.GET("/chapters/:pid", h.Reader.GetChapter)
+	}
+
 	// Analytics ingestion (plan A40): intentionally anonymous — a reader who
 	// never logs in is exactly the funnel P1 is measured on. Registered before
 	// AuthJWT so the endpoint stays reachable without a session.
@@ -335,6 +355,27 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.POST("/novels/:id/foreshadows/scan", h.Foreshadow.ScanChapter)
 			api.PUT("/foreshadows/:fid", h.Foreshadow.UpdateStatus)
 			api.DELETE("/foreshadows/:fid", h.Foreshadow.Delete)
+		}
+
+		// E4 publishing (plan A17): author-facing endpoints for publishing
+		// works and chapters.
+		if h.Publish != nil {
+			api.GET("/publish/works", h.Publish.ListMyWorks)
+			api.POST("/publish/works", h.Publish.CreateWork)
+			api.PUT("/publish/works/:wid", h.Publish.UpdateWork)
+			api.DELETE("/publish/works/:wid", h.Publish.Unpublish)
+			api.POST("/publish/works/:wid/chapters", h.Publish.PublishChapter)
+			api.DELETE("/publish/chapters/:pid", h.Publish.UnpublishChapter)
+		}
+
+		// E4 reader logged-in endpoints (plan A18): progress & follows.
+		// The anonymous reads are registered above in the read group; these
+		// are the writes that need a user_id.
+		if h.Reader != nil {
+			api.GET("/read/progress", h.Reader.GetProgress)
+			api.PUT("/read/progress", h.Reader.UpsertProgress)
+			api.POST("/read/follows", h.Reader.Follow)
+			api.DELETE("/read/follows/:wid", h.Reader.Unfollow)
 		}
 
 		// Token billing (M4, task #43): balance / ledger / stats / orders.

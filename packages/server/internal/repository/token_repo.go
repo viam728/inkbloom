@@ -256,6 +256,14 @@ type TokenLedgerRepository interface {
 	// (task #46: both dialects must agree on day boundaries; gaps are filled
 	// by the caller).
 	ConsumeSeriesByDay(ctx context.Context, userID int64, since time.Time, tz string) ([]DailyConsumption, error)
+	// HasReason reports whether the user has any ledger row of the given
+	// reason. Used by the publish service as the user-level fallback for the
+	// AIInspired flag (A17): when no chapter-level ai_rewrite signal is
+	// available, any past AI call means the author has used generative AI on
+	// the platform, so the work is disclosed as AI-inspired. The fallback is
+	// imprecise — it can flag a work whose AI edit went into a different
+	// piece — and that limitation is documented on the publish service.
+	HasReason(ctx context.Context, userID int64, reason string) (bool, error)
 }
 
 // DailyConsumption is the consumed total of one calendar day.
@@ -284,6 +292,15 @@ func (r *tokenLedgerRepository) ListByUser(ctx context.Context, userID int64, li
 		Limit(limit).
 		Find(&rows).Error
 	return rows, err
+}
+
+func (r *tokenLedgerRepository) HasReason(ctx context.Context, userID int64, reason string) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).
+		Model(&model.TokenLedger{}).
+		Where("user_id = ? AND reason = ?", userID, reason).
+		Count(&n).Error
+	return n > 0, err
 }
 
 func (r *tokenLedgerRepository) ConsumeSeriesByDay(ctx context.Context, userID int64, since time.Time, tz string) ([]DailyConsumption, error) {

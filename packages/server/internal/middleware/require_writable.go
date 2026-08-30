@@ -30,6 +30,11 @@ var writableExemptPrefixes = []string{
 	// Feedback submission stays reachable while read-only: it is a write
 	// that carries no creative content (task #51, M6).
 	"/api/v1/feedback",
+	// Reading progress & follows stay reachable while read-only: a reader
+	// whose own subscription has lapsed must still be able to bookmark
+	// progress on someone else's public work (plan A18). The publish
+	// endpoints are NOT exempt — publishing is creative authoring.
+	"/api/v1/read",
 }
 
 // RequireWritable rejects write-method (POST/PUT/DELETE/PATCH) business
