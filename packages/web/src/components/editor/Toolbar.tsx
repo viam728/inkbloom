@@ -18,6 +18,7 @@ import {
   Redo2,
   ImagePlus,
   Download,
+  Send,
   Activity,
   BarChart3,
   Lightbulb,
@@ -29,6 +30,7 @@ import {
   History,
 } from 'lucide-react';
 import ExportModal from '@/components/export/ExportModal';
+import PublishModal from '@/components/publish/PublishModal';
 import { useUIStore } from '@/stores/ui-store';
 import type { MediaPlatform } from '@/types/media';
 import type { EditorVariant } from './TipTapEditor';
@@ -71,6 +73,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
   const isNovel = variant === 'novel';
   const isPlain = preset === 'plain';
   const [exportOpen, setExportOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
   const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
   const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
@@ -329,6 +332,16 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         <Download className="w-3.5 h-3.5" />
         导出
       </button>
+      {/* 发布到 InkBloom（业务方案 v3 E4，施工任务 A20） */}
+      <button
+        type="button"
+        onClick={() => setPublishOpen(true)}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-brand-600/20 text-brand-300 hover:bg-brand-600/30 transition-colors"
+        title="发布到 InkBloom 公开阅读"
+      >
+        <Send className="w-3.5 h-3.5" />
+        发布
+      </button>
       <ExportModal
         open={exportOpen}
         onClose={() => setExportOpen(false)}
@@ -338,6 +351,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         onSelectPlatform={onSelectPlatform}
         onAdapt={onAdapt}
       />
+      <PublishModal open={publishOpen} onClose={() => setPublishOpen(false)} />
         </>
       )}
     </div>

@@ -1,0 +1,303 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock } from 'lucide-react';
+import { useNovelStore } from '@/stores/novel-store';
+import {
+  listMyPublishedWorks,
+  publishWork,
+  publishChapter,
+} from '@/services/reader-client';
+import type { PublishedWork } from '@/types/published';
+import { track } from '@/services/analytics';
+import { toast } from '@/components/common/Toast';
+
+/**
+ * 作者侧发布弹窗（业务方案 v3 E4，施工任务 A20）
+ *
+ * 两阶段：
+ *  1. 作品未发布 → 填写标题/简介/可见性，创建 PublishedWork
+ *  2. 作品已发布 → 勾选章节发布（立即或定时），展示阅读链接
+ *
+ * 「草稿有改动」对比留待后端补 author-facing 的 published-chapters 端点后
+ * 再接——当前先保证核心发布链路可用。
+ */
+const VIS_OPTIONS = [
+  { id: 'public', label: '公开', icon: Globe, desc: '出现在发现页，任何人可读' },
+  { id: 'unlisted', label: '链接可见', icon: Link2, desc: '不进发现页，持有链接可读' },
+  { id: 'private', label: '私密', icon: Lock, desc: '仅自己可见' },
+] as const;
+
+const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const chapters = useNovelStore((s) => s.chapters);
+
+  const [published, setPublished] = useState<PublishedWork | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+
+  // 作品级表单
+  const [title, setTitle] = useState('');
+  const [synopsis, setSynopsis] = useState('');
+  const [visibility, setVisibility] = useState<'public' | 'unlisted' | 'private'>('public');
+
+  // 章节选择
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [useSchedule, setUseSchedule] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState('');
+
+  // 阅读链接
+  const [readUrl, setReadUrl] = useState('');
+
+  const reset = useCallback(() => {
+    setPublished(null);
+    setSelected(new Set());
+    setUseSchedule(false);
+    setScheduledAt('');
+    setReadUrl('');
+  }, []);
+
+  // 打开时加载发布状态
+  useEffect(() => {
+    if (!open || !currentNovel) return;
+    setTitle(currentNovel.title || '');
+    setSynopsis(currentNovel.description || '');
+    setVisibility('public');
+    reset();
+    setLoading(true);
+    listMyPublishedWorks()
+      .then((works) => {
+        const found = works.find((w) => w.novel_id === currentNovel.id);
+        if (found) {
+          setPublished(found);
+          setReadUrl(`${window.location.origin}/read/${found.slug}`);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [open, currentNovel, reset]);
+
+  const handlePublishWork = useCallback(async () => {
+    if (!currentNovel || !title.trim()) return;
+    setPublishing(true);
+    try {
+      const w = await publishWork({
+        novel_id: currentNovel.id,
+        title: title.trim(),
+        synopsis: synopsis.trim(),
+        visibility,
+      });
+      setPublished(w);
+      setReadUrl(`${window.location.origin}/read/${w.slug}`);
+      track('publish_work', { work_id: w.id, visibility });
+      toast.show('作品已发布，现在可以选择章节', 'success');
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : '发布失败', 'error');
+    } finally {
+      setPublishing(false);
+    }
+  }, [currentNovel, title, synopsis, visibility]);
+
+  const handlePublishChapters = useCallback(async () => {
+    if (!published || selected.size === 0) return;
+    setPublishing(true);
+    try {
+      const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
+      let count = 0;
+      for (const cid of selected) {
+        await publishChapter(published.id, { chapter_id: cid, scheduled_at: scheduled });
+        count++;
+        track('publish_chapter', { work_id: published.id, chapter_id: cid });
+      }
+      toast.show(`已发布 ${count} 章${scheduled ? '（定时）' : ''}`, 'success');
+      setSelected(new Set());
+      setUseSchedule(false);
+      setScheduledAt('');
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : '章节发布失败', 'error');
+    } finally {
+      setPublishing(false);
+    }
+  }, [published, selected, useSchedule, scheduledAt]);
+
+  const toggleChapter = (id: number) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-surface-1 rounded-2xl border border-white/8 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 头部 */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/6">
+          <h2 className="text-sm font-semibold text-neutral-100">发布到 InkBloom</h2>
+          <button type="button" onClick={onClose} className="p-1 rounded text-neutral-500 hover:text-neutral-200">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 size={20} className="animate-spin text-neutral-500" />
+            </div>
+          ) : !published ? (
+            /* ── 阶段 1：发布作品 ── */
+            <>
+              <div>
+                <label className="block text-xs text-neutral-400 mb-1.5">作品标题</label>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/8 text-neutral-200 outline-none focus:border-brand-500/50"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-neutral-400 mb-1.5">简介</label>
+                <textarea
+                  value={synopsis}
+                  onChange={(e) => setSynopsis(e.target.value)}
+                  rows={3}
+                  placeholder="一句话吸引读者…"
+                  className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/8 text-neutral-200 placeholder:text-neutral-600 outline-none focus:border-brand-500/50 resize-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-neutral-400 mb-2">可见性</label>
+                <div className="space-y-1.5">
+                  {VIS_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setVisibility(opt.id)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors ${
+                        visibility === opt.id
+                          ? 'bg-brand-600/20 border border-brand-500/30'
+                          : 'bg-white/4 border border-white/6 hover:bg-white/6'
+                      }`}
+                    >
+                      <opt.icon size={14} className={visibility === opt.id ? 'text-brand-300' : 'text-neutral-400'} />
+                      <span className="text-xs text-neutral-200">{opt.label}</span>
+                      <span className="text-[10px] text-neutral-500">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handlePublishWork()}
+                disabled={!title.trim() || publishing}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-500 disabled:opacity-50 transition-colors"
+              >
+                {publishing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                发布作品
+              </button>
+            </>
+          ) : (
+            /* ── 阶段 2：选择章节发布 ── */
+            <>
+              {/* 已发布信息 + 阅读链接 */}
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/20">
+                <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-emerald-300">作品已发布</p>
+                  <a
+                    href={readUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-emerald-400/70 hover:text-emerald-300 flex items-center gap-1"
+                  >
+                    {readUrl.replace(window.location.origin, '')}
+                    <ExternalLink size={10} />
+                  </a>
+                </div>
+                <span className="text-[10px] text-neutral-500">关注 {published.follow_count}</span>
+              </div>
+
+              {/* 章节列表 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-neutral-400">选择要发布的章节</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selected.size === chapters.length) setSelected(new Set());
+                      else setSelected(new Set(chapters.map((c) => c.id)));
+                    }}
+                    className="text-[10px] text-brand-400 hover:text-brand-300"
+                  >
+                    {selected.size === chapters.length ? '取消全选' : '全选'}
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-[240px] overflow-y-auto">
+                  {chapters.map((ch) => {
+                    const checked = selected.has(ch.id);
+                    return (
+                      <label
+                        key={ch.id}
+                        className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                          checked ? 'bg-brand-600/15' : 'bg-white/4 hover:bg-white/6'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleChapter(ch.id)}
+                          className="w-3.5 h-3.5 accent-brand-500 cursor-pointer"
+                        />
+                        <span className="text-xs text-neutral-200 flex-1 truncate">{ch.title}</span>
+                        <span className="text-[10px] text-neutral-500">{ch.word_count}字</span>
+                      </label>
+                    );
+                  })}
+                  {chapters.length === 0 && (
+                    <p className="text-xs text-neutral-500 text-center py-4">还没有章节</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 定时发布 */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useSchedule}
+                  onChange={(e) => setUseSchedule(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-brand-500 cursor-pointer"
+                />
+                <span className="text-xs text-neutral-400">定时发布</span>
+                {useSchedule && (
+                  <input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                    className="ml-2 px-2 py-1 text-xs rounded bg-white/5 border border-white/8 text-neutral-200 outline-none"
+                  />
+                )}
+              </label>
+
+              <button
+                type="button"
+                onClick={() => void handlePublishChapters()}
+                disabled={selected.size === 0 || publishing || (useSchedule && !scheduledAt)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-500 disabled:opacity-50 transition-colors"
+              >
+                {publishing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                发布 {selected.size > 0 ? `${selected.size} 章` : ''}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PublishModal;
