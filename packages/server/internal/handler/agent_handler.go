@@ -35,7 +35,7 @@ func (h *AgentHandler) Chat(c *gin.Context) {
 		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
 	}
 
-	content, executed, err := h.agentSvc.Run(c.Request.Context(), GetUserID(c), msgs)
+	content, executed, err := h.agentSvc.Run(c.Request.Context(), GetUserID(c), req.NovelID, msgs)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, dto.APIResponse{Code: 502, Message: "agent failed: " + err.Error()})
 		return

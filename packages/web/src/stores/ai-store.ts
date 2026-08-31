@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { streamInline, streamRewrite } from '@/services/sse-client';
 import { agentChat } from '@/services/agent-chat-client';
+import { useNovelStore } from '@/stores/novel-store';
 import type { AIMessage, RewriteAction } from '@/types';
 
 interface RewriteResult {
@@ -83,7 +84,9 @@ export const useAIStore = create<AIStore>((set, get) => ({
     try {
       // 走对话式创作 Agent：一次完整 Agent 循环，Agent 自主决定调用工具
       // （create_novel / create_chapter / write_chapter / list_novels）。
-      const result = await agentChat(history);
+      // 传入当前选中作品，起稿类工具默认作用于该作品（问题2）。
+      const currentNovelId = useNovelStore.getState().currentNovel?.id ?? 0;
+      const result = await agentChat(history, currentNovelId);
 
       const toolExecutions = (result.tool_executions ?? []).map((t) => ({
         tool: t.tool,

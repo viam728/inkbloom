@@ -202,14 +202,20 @@ const StoryWorkflowPanel: React.FC = () => {
               </label>
             </div>
 
-            <button
-              onClick={handleCreate}
-              disabled={!currentNovel}
-              className="w-full py-2 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium transition-all disabled:from-neutral-700 disabled:to-neutral-700 disabled:text-neutral-500"
-            >
-              <Wand2 size={14} className="inline mr-1.5" />
-              创建创作任务
-            </button>
+            {currentNovel ? (
+              <button
+                onClick={handleCreate}
+                className="w-full py-2 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium transition-all"
+              >
+                <Wand2 size={14} className="inline mr-1.5" />
+                为「{currentNovel.title}」创建创作任务
+              </button>
+            ) : (
+              <div className="text-center py-3 px-2 rounded-lg bg-white/3 border border-dashed border-white/10">
+                <p className="text-xs text-neutral-400 mb-1">起稿需要先选定一部作品</p>
+                <p className="text-[11px] text-neutral-600">请在左侧「作品」列表中选择或新建一部作品，再回来起稿</p>
+              </div>
+            )}
           </div>
 
           {/* 任务列表 */}

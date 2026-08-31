@@ -116,9 +116,15 @@ const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作�
 // Run executes one Agent turn: given the conversation messages, it loops with
 // the LLM (execute tool calls, feed results back) until the model returns a
 // final answer. Returns the final answer text and the executed tool summary.
-func (s *AgentService) Run(ctx context.Context, userID int64, messages []map[string]string) (string, []map[string]any, error) {
+// novelID is the author's currently-selected work (0 when none): create/write
+// tools fall back to it so the Agent never drafts without a target work.
+func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, messages []map[string]string) (string, []map[string]any, error) {
 	msgs := make([]map[string]any, 0, len(messages)+1)
-	msgs = append(msgs, map[string]any{"role": "system", "content": agentSystemPrompt})
+	sys := agentSystemPrompt
+	if novelID > 0 {
+		sys += fmt.Sprintf(" 用户当前正在编辑的作品 ID 是 %d；若用户未明确指定作品，创建章节/撰写正文默认作用于该作品。", novelID)
+	}
+	msgs = append(msgs, map[string]any{"role": "system", "content": sys})
 	for _, m := range messages {
 		msgs = append(msgs, map[string]any{"role": m["role"], "content": m["content"]})
 	}
@@ -139,7 +145,7 @@ func (s *AgentService) Run(ctx context.Context, userID int64, messages []map[str
 		}
 
 		for _, tc := range resp.ToolCalls {
-			result := s.executeTool(ctx, userID, tc)
+			result := s.executeTool(ctx, userID, novelID, tc)
 			executed = append(executed, map[string]any{
 				"tool":   tc.Name,
 				"args":   tc.Arguments,
@@ -208,8 +214,9 @@ func (s *AgentService) callLLM(ctx context.Context, messages []map[string]any) (
 }
 
 // executeTool dispatches a tool call to the real service layer and returns a
-// compact JSON result string fed back to the LLM.
-func (s *AgentService) executeTool(ctx context.Context, userID int64, tc agentToolCall) string {
+// compact JSON result string fed back to the LLM. novelID is the author's
+// current work; create/write tools fall back to it when the LLM omits novel_id.
+func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID int64, tc agentToolCall) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
 		args = map[string]any{}
@@ -220,6 +227,13 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, tc agentTo
 			return "{}"
 		}
 		return string(b)
+	}
+	// resolveNovelID returns the target novel: explicit arg > current work.
+	resolveNovelID := func() int64 {
+		if n, ok := args["novel_id"].(float64); ok && n > 0 {
+			return int64(n)
+		}
+		return novelID
 	}
 
 	switch tc.Name {
@@ -242,13 +256,16 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, tc agentTo
 		return asJSON(map[string]any{"novel_id": novel.ID, "title": novel.Title})
 
 	case "create_chapter":
-		nid, _ := args["novel_id"].(float64)
+		nid := resolveNovelID()
 		title, _ := args["title"].(string)
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
 		if title == "" {
 			return `{"error":"title 必填"}`
 		}
 		ch, err := s.chapterSvc.CreateChapter(ctx, userID, &dto.CreateChapterRequest{
-			NovelID: int64(nid),
+			NovelID: nid,
 			Title:   title,
 		})
 		if err != nil {
@@ -258,10 +275,13 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, tc agentTo
 		return asJSON(map[string]any{"chapter_id": ch.ID, "title": ch.Title})
 
 	case "write_chapter":
-		nid, _ := args["novel_id"].(float64)
+		nid := resolveNovelID()
 		cid, _ := args["chapter_id"].(float64)
 		instr, _ := args["instruction"].(string)
-		return s.writeChapter(ctx, userID, int64(nid), int64(cid), instr)
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
+		return s.writeChapter(ctx, userID, nid, int64(cid), instr)
 
 	case "list_novels":
 		list, err := s.novelSvc.ListNovels(ctx, userID, 1, 50)

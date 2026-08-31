@@ -1,8 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Send, Sparkles, Trash2, Mic, MicOff, Plus } from 'lucide-react';
+import { Send, Sparkles, Trash2, Mic, MicOff, Paperclip, Wand2 } from 'lucide-react';
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { useToast } from '@/components/common/Toast';
 import MessageBubble from './MessageBubble';
 import ModelSelector from './ModelSelector';
 import { CHAT_SKILLS } from './chat-skills';
@@ -24,6 +25,7 @@ const AIChatPanel: React.FC = () => {
   const fetchNovels = useNovelStore((s) => s.fetchNovels);
   const fetchChapters = useNovelStore((s) => s.fetchChapters);
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
+  const { showToast } = useToast();
 
   const [input, setInput] = useState('');
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
@@ -125,7 +127,7 @@ const AIChatPanel: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
+      {/* Header：Skill + 附件挂在对话窗口头顶 */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/6">
         <div className="flex items-center gap-2">
           <span className="w-6 h-6 rounded-md bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-md shadow-indigo-500/20">
@@ -133,15 +135,65 @@ const AIChatPanel: React.FC = () => {
           </span>
           <span className="text-sm font-medium text-neutral-200">AI 助手</span>
         </div>
-        {messages.length > 0 && (
-          <button
-            onClick={clearMessages}
-            className="p-1 rounded text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-            title="清空对话"
+        <div className="flex items-center gap-1">
+          {/* Skill 菜单（挂对话头） */}
+          <div ref={skillMenuRef} className="relative">
+            <button
+              onClick={() => setSkillMenuOpen((v) => !v)}
+              title="创作 Skill"
+              className={`shrink-0 p-1.5 rounded-lg border transition-all ${skillMenuOpen ? 'bg-brand-600/20 border-brand-500/40 text-brand-300' : 'border-transparent text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10'}`}
+            >
+              <Wand2 size={14} />
+            </button>
+            {skillMenuOpen && (
+              <div className="absolute top-9 right-0 z-50 w-64 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
+                <p className="px-2.5 pt-1.5 pb-1 text-[11px] text-neutral-500">创作 Skill</p>
+                {CHAT_SKILLS.map((skill) => (
+                  <button
+                    key={skill.id}
+                    onClick={() => invokeSkill(skill)}
+                    className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/6 transition-colors text-left"
+                  >
+                    <span className="mt-0.5 text-brand-300 shrink-0">{skill.icon}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-neutral-200 font-medium">{skill.label}</span>
+                      <span className="block text-[11px] text-neutral-500 leading-snug mt-0.5">{skill.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* 附件（多模态输入） */}
+          <label
+            title="添加附件"
+            className="shrink-0 p-1.5 rounded-lg text-neutral-500 hover:text-brand-300 hover:bg-brand-500/10 cursor-pointer transition-colors"
           >
-            <Trash2 size={13} />
-          </button>
-        )}
+            <Paperclip size={14} />
+            <input
+              type="file"
+              multiple
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files && files.length > 0) {
+                  showToast('图片附件已挂载（多模态理解待接入）', 'info');
+                }
+                e.target.value = '';
+              }}
+            />
+          </label>
+          {messages.length > 0 && (
+            <button
+              onClick={clearMessages}
+              className="p-1.5 rounded-lg text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              title="清空对话"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages area */}
@@ -223,38 +275,6 @@ const AIChatPanel: React.FC = () => {
           {/* 底部操作栏 */}
           <div className="flex items-center justify-between px-2 pb-2 relative">
             <div className="flex items-center gap-1">
-              {/* + 号 Skill 菜单（插件形态入口） */}
-              <div ref={skillMenuRef} className="relative">
-                <button
-                  onClick={() => setSkillMenuOpen((v) => !v)}
-                  title="创作 Skill"
-                  className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border transition-all ${
-                    skillMenuOpen
-                      ? 'bg-brand-600/20 border-brand-500/40 text-brand-300'
-                      : 'bg-white/4 border-white/8 text-neutral-400 hover:text-neutral-200 hover:border-white/15'
-                  }`}
-                >
-                  <Plus size={15} />
-                </button>
-                {skillMenuOpen && (
-                  <div className="absolute bottom-10 left-0 z-50 w-64 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
-                    <p className="px-2.5 pt-1.5 pb-1 text-[11px] text-neutral-500">创作 Skill</p>
-                    {CHAT_SKILLS.map((skill) => (
-                      <button
-                        key={skill.id}
-                        onClick={() => invokeSkill(skill)}
-                        className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/6 transition-colors text-left"
-                      >
-                        <span className="mt-0.5 text-brand-300 shrink-0">{skill.icon}</span>
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-sm text-neutral-200 font-medium">{skill.label}</span>
-                          <span className="block text-[11px] text-neutral-500 leading-snug mt-0.5">{skill.description}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
               <ModelSelector />
               {speechSupported && (
                 <button
