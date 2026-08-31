@@ -875,6 +875,7 @@ var agentScenes = map[string]bool{
 	"summary":     true,
 	"inspiration": true,
 	"outline":     true,
+	"chapter":     true,
 }
 
 // AgentGenerate handles POST /api/v1/ai/agent/generate — assembles the
@@ -890,7 +891,7 @@ func (h *AIHandler) AgentGenerate(c *gin.Context) {
 	if !agentScenes[req.Scene] {
 		c.JSON(http.StatusBadRequest, dto.APIResponse{
 			Code:    400,
-			Message: "scene must be one of: character, setting, summary, inspiration, outline",
+			Message: "scene must be one of: character, setting, summary, inspiration, outline, chapter",
 		})
 		return
 	}

@@ -47,6 +47,8 @@ class AgentContext(BaseModel):
     preceding_chapters: list[ChapterExcerpt] = []
     memory_items: list[MemoryItemCtx] = []
     target_item: dict | None = Field(default=None)
+    # 目标大纲节点（chapter 场景精确写作：本节点的标题+概要+状态）。
+    target_node: dict | None = Field(default=None)
 
 
 class AgentGenerateRequest(BaseModel):

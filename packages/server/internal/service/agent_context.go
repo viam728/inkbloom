@@ -64,6 +64,8 @@ type AgentContextData struct {
 	PrecedingChapters []AgentChapterExcerpt `json:"preceding_chapters"`
 	MemoryItems       []AgentMemoryItemOut  `json:"memory_items"`
 	TargetItem        json.RawMessage       `json:"target_item"`
+	// TargetNode is the outline node to write (chapter scene).
+	TargetNode json.RawMessage `json:"target_node"`
 }
 
 // AgentOutlineActOut is the act shape forwarded to the AI service.
@@ -165,6 +167,7 @@ func (s *AgentContextService) BuildAgentContext(
 			PrecedingChapters: buildPrecedingChapters(chapters, cutoffChapterID),
 			MemoryItems:       buildMemoryItemsOut(filterVisibleItems(items, doneNodes)),
 			TargetItem:        json.RawMessage("{}"),
+			TargetNode:        json.RawMessage("{}"),
 		},
 	}
 
@@ -176,6 +179,25 @@ func (s *AgentContextService) BuildAgentContext(
 					payload.Context.TargetItem = target
 				}
 				break
+			}
+		}
+	}
+
+	// Fill the target node (chapter scene) for the node referenced by nodeID.
+	if nodeID != nil {
+		for _, act := range acts {
+			for _, node := range act.Nodes {
+				if node.ID == *nodeID {
+					target, marshalErr := json.Marshal(map[string]interface{}{
+						"title":   node.Title,
+						"summary": node.Summary,
+						"status":  node.Status,
+					})
+					if marshalErr == nil {
+						payload.Context.TargetNode = target
+					}
+					break
+				}
 			}
 		}
 	}

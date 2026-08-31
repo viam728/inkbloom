@@ -79,6 +79,19 @@ def _format_target_item(context: AgentContext) -> str:
     return "\n".join(lines)
 
 
+def _format_target_node(context: AgentContext) -> str:
+    """Format the target outline node (the chapter to write)."""
+    node = context.target_node or {}
+    lines: list[str] = []
+    title = node.get("title")
+    summary = node.get("summary")
+    if title:
+        lines.append(f"本章节目标是：{title}")
+    if summary:
+        lines.append(f"章节梗概：{summary}")
+    return "\n".join(lines)
+
+
 def _ctx_block(title: str, body: str) -> str:
     return f"【{title}】\n{body}\n\n" if body else ""
 
@@ -93,6 +106,7 @@ def _common_context(context: AgentContext) -> str:
     if context.novel_title:
         parts.append(_ctx_block("作品", f"书名：《{context.novel_title}》"))
     parts.append(_ctx_block("大纲结构", _format_outline(context)))
+    parts.append(_ctx_block("本章目标", _format_target_node(context)))
     parts.append(_ctx_block("前文摘录", _format_chapters(context)))
     parts.append(_ctx_block("相关记忆与设定", _format_memory(context)))
     parts.append(_ctx_block("目标对象", _format_target_item(context)))
@@ -167,6 +181,20 @@ def _outline_user_prompt(context: AgentContext, instruction: str) -> str:
     )
 
 
+def _chapter_user_prompt(context: AgentContext, instruction: str) -> str:
+    """成稿一整章正文：以大纲结构/前文/记忆为纲，输出可直接落库的正文段落。"""
+    return (
+        _instruction_block(instruction)
+        + _common_context(context)
+        + "任务：基于以上大纲结构、前文摘录、既有记忆与设定，完整撰写本章正文。\n"
+        "要求：\n"
+        "1. 严格忠于大纲节点目标与前文已发生的情节，与人设、设定保持一致；\n"
+        "2. 情节推进具体、有画面感，避免空泛；含必要的对话、动作、心理与氛围描写；\n"
+        "3. 章节开头自然衔接前文，结尾留白或制造钩子，为后续章铺垫；\n"
+        "4. 直接输出正文段落，不要输出标题、分点或任何解释，不要写“本章”等章节目录信息。"
+    )
+
+
 # ── Scene registry ──────────────────────────────────────────────────────
 
 SCENE_SYSTEM_WRITER = (
@@ -224,6 +252,19 @@ SCENES: dict[str, dict] = {
         "user_prompt": _outline_user_prompt,
         "temperature": 0.7,
         "max_tokens": 3000,
+        "two_step": True,
+    },
+    # 章节成稿：产出可直接落库的正文段落（P1 全本创作流水线的核心场景）。
+    "chapter": {
+        "label": "章节正文生成",
+        "system": (
+            "你是一位资深中文小说家，擅长在既有大纲与已写章节的基础上，"
+            "逐章推进情节、塑造人物、铺设伏笔。输出可直接落库的正文段落，"
+            "不要附加任何解释、标题或 markdown 标记。"
+        ),
+        "user_prompt": _chapter_user_prompt,
+        "temperature": 0.8,
+        "max_tokens": 4096,
         "two_step": True,
     },
 }
