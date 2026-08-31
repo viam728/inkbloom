@@ -49,6 +49,52 @@ class OpenAIProvider(BaseLLMProvider):
             completion_tokens=usage.completion_tokens if usage else 0,
         )
 
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> dict:
+        """Send a chat request with function-calling tools.
+
+        Returns a dict with `content` (final text, may be empty) and
+        `tool_calls` (list of {id, name, arguments}). OpenAI-compatible
+        (DeepSeek supports the same tool-calling protocol).
+        """
+        model = model or settings.default_model
+
+        response = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+            tools=tools,
+            tool_choice="auto",
+        )
+
+        choice = response.choices[0]
+        message = choice.message
+        usage = response.usage
+
+        tool_calls: list[dict] = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}",
+                })
+
+        return {
+            "content": message.content or "",
+            "tool_calls": tool_calls,
+            "prompt_tokens": usage.prompt_tokens if usage else 0,
+            "completion_tokens": usage.completion_tokens if usage else 0,
+        }
+
     async def stream(
         self,
         messages: list[dict],

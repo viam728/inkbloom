@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Send, Sparkles, Trash2, Mic, MicOff, Plus } from 'lucide-react';
 import { useAIStore } from '@/stores/ai-store';
+import { useNovelStore } from '@/stores/novel-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import MessageBubble from './MessageBubble';
 import ModelSelector from './ModelSelector';
@@ -14,15 +15,15 @@ const SUGGESTIONS = [
   '构思下一章的情节走向',
 ];
 
-/** 对话内「AI 起稿」入口：点击切换到全本创作工作流面板 */
-const START_STORY_EVENT = 'inkbloom:open-story-workflow';
-
 const AIChatPanel: React.FC = () => {
   const messages = useAIStore((s) => s.messages);
   const isStreaming = useAIStore((s) => s.isStreaming);
   const streamingContent = useAIStore((s) => s.streamingContent);
   const sendMessage = useAIStore((s) => s.sendMessage);
   const clearMessages = useAIStore((s) => s.clearMessages);
+  const fetchNovels = useNovelStore((s) => s.fetchNovels);
+  const fetchChapters = useNovelStore((s) => s.fetchChapters);
+  const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
 
   const [input, setInput] = useState('');
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
@@ -54,14 +55,12 @@ const AIChatPanel: React.FC = () => {
     return () => document.removeEventListener('mousedown', onDown);
   }, [skillMenuOpen]);
 
-  // 触发一个 Skill：prompt 类投递到输入框，navigate 类切面板
+  // 触发一个 Skill：都是「给创作 Agent 下达动作」——直接发送指令让 Agent
+  // 执行，而非把文本塞进输入框（Skill = Agent 快捷方式）。
   const invokeSkill = (skill: (typeof CHAT_SKILLS)[number]) => {
     setSkillMenuOpen(false);
-    if (skill.kind === 'prompt' && skill.prompt) {
-      setInput(skill.prompt);
-      requestAnimationFrame(() => textareaRef.current?.focus());
-    } else if (skill.kind === 'navigate' && skill.event) {
-      window.dispatchEvent(new CustomEvent(skill.event));
+    if (skill.prompt) {
+      sendMessage(skill.prompt);
     }
   };
 
@@ -85,6 +84,16 @@ const AIChatPanel: React.FC = () => {
     window.addEventListener('inkbloom:chat-draft', handler);
     return () => window.removeEventListener('inkbloom:chat-draft', handler);
   }, []);
+
+  // Agent 执行工具后（创建了小说/章节）→ 刷新创作系统列表
+  useEffect(() => {
+    const handler = () => {
+      fetchNovels();
+      if (currentNovelId) fetchChapters(currentNovelId);
+    };
+    window.addEventListener('inkbloom:agent-executed', handler);
+    return () => window.removeEventListener('inkbloom:agent-executed', handler);
+  }, [fetchNovels, fetchChapters, currentNovelId]);
 
   // Auto-scroll to bottom when messages change or streaming updates
   useEffect(() => {
@@ -145,7 +154,7 @@ const AIChatPanel: React.FC = () => {
             <p className="text-sm font-medium text-neutral-300 mb-1">你好！我是 AI 写作助手</p>
             <p className="text-xs text-neutral-500 mb-5">可以帮你构思情节、塑造角色、润色文字…</p>
             <button
-              onClick={() => window.dispatchEvent(new CustomEvent(START_STORY_EVENT))}
+              onClick={() => sendMessage('请帮我开始创作一部新小说：先根据我下面要说的创意创建作品，规划章节，再逐章撰写正文。')}
               className="w-full mb-3 py-2.5 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-violet-600/20"
             >
               <Sparkles size={14} />

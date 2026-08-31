@@ -19,6 +19,18 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming }) =
         }`}
       >
         {message.content}
+        {message.toolExecutions && message.toolExecutions.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {message.toolExecutions.map((t, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-white/10 border border-white/10 text-neutral-300"
+              >
+                ⚙ {t.label}
+              </span>
+            ))}
+          </div>
+        )}
         {isStreaming && (
           <span className="inline-block w-1.5 h-4 bg-neutral-300 ml-0.5 animate-pulse align-middle" />
         )}

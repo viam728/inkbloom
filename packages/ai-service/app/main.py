@@ -186,6 +186,65 @@ class RewriteRequest(BaseModel):
     max_tokens: int = 2048
 
 
+# ── Agent tool-calling endpoint (conversational creation Agent) ─────────
+class AgentToolHTTP(BaseModel):
+    type: str = "function"
+    function: dict
+
+
+class AgentMessageHTTP(BaseModel):
+    """OpenAI-style message for the Agent loop: role/content plus optional
+    tool_calls (assistant) and tool_call_id (tool) — the full protocol."""
+
+    role: str
+    content: str | None = None
+    tool_calls: list[dict] | None = None
+    tool_call_id: str | None = None
+
+
+class AgentChatHTTPRequest(BaseModel):
+    messages: list[AgentMessageHTTP]
+    tools: list[AgentToolHTTP] = []
+    model: str | None = None
+    temperature: float = 0.7
+    max_tokens: int = 2048
+
+
+@app.post("/api/agent/chat")
+async def agent_chat(request: AgentChatHTTPRequest):
+    """One step of the Agent loop: LLM decides to call a tool or answer.
+
+    Returns {content, tool_calls, usage}. The Go server executes any
+    tool_call, appends the result as a tool message, and calls again until
+    the model returns final content.
+    """
+    messages = [
+        {k: v for k, v in m.model_dump().items() if v is not None}
+        for m in request.messages
+    ]
+    tools = [t.model_dump() for t in request.tools]
+    model = request.model or settings.default_model
+    try:
+        result = await _llm.chat_with_tools(
+            messages=messages,
+            tools=tools,
+            model=model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        return {
+            "content": result.get("content", ""),
+            "tool_calls": result.get("tool_calls", []),
+            "usage": {
+                "prompt_tokens": result.get("prompt_tokens", 0),
+                "completion_tokens": result.get("completion_tokens", 0),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("agent_chat failed: %s", exc)
+        return {"content": f"[Error] {exc}", "tool_calls": []}
+
+
 @app.post("/api/chat/inline")
 async def inline_completion(request: InlineRequest):
     """Inline completion - SSE streaming."""

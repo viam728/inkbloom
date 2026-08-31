@@ -1,0 +1,67 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/inkbloom/server/internal/dto"
+	"github.com/inkbloom/server/internal/service"
+)
+
+// AgentHandler exposes the conversational creation Agent endpoint.
+type AgentHandler struct {
+	agentSvc *service.AgentService
+}
+
+// NewAgentHandler creates a new AgentHandler.
+func NewAgentHandler(svc *service.AgentService) *AgentHandler {
+	return &AgentHandler{agentSvc: svc}
+}
+
+// Chat handles POST /api/v1/ai/agent/chat — one full Agent loop.
+func (h *AgentHandler) Chat(c *gin.Context) {
+	var req dto.AgentChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid request: " + err.Error()})
+		return
+	}
+	if len(req.Messages) == 0 {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "messages cannot be empty"})
+		return
+	}
+
+	msgs := make([]map[string]string, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+	}
+
+	content, executed, err := h.agentSvc.Run(c.Request.Context(), GetUserID(c), msgs)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, dto.APIResponse{Code: 502, Message: "agent failed: " + err.Error()})
+		return
+	}
+
+	executions := make([]dto.AgentToolExecution, 0, len(executed))
+	for _, e := range executed {
+		exec := dto.AgentToolExecution{}
+		if t, ok := e["tool"].(string); ok {
+			exec.Tool = t
+		}
+		if a, ok := e["args"].(string); ok {
+			exec.Args = a
+		}
+		if r, ok := e["result"].(string); ok {
+			exec.Result = map[string]any{"raw": r}
+		}
+		executions = append(executions, exec)
+	}
+
+	c.JSON(http.StatusOK, dto.APIResponse{
+		Code:    200,
+		Message: "ok",
+		Data: dto.AgentChatResponse{
+			Content:       content,
+			ToolExecutions: executions,
+		},
+	})
+}

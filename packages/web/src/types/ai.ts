@@ -8,6 +8,8 @@ export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  /** 创作 Agent 执行过的工具（展示在消息下方） */
+  toolExecutions?: { tool: string; label: string }[];
 }
 
 export interface ChatChunkData {

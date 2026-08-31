@@ -275,6 +275,9 @@ func main() {
 	// adoption auto-extract knowledge + detect foreshadows.
 	storyService := service.NewStoryService(storyJobRepo, novelRepo, chapterRepo, docService, chapterService, agentContextService, cfg.AIService.URL, logger).
 		WithClosedLoop(knowledgeService, foreshadowService)
+	// Conversational creation Agent (plan: 对话式创作 Agent) — tool-calling
+	// loop over create_novel/create_chapter/write_chapter/list_novels.
+	agentService := service.NewAgentService(novelService, chapterService, agentContextService, cfg.AIService.URL, logger)
 
 	// M5 data export/import (task #47): .inkbloom packages.
 	syncService := service.NewSyncService(db, fileStorage, novelRepo, docRepo, userRepo, logger)
@@ -343,6 +346,8 @@ func main() {
 	interactionHandler := handler.NewInteractionHandler(interactionService)
 	// Agent full-book creation pipeline (plan P1).
 	storyHandler := handler.NewStoryHandler(storyService)
+	// Conversational creation Agent (tool-calling).
+	agentHandler := handler.NewAgentHandler(agentService)
 
 	// Local mode (v2 §3.2): the LocalBus doubles as the task feed — route
 	// outbox-published creation events into the engine's in-process queue.
@@ -402,6 +407,7 @@ func main() {
 		Reader:        readerHandler,
 		Interaction:   interactionHandler,
 		Story:         storyHandler,
+		Agent:         agentHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

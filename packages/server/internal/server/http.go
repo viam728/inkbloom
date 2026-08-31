@@ -68,6 +68,8 @@ type Handlers struct {
 	Interaction *handler.InteractionHandler
 	// Story drives the Agent full-book creation pipeline (plan P1). Optional.
 	Story *handler.StoryHandler
+	// Agent drives the conversational creation Agent (tool-calling). Optional.
+	Agent *handler.AgentHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -460,6 +462,11 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			aiGroup.POST("/ai/adapt-content", h.AI.AdaptContent)
 			aiGroup.POST("/ai/agent/generate", h.AI.AgentGenerate)
 			aiGroup.POST("/prompt/build", h.AI.PromptBuild)
+
+			// Conversational creation Agent (tool-calling loop).
+			if h.Agent != nil {
+				aiGroup.POST("/agent/chat", h.Agent.Chat)
+			}
 
 			// Agent full-book creation pipeline (plan P1): story jobs.
 			if h.Story != nil {
