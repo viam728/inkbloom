@@ -8,6 +8,7 @@ import AuthPage from '@/components/auth/AuthPage';
 import LandingPage from '@/components/landing/LandingPage';
 import LegalPage from '@/components/legal/LegalPage';
 import ReaderPage from '@/components/reader/ReaderPage';
+import DiscoverPage from '@/components/discover/DiscoverPage';
 import SubscriptionModal from '@/components/billing/SubscriptionModal';
 import TokenModal from '@/components/billing/TokenModal';
 import AdminPanel from '@/components/admin/AdminPanel';
@@ -138,6 +139,10 @@ function App() {
         const readMatch = window.location.pathname.match(/^\/read\/([\w-]+)(?:\/(\d+))?/);
         if (readMatch) {
           return <ReaderPage slug={readMatch[1]} chapterId={readMatch[2]} />;
+        }
+        // 发现页 / 社区首页：/discover 匿名可访问（飞轮入口）
+        if (window.location.pathname === '/discover') {
+          return <DiscoverPage />;
         }
         return status === 'authed' ? <AuthenticatedApp /> : status === 'guest' ? <GuestApp /> : <BootSplash />;
       })()}

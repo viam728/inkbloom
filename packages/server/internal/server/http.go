@@ -251,6 +251,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		readerGroup.GET("/works/:slug/chapters", h.Reader.ListChapters)
 		readerGroup.GET("/chapters/:pid", h.Reader.GetChapter)
 		readerGroup.GET("/chapters/:pid/interactions", h.Interaction.List)
+		readerGroup.GET("/discover", h.Reader.Discover)
 	}
 
 	// Analytics ingestion (plan A40): intentionally anonymous — a reader who
@@ -383,6 +384,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.GET("/read/progress", h.Reader.GetProgress)
 			api.PUT("/read/progress", h.Reader.UpsertProgress)
 			api.POST("/read/follows", h.Reader.Follow)
+			api.GET("/read/follows/:wid", h.Reader.GetFollow)
 			api.DELETE("/read/follows/:wid", h.Reader.Unfollow)
 			// Reader interactions (plan A28): comment/mood/like/adopt.
 			api.POST("/read/chapters/:pid/interactions", h.Interaction.Create)

@@ -80,6 +80,20 @@ export interface ChapterEmotions {
   blocks: { block_index: number; moods: Record<string, number> }[];
 }
 
+/** 发现页作品卡片（社区首页） */
+export interface DiscoverWork {
+  id: number;
+  slug: string;
+  title: string;
+  synopsis: string;
+  cover_url?: string;
+  ai_inspired: boolean;
+  follow_count: number;
+  chapter_count: number;
+  author_name: string;
+  updated_at: string;
+}
+
 /** 读者互动（plan A28：划线评论 / 情绪点击） */
 export interface Interaction {
   id: number;

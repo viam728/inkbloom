@@ -129,12 +129,20 @@ const LandingPage: React.FC<{ onEnterAuth: () => void }> = ({ onEnterAuth }) => 
               InkBloom
             </span>
           </div>
-          <button
-            onClick={onEnterAuth}
-            className="px-4 py-1.5 rounded-xl text-xs font-medium text-neutral-300 border border-white/10 bg-white/4 hover:bg-white/8 hover:text-neutral-100 transition-colors"
-          >
-            登录 / 注册
-          </button>
+          <div className="flex items-center gap-2.5">
+            <a
+              href="/discover"
+              className="px-4 py-1.5 rounded-xl text-xs font-medium text-neutral-300 border border-white/10 bg-white/4 hover:bg-white/8 hover:text-neutral-100 transition-colors"
+            >
+              浏览社区
+            </a>
+            <button
+              onClick={onEnterAuth}
+              className="px-4 py-1.5 rounded-xl text-xs font-medium text-neutral-300 border border-white/10 bg-white/4 hover:bg-white/8 hover:text-neutral-100 transition-colors"
+            >
+              登录 / 注册
+            </button>
+          </div>
         </header>
 
         {/* ===== 主视觉 ===== */}

@@ -228,6 +228,24 @@ func (h *ReaderHandler) GetWork(c *gin.Context) {
 	}})
 }
 
+// Discover handles GET /api/v1/read/discover (anonymous): the community
+// discovery feed of public works.
+func (h *ReaderHandler) Discover(c *gin.Context) {
+	q := c.Query("q")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	list, err := h.ps.Discover(c.Request.Context(), q, limit, offset)
+	if err != nil {
+		zap.L().Error("reader: discover failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if list == nil {
+		list = []dto.DiscoverWorkDTO{}
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: list})
+}
+
 // ListChapters handles GET /api/v1/read/works/:slug/chapters (anonymous)
 func (h *ReaderHandler) ListChapters(c *gin.Context) {
 	slug := c.Param("slug")
@@ -363,6 +381,22 @@ func (h *ReaderHandler) Unfollow(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok"})
+}
+
+// GetFollow handles GET /api/v1/read/follows/:wid (logged in): reports whether
+// the reader currently follows the work.
+func (h *ReaderHandler) GetFollow(c *gin.Context) {
+	wid, ok := parseID(c, "wid")
+	if !ok {
+		return
+	}
+	following, err := h.ps.GetFollowStatus(c.Request.Context(), GetUserID(c), wid)
+	if err != nil {
+		zap.L().Error("reader: get follow failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: map[string]bool{"following": following}})
 }
 
 // suppress unused-import warning for time when builds trim reader code paths.

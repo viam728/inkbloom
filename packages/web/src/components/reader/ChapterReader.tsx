@@ -4,7 +4,7 @@ import type { PublicChapter, PublicChapterSummary } from '@/types/published';
 import { useReaderStore } from '@/stores/reader-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useReaderInteractionStore } from '@/stores/reader-interaction-store';
-import { upsertReadingProgress, createInteraction } from '@/services/reader-client';
+import { upsertReadingProgress, createInteraction, followWork, unfollowWork, getFollowStatus } from '@/services/reader-client';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
 import ReaderSettings from './ReaderSettings';
@@ -44,6 +44,9 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
   const lastReportRef = useRef<{ pos: number; at: number }>({ pos: 0, at: 0 });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  // 追更状态（E4 用户端闭环）
+  const [following, setFollowing] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   // 段落悬停情绪条（E5）
   const [hoverBlock, setHoverBlock] = useState<{ index: number; rect: DOMRect } | null>(null);
   // 选中划线评论（E5）
@@ -70,6 +73,46 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     lastReportRef.current = { pos: 0, at: Date.now() };
   }, [chapter.id, slug, workId, setSession]);
+
+  // 追更状态（登录态才加载）
+  useEffect(() => {
+    if (status !== 'authed') {
+      setFollowing(false);
+      return;
+    }
+    let cancelled = false;
+    getFollowStatus(workId)
+      .then((f) => {
+        if (!cancelled) setFollowing(f);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workId, status]);
+
+  const toggleFollow = async () => {
+    if (status !== 'authed') {
+      toast.show('登录后即可追更', 'info');
+      return;
+    }
+    if (followBusy) return;
+    setFollowBusy(true);
+    try {
+      if (following) {
+        await unfollowWork(workId);
+        setFollowing(false);
+      } else {
+        await followWork(workId);
+        setFollowing(true);
+        toast.show('已追更，新章发布时通知你', 'success');
+      }
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : '操作失败', 'error');
+    } finally {
+      setFollowBusy(false);
+    }
+  };
 
   // data-block-index：渲染后给顶层块级节点编号
   useEffect(() => {
@@ -246,6 +289,20 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
         <div className="flex-1 min-w-0 text-center">
           <h1 className="text-sm font-medium text-neutral-200 truncate">{chapter.title}</h1>
         </div>
+        {/* 追更（E4 用户端闭环） */}
+        <button
+          type="button"
+          onClick={() => void toggleFollow()}
+          disabled={followBusy}
+          className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+            following
+              ? 'bg-brand-600/25 text-brand-300 border border-brand-500/30'
+              : 'bg-white/6 text-neutral-300 border border-white/10 hover:bg-white/10'
+          }`}
+          title={following ? '取消追更' : '追更这部作品'}
+        >
+          {following ? '已追更' : '追更'}
+        </button>
         <button
           type="button"
           onClick={() => setSettingsOpen((v) => !v)}

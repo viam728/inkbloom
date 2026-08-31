@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Search, Sparkles, Maximize2, Minimize2, CornerDownLeft } from 'lucide-react';
+import { Search, Sparkles, Maximize2, Minimize2, CornerDownLeft, Globe } from 'lucide-react';
 import RoleSwitcher from './RoleSwitcher';
 import UserMenu from './UserMenu';
 import { useCommandItems, type PaletteItem } from './useCommandItems';
@@ -161,6 +161,16 @@ const TopBar: React.FC = () => {
           <RoleSwitcher />
         </div>
       </div>
+
+      {/* 社区入口：公开发现页 */}
+      <a
+        href="/discover"
+        className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-neutral-400 hover:text-neutral-100 hover:bg-white/8 transition-colors"
+        title="浏览社区作品"
+      >
+        <Globe size={14} />
+        社区
+      </a>
 
       {/* 中区：居中搜索（宽度随视口收敛，避免与左右区挤压） */}
       <div className="shrink-0 w-[min(480px,38vw)]">

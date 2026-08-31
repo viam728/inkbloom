@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/inkbloom/server/internal/model"
@@ -75,6 +76,9 @@ type PublishedReadRepository interface {
 	// WorkOwner returns the owner user_id of a published work (internal, for
 	// author-action checks on interactions).
 	WorkOwner(ctx context.Context, workID int64) (int64, error)
+	// DiscoverPublic lists public works for the community discovery page,
+	// optionally filtered by a title query, newest-updated first.
+	DiscoverPublic(ctx context.Context, q string, limit, offset int) ([]DiscoverWork, error)
 }
 
 // ReadingDistributionRow is a projection of reading_progress grouped by
@@ -82,6 +86,21 @@ type PublishedReadRepository interface {
 type ReadingDistributionRow struct {
 	ChapterID   int64
 	ReaderCount int64
+}
+
+// DiscoverWork is a public-work card projection for the discovery page: the
+// published work plus its author nickname and visible-chapter count.
+type DiscoverWork struct {
+	ID           int64
+	Slug         string
+	Title        string
+	Synopsis     string
+	CoverURL     string
+	AIInspired   bool
+	FollowCount  int
+	ChapterCount int
+	AuthorName   string
+	UpdatedAt    time.Time
 }
 
 type publishedRepository struct {
@@ -359,4 +378,31 @@ func (r *publishedReadRepository) WorkOwner(ctx context.Context, workID int64) (
 	err := r.db.WithContext(ctx).Model(&model.PublishedWork{}).
 		Where("id = ?", workID).Select("user_id").Scan(&owner).Error
 	return owner, err
+}
+
+func (r *publishedReadRepository) DiscoverPublic(ctx context.Context, q string, limit, offset int) ([]DiscoverWork, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	now := time.Now()
+	db := r.db.WithContext(ctx).Table("published_works AS pw").
+		Select("pw.id, pw.slug, pw.title, pw.synopsis, pw.cover_url, pw.ai_inspired, pw.follow_count, u.nickname AS author_name, COUNT(pc.id) AS chapter_count, pw.updated_at").
+		Joins("JOIN users AS u ON u.id = pw.user_id").
+		Joins("LEFT JOIN published_chapters AS pc ON pc.work_id = pw.id AND (pc.scheduled_at IS NULL OR pc.scheduled_at <= ?)", now).
+		Where("pw.visibility = ?", model.VisibilityPublic)
+	if strings.TrimSpace(q) != "" {
+		db = db.Where("LOWER(pw.title) LIKE LOWER(?)", "%"+strings.TrimSpace(q)+"%")
+	}
+	var rows []DiscoverWork
+	err := db.Group("pw.id, u.nickname").
+		Order("pw.updated_at DESC").
+		Limit(limit).Offset(offset).
+		Scan(&rows).Error
+	return rows, err
 }

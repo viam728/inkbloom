@@ -99,3 +99,19 @@ type ChapterEmotionsResponse struct {
 	// Blocks: one row per block that received any emotion, ordered by index.
 	Blocks    []BlockEmotionsDTO `json:"blocks"`
 }
+
+// DiscoverWorkDTO is one card of the public discovery feed (community front
+// door). It flattens the published work + author nickname + visible-chapter
+// count into a single anonymous-readable payload.
+type DiscoverWorkDTO struct {
+	ID           int64     `json:"id"`
+	Slug         string    `json:"slug"`
+	Title        string    `json:"title"`
+	Synopsis     string    `json:"synopsis"`
+	CoverURL     string    `json:"cover_url,omitempty"`
+	AIInspired   bool      `json:"ai_inspired"`
+	FollowCount  int       `json:"follow_count"`
+	ChapterCount int       `json:"chapter_count"`
+	AuthorName   string    `json:"author_name"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}

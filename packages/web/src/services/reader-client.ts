@@ -8,6 +8,7 @@ import type {
   ReadingProgress,
   WorkStats,
   ChapterEmotions,
+  DiscoverWork,
   Interaction,
   InteractionList,
 } from '@/types/published';
@@ -34,6 +35,19 @@ export async function listPublicChapters(slug: string): Promise<PublicChapterSum
 
 export async function getPublicChapter(pid: number): Promise<PublicChapter> {
   return (await apiClient.get(`/read/chapters/${pid}`)) as unknown as PublicChapter;
+}
+
+// ── 发现页 / 社区（匿名）───────────────────────────────────────────────
+
+export async function discoverWorks(
+  q = '',
+  limit = 20,
+  offset = 0,
+): Promise<DiscoverWork[]> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (q.trim()) params.set('q', q.trim());
+  const data = (await apiClient.get(`/read/discover?${params.toString()}`)) as unknown as DiscoverWork[];
+  return data ?? [];
 }
 
 // ── 作者侧发布 API（A17）─────────────────────────────────────────────────
@@ -166,4 +180,11 @@ export async function followWork(workId: number, notify = true): Promise<void> {
 
 export async function unfollowWork(workId: number): Promise<void> {
   await apiClient.delete(`/read/follows/${workId}`);
+}
+
+export async function getFollowStatus(workId: number): Promise<boolean> {
+  const data = (await apiClient.get(`/read/follows/${workId}`)) as unknown as {
+    following: boolean;
+  };
+  return data?.following ?? false;
 }

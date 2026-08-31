@@ -363,6 +363,30 @@ func (s *PublishService) PublicChapter(ctx context.Context, pid int64) (*model.P
 	return s.readRepo.ChapterPublic(ctx, pid)
 }
 
+// Discover returns the public discovery feed for the community front door.
+func (s *PublishService) Discover(ctx context.Context, q string, limit, offset int) ([]dto.DiscoverWorkDTO, error) {
+	rows, err := s.readRepo.DiscoverPublic(ctx, q, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dto.DiscoverWorkDTO, 0, len(rows))
+	for i := range rows {
+		out = append(out, dto.DiscoverWorkDTO{
+			ID:           rows[i].ID,
+			Slug:         rows[i].Slug,
+			Title:        rows[i].Title,
+			Synopsis:     rows[i].Synopsis,
+			CoverURL:     rows[i].CoverURL,
+			AIInspired:   rows[i].AIInspired,
+			FollowCount:  rows[i].FollowCount,
+			ChapterCount: rows[i].ChapterCount,
+			AuthorName:   rows[i].AuthorName,
+			UpdatedAt:    rows[i].UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
 // ── Progress & follows (reader-facing but require login, A18) ───────────────
 
 func (s *PublishService) GetProgress(ctx context.Context, userID, workID int64) (*model.ReadingProgress, error) {
@@ -389,6 +413,15 @@ func (s *PublishService) Follow(ctx context.Context, userID, workID int64, notif
 		return err
 	}
 	return s.workRepo.IncFollowCount(ctx, workID)
+}
+
+// GetFollowStatus reports whether the reader already follows the work.
+func (s *PublishService) GetFollowStatus(ctx context.Context, userID, workID int64) (bool, error) {
+	f, err := s.workRepo.GetFollow(ctx, userID, workID)
+	if err != nil {
+		return false, err
+	}
+	return f != nil, nil
 }
 
 func (s *PublishService) Unfollow(ctx context.Context, userID, workID int64) error {
