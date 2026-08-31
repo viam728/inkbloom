@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import * as storyApi from '@/services/story-client';
-import type { StoryJob, StoryStage } from '@/services/story-client';
+import type { StoryJob, StoryStage, StoryJobConfig } from '@/services/story-client';
 import { toast } from '@/components/common/Toast';
 
 interface StoryStoreState {
@@ -13,7 +13,7 @@ interface StoryStoreState {
   loadJobs: (novelId?: number) => Promise<void>;
   openJob: (id: number) => Promise<void>;
   closeJob: () => void;
-  createJob: (req: { novel_id: number; title: string; logline: string }) => Promise<StoryJob>;
+  createJob: (req: { novel_id: number; title: string; logline: string; config?: StoryJobConfig }) => Promise<StoryJob>;
   generateStage: (id: number) => Promise<void>;
   advanceStage: (id: number) => Promise<void>;
   adoptChapter: (id: number, req: { chapter_key: string; title: string; content: string }) => Promise<void>;

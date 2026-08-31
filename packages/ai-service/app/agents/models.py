@@ -49,6 +49,10 @@ class AgentContext(BaseModel):
     target_item: dict | None = Field(default=None)
     # 目标大纲节点（chapter 场景精确写作：本节点的标题+概要+状态）。
     target_node: dict | None = Field(default=None)
+    # 知识图谱节点（世界设定/角色等已沉淀实体），供生成保持一致。
+    knowledge_nodes: list[dict] = []
+    # 未回收的伏笔线索，供生成埋设/回收一致。
+    foreshadow_threads: list[dict] = []
 
 
 class AgentGenerateRequest(BaseModel):

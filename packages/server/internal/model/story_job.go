@@ -55,6 +55,10 @@ type StoryJob struct {
 	// StagePayload holds the current stage output (outline acts / chapter
 	// plan / drafted chapter preview / verify report) as JSONB.
 	StagePayload datatypes.JSON `gorm:"type:jsonb" json:"stage_payload"`
+	// Config holds the author's generation settings (chapter count, target
+	// words per chapter, style, auto-settle toggle) as JSONB — the dynamic
+	// sliders the workflow panel drives (plan P2-c).
+	Config datatypes.JSON `gorm:"type:jsonb" json:"config"`
 	// Result holds the terminal summary once the job reaches done.
 	Result datatypes.JSON `gorm:"type:jsonb" json:"result"`
 	// LastError records the most recent stage failure reason.

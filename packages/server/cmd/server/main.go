@@ -264,11 +264,17 @@ func main() {
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
 	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo)
-	agentContextService := service.NewAgentContextService(novelRepo, docRepo, chapterRepo)
+	// Closed-loop Agent (plan P2-b): the agent context now also carries the
+	// knowledge graph and open foreshadow threads so generation stays
+	// consistent with established world-building.
+	agentContextService := service.NewAgentContextService(novelRepo, docRepo, chapterRepo).
+		WithKnowledgeAndForeshadow(knowledgeRepo, foreshadowRepo)
 	mediaService := service.NewMediaService(mediaRepo)
 	// Agent full-book creation pipeline (plan P1): drives AI stage generation
-	// + author-confirmed adoption into real chapters.
-	storyService := service.NewStoryService(storyJobRepo, novelRepo, chapterRepo, docService, chapterService, agentContextService, cfg.AIService.URL, logger)
+	// + author-confirmed adoption into real chapters. WithClosedLoop makes
+	// adoption auto-extract knowledge + detect foreshadows.
+	storyService := service.NewStoryService(storyJobRepo, novelRepo, chapterRepo, docService, chapterService, agentContextService, cfg.AIService.URL, logger).
+		WithClosedLoop(knowledgeService, foreshadowService)
 
 	// M5 data export/import (task #47): .inkbloom packages.
 	syncService := service.NewSyncService(db, fileStorage, novelRepo, docRepo, userRepo, logger)

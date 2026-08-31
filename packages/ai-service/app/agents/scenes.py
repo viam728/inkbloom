@@ -92,6 +92,40 @@ def _format_target_node(context: AgentContext) -> str:
     return "\n".join(lines)
 
 
+def _format_knowledge_nodes(context: AgentContext) -> str:
+    """Format knowledge-graph nodes (established entities) into a block."""
+    if not context.knowledge_nodes:
+        return ""
+    lines: list[str] = []
+    for node in context.knowledge_nodes:
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name") or ""
+        typ = node.get("type") or ""
+        desc = node.get("description") or ""
+        if not name:
+            continue
+        label = f"- {name}" + (f"（{typ}）" if typ else "")
+        if desc:
+            label += f"：{desc}"
+        lines.append(label)
+    return "\n".join(lines)
+
+
+def _format_foreshadow_threads(context: AgentContext) -> str:
+    """Format open foreshadow threads (to plant/pay off consistently)."""
+    if not context.foreshadow_threads:
+        return ""
+    lines: list[str] = []
+    for t in context.foreshadow_threads:
+        if not isinstance(t, dict):
+            continue
+        desc = t.get("description") or ""
+        if desc:
+            lines.append(f"- {desc}")
+    return "\n".join(lines)
+
+
 def _ctx_block(title: str, body: str) -> str:
     return f"【{title}】\n{body}\n\n" if body else ""
 
@@ -109,6 +143,8 @@ def _common_context(context: AgentContext) -> str:
     parts.append(_ctx_block("本章目标", _format_target_node(context)))
     parts.append(_ctx_block("前文摘录", _format_chapters(context)))
     parts.append(_ctx_block("相关记忆与设定", _format_memory(context)))
+    parts.append(_ctx_block("已沉淀实体（知识图谱）", _format_knowledge_nodes(context)))
+    parts.append(_ctx_block("待回收伏笔线索", _format_foreshadow_threads(context)))
     parts.append(_ctx_block("目标对象", _format_target_item(context)))
     return "".join(parts)
 
@@ -191,7 +227,12 @@ def _chapter_user_prompt(context: AgentContext, instruction: str) -> str:
         "1. 严格忠于大纲节点目标与前文已发生的情节，与人设、设定保持一致；\n"
         "2. 情节推进具体、有画面感，避免空泛；含必要的对话、动作、心理与氛围描写；\n"
         "3. 章节开头自然衔接前文，结尾留白或制造钩子，为后续章铺垫；\n"
-        "4. 直接输出正文段落，不要输出标题、分点或任何解释，不要写“本章”等章节目录信息。"
+        "4. **分段规范**：正文按情节自然分多个段落，段落之间用空行分隔（每个段落 2-5 句为宜），"
+        "不得一整章挤成一坨；对话每人一段，另起一行；\n"
+        "5. **插图占位**：在需要配图的关键场景处，单独一行输出插图占位符，格式为"
+        "`[插图：画面描述]`（描述该图的人物、动作、环境、氛围，20 字以内）；"
+        "每章 1-3 处插图占位，不贪多；\n"
+        "6. 直接输出正文段落，不要输出标题、分点或任何解释，不要写“本章”等章节目录信息。"
     )
 
 
@@ -263,7 +304,7 @@ SCENES: dict[str, dict] = {
             "不要附加任何解释、标题或 markdown 标记。"
         ),
         "user_prompt": _chapter_user_prompt,
-        "temperature": 0.8,
+        "temperature": 0.75,
         "max_tokens": 4096,
         "two_step": True,
     },

@@ -35,6 +35,11 @@ const StoryWorkflowPanel: React.FC = () => {
   const [title, setTitle] = useState('');
   const [logline, setLogline] = useState('');
   const [expandedContent, setExpandedContent] = useState(false);
+  // 生成设置（缺陷4：动态滑条，AI 按设置填充系统）
+  const [chapterCount, setChapterCount] = useState(10);
+  const [wordsPerChapter, setWordsPerChapter] = useState(2000);
+  const [style, setStyle] = useState('');
+  const [autoSettle, setAutoSettle] = useState(true);
 
   // 加载当前作品的任务
   useEffect(() => {
@@ -51,7 +56,12 @@ const StoryWorkflowPanel: React.FC = () => {
       return;
     }
     try {
-      const job = await createJob({ novel_id: currentNovel.id, title: title.trim(), logline: logline.trim() });
+      const job = await createJob({
+        novel_id: currentNovel.id,
+        title: title.trim(),
+        logline: logline.trim(),
+        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle },
+      });
       setTitle('');
       setLogline('');
       await openJob(job.id);
@@ -146,6 +156,52 @@ const StoryWorkflowPanel: React.FC = () => {
               rows={2}
               className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-none"
             />
+
+            {/* 生成设置（动态滑条） */}
+            <div className="mb-2 p-2.5 rounded-lg bg-white/3 border border-white/6">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] text-neutral-400">全书章节数</span>
+                <span className="text-[11px] text-violet-300 font-medium">{chapterCount} 章</span>
+              </div>
+              <input
+                type="range"
+                min={3}
+                max={50}
+                step={1}
+                value={chapterCount}
+                onChange={(e) => setChapterCount(Number(e.target.value))}
+                className="w-full accent-violet-500"
+              />
+              <div className="flex items-center justify-between mt-2 mb-1">
+                <span className="text-[11px] text-neutral-400">每章字数</span>
+                <span className="text-[11px] text-violet-300 font-medium">{wordsPerChapter} 字</span>
+              </div>
+              <input
+                type="range"
+                min={500}
+                max={5000}
+                step={100}
+                value={wordsPerChapter}
+                onChange={(e) => setWordsPerChapter(Number(e.target.value))}
+                className="w-full accent-violet-500"
+              />
+              <input
+                value={style}
+                onChange={(e) => setStyle(e.target.value)}
+                placeholder="文风（可选，如：冷峻武侠 / 轻松甜宠）"
+                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
+              />
+              <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSettle}
+                  onChange={(e) => setAutoSettle(e.target.checked)}
+                  className="accent-violet-500"
+                />
+                <span className="text-[11px] text-neutral-400">采纳后自动沉淀设定/角色/图谱/伏笔</span>
+              </label>
+            </div>
+
             <button
               onClick={handleCreate}
               disabled={!currentNovel}

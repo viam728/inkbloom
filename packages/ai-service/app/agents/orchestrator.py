@@ -69,11 +69,23 @@ async def run(
     max_tokens = scene.get("max_tokens", 2048)
 
     async def _oneshot():
-        content, err, usage, _model = await call_llm(
-            llm, system, user_prompt,
-            temperature=temperature, max_tokens=max_tokens, model=model,
-        )
-        return content, err, usage
+        # High-temperature providers occasionally return an empty body even on
+        # a 200. Retry a couple of times with a lower temperature so a blank
+        # never reaches the caller.
+        for attempt in range(3):
+            t = temperature if attempt == 0 else max(temperature - 0.2, 0.3)
+            content, err, usage, _model = await call_llm(
+                llm, system, user_prompt,
+                temperature=t, max_tokens=max_tokens, model=model,
+            )
+            if err or not (content or "").strip():
+                if err:
+                    logger.warning("orchestrator one-shot attempt %d failed: %s", attempt+1, err)
+                else:
+                    logger.warning("orchestrator one-shot attempt %d returned empty", attempt+1)
+                continue
+            return content, None, usage
+        return "", "one-shot generation returned empty after retries", None
 
     if not scene.get("two_step", False):
         return await _oneshot()
@@ -107,8 +119,14 @@ async def run(
         max_tokens=max_tokens,
         model=model,
     )
-    if err:
-        logger.warning("agent orchestrator step2 failed, fallback to single-step: %s", err)
+    if err or not (content or "").strip():
+        # Empty body with no error is a known provider quirk (high-temperature
+        # calls occasionally return empty content); treat it as a failure and
+        # fall back to a single-step call so the caller never gets a blank.
+        if err:
+            logger.warning("agent orchestrator step2 failed, fallback to single-step: %s", err)
+        else:
+            logger.warning("agent orchestrator step2 returned empty content, fallback to single-step")
         fb_content, fb_err, fb_usage = await _oneshot()
         return fb_content, fb_err, _merge_usage(usage1, usage2, fb_usage)
 

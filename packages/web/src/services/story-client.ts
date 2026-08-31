@@ -49,11 +49,20 @@ export interface StoryJob {
   progress: number;
   total_steps: number;
   stage_payload: StoryStagePayload;
+  config: StoryJobConfig;
   result: Record<string, unknown> | null;
   last_error: string;
   chapter_keys: number;
   created_at: string;
   updated_at: string;
+}
+
+/** 生成设置（前端动态滑条映射） */
+export interface StoryJobConfig {
+  chapter_count: number;
+  words_per_chapter: number;
+  style: string;
+  auto_settle: boolean;
 }
 
 export interface StoryJobsList {
@@ -67,6 +76,7 @@ export interface CreateStoryJobRequest {
   novel_id: number;
   title: string;
   logline: string;
+  config?: StoryJobConfig;
 }
 
 export async function createStoryJob(req: CreateStoryJobRequest): Promise<StoryJob> {

@@ -66,6 +66,25 @@ type AgentContextData struct {
 	TargetItem        json.RawMessage       `json:"target_item"`
 	// TargetNode is the outline node to write (chapter scene).
 	TargetNode json.RawMessage `json:"target_node"`
+	// KnowledgeNodes carries the novel's established world-building nodes
+	// (from the knowledge graph) so generation stays consistent with them.
+	KnowledgeNodes []AgentKnowledgeNodeOut `json:"knowledge_nodes"`
+	// ForeshadowThreads carries open (planted) threads so new chapters can
+	// plant and pay off consistently.
+	ForeshadowThreads []AgentForeshadowOut `json:"foreshadow_threads"`
+}
+
+// AgentKnowledgeNodeOut is one knowledge-graph node forwarded to the AI.
+type AgentKnowledgeNodeOut struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+// AgentForeshadowOut is one open foreshadow thread forwarded to the AI.
+type AgentForeshadowOut struct {
+	Description string `json:"description"`
+	Status      string `json:"status"`
 }
 
 // AgentOutlineActOut is the act shape forwarded to the AI service.
@@ -99,9 +118,11 @@ type AgentMemoryItemOut struct {
 // AgentContextService assembles the frozen agent-generation context from the
 // outline / memory JSONB documents and the chapter list.
 type AgentContextService struct {
-	novelRepo   repository.NovelRepository
-	docRepo     repository.NovelDocRepository
-	chapterRepo repository.ChapterRepository
+	novelRepo      repository.NovelRepository
+	docRepo        repository.NovelDocRepository
+	chapterRepo    repository.ChapterRepository
+	knowledgeRepo  repository.KnowledgeRepository
+	foreshadowRepo repository.ForeshadowRepository
 }
 
 // NewAgentContextService creates a new AgentContextService.
@@ -111,6 +132,16 @@ func NewAgentContextService(
 	cr repository.ChapterRepository,
 ) *AgentContextService {
 	return &AgentContextService{novelRepo: nr, docRepo: dr, chapterRepo: cr}
+}
+
+// WithKnowledgeAndForeshadow wires the optional knowledge-graph and
+// foreshadow repositories so the assembled context can carry the novel's
+// established world-building nodes and open threads (closed-loop Agent,
+// plan P2-b). Without them the context simply omits those sections.
+func (s *AgentContextService) WithKnowledgeAndForeshadow(kr repository.KnowledgeRepository, fr repository.ForeshadowRepository) *AgentContextService {
+	s.knowledgeRepo = kr
+	s.foreshadowRepo = fr
+	return s
 }
 
 // BuildAgentContext reads the novel's outline/memory documents and chapters
@@ -168,6 +199,8 @@ func (s *AgentContextService) BuildAgentContext(
 			MemoryItems:       buildMemoryItemsOut(filterVisibleItems(items, doneNodes)),
 			TargetItem:        json.RawMessage("{}"),
 			TargetNode:        json.RawMessage("{}"),
+			KnowledgeNodes:    s.loadKnowledgeNodes(ctx, userID, novelID),
+			ForeshadowThreads: s.loadForeshadowThreads(ctx, userID, novelID),
 		},
 	}
 
@@ -345,4 +378,61 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(runes[:n])
+}
+
+// loadKnowledgeNodes reads the novel's knowledge-graph nodes (capped) for
+// closed-loop generation. Absence of the repo (or no nodes) yields an empty
+// slice so downstream formatting simply skips the section.
+func (s *AgentContextService) loadKnowledgeNodes(ctx context.Context, userID, novelID int64) []AgentKnowledgeNodeOut {
+	if s.knowledgeRepo == nil {
+		return []AgentKnowledgeNodeOut{}
+	}
+	nodes, err := s.knowledgeRepo.GetNodesByNovel(ctx, userID, novelID)
+	if err != nil || len(nodes) == 0 {
+		return []AgentKnowledgeNodeOut{}
+	}
+	const cap = 50
+	if len(nodes) > cap {
+		nodes = nodes[:cap]
+	}
+	out := make([]AgentKnowledgeNodeOut, 0, len(nodes))
+	for i := range nodes {
+		n := &nodes[i]
+		typ := ""
+		if n.Type != nil {
+			typ = *n.Type
+		}
+		desc := ""
+		if n.Properties != nil {
+			var props map[string]interface{}
+			if json.Unmarshal(n.Properties, &props) == nil {
+				if d, ok := props["description"].(string); ok {
+					desc = d
+				}
+			}
+		}
+		out = append(out, AgentKnowledgeNodeOut{Name: n.Name, Type: typ, Description: desc})
+	}
+	return out
+}
+
+// loadForeshadowThreads reads open (planted) foreshadow threads so new
+// chapters can plant/pay off consistently. Absence yields an empty slice.
+func (s *AgentContextService) loadForeshadowThreads(ctx context.Context, userID, novelID int64) []AgentForeshadowOut {
+	if s.foreshadowRepo == nil {
+		return []AgentForeshadowOut{}
+	}
+	threads, err := s.foreshadowRepo.ListByStatus(ctx, userID, novelID, []string{model.ForeshadowPlanted})
+	if err != nil || len(threads) == 0 {
+		return []AgentForeshadowOut{}
+	}
+	const cap = 30
+	if len(threads) > cap {
+		threads = threads[:cap]
+	}
+	out := make([]AgentForeshadowOut, 0, len(threads))
+	for i := range threads {
+		out = append(out, AgentForeshadowOut{Description: threads[i].Description, Status: threads[i].Status})
+	}
+	return out
 }

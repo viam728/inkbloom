@@ -35,6 +35,8 @@ type StoryService struct {
 	docSvc         *NovelDocService
 	chapterSvc     *ChapterService
 	agentContext   *AgentContextService
+	knowledgeSvc   *KnowledgeService   // optional: auto-extract into knowledge graph
+	foreshadowSvc  *ForeshadowService  // optional: auto-detect planted threads
 	aiServiceURL   string
 	httpClient     *http.Client
 	logger         *zap.Logger
@@ -64,6 +66,16 @@ func NewStoryService(
 	}
 }
 
+// WithClosedLoop wires the optional knowledge/foreshadow services so that
+// adopting a chapter automatically extracts entities into the knowledge
+// graph and detects planted foreshadow threads (plan P2-b). Without them,
+// adoption only writes the chapter body.
+func (s *StoryService) WithClosedLoop(ks *KnowledgeService, fs *ForeshadowService) *StoryService {
+	s.knowledgeSvc = ks
+	s.foreshadowSvc = fs
+	return s
+}
+
 // CreateJob registers a new full-book creation job from a one-line idea.
 func (s *StoryService) CreateJob(ctx context.Context, userID int64, req *dto.CreateStoryJobRequest) (*dto.StoryJobResponse, error) {
 	if err := s.ownedNovel(ctx, userID, req.NovelID); err != nil {
@@ -78,11 +90,32 @@ func (s *StoryService) CreateJob(ctx context.Context, userID int64, req *dto.Cre
 		Status:       model.StoryJobPending,
 		TotalSteps:   5,
 		StagePayload: []byte("{}"),
+		Config:       defaultJobConfig(req.Config),
 	}
 	if err := s.repo.Create(ctx, job); err != nil {
 		return nil, err
 	}
 	return s.toResponse(job), nil
+}
+
+// defaultJobConfig normalizes the author's generation settings, filling in
+// defaults for any slider the client omitted.
+func defaultJobConfig(raw json.RawMessage) []byte {
+	cfg := map[string]interface{}{
+		"chapter_count":     10,
+		"words_per_chapter": 2000,
+		"style":             "",
+		"auto_settle":       true,
+	}
+	if len(raw) > 0 {
+		var user map[string]interface{}
+		if json.Unmarshal(raw, &user) == nil {
+			for k, v := range user {
+				cfg[k] = v
+			}
+		}
+	}
+	return mustJSON(cfg)
 }
 
 // Get returns one job scoped to the user.
@@ -209,9 +242,47 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 		"adopted_at":  time.Now().UTC(),
 	})
 	payload["adopted"] = adopted
+
+	// Closed-loop binding (plan P2-b): after the author adopts a chapter,
+	// automatically extract its entities into the knowledge graph and detect
+	// planted foreshadow threads. Failures here are best-effort and never
+	// block the adoption — the chapter is already written.
+	extracted, detected := s.settleChapter(ctx, userID, job.NovelID, ch.ID, req.Content)
+	if extracted > 0 || detected > 0 {
+		payload["settled"] = map[string]interface{}{
+			"knowledge_nodes": extracted,
+			"foreshadows":     detected,
+		}
+	}
+
 	job.StagePayload = mustJSON(payload)
 	s.repo.Update(ctx, job)
 	return s.toResponse(job), nil
+}
+
+// settleChapter runs the closed-loop binding for a freshly adopted chapter.
+// Returns (knowledgeNodes, foreshadows) counts; best-effort — errors are
+// logged and swallowed so they never block adoption.
+func (s *StoryService) settleChapter(ctx context.Context, userID, novelID, chapterID int64, content string) (int, int) {
+	var nodes, threads int
+	if s.knowledgeSvc != nil {
+		if err := s.knowledgeSvc.ExtractFromChapter(ctx, userID, novelID, chapterID, content); err != nil {
+			s.logger.Warn("closed-loop: knowledge extraction failed",
+				zap.Int64("chapter_id", chapterID), zap.Error(err))
+		} else {
+			nodes = 1 // coarse signal; precise count lives in the graph
+		}
+	}
+	if s.foreshadowSvc != nil {
+		resp, err := s.foreshadowSvc.DetectPlants(ctx, userID, novelID, chapterID)
+		if err != nil {
+			s.logger.Warn("closed-loop: foreshadow detection failed",
+				zap.Int64("chapter_id", chapterID), zap.Error(err))
+		} else if resp != nil {
+			threads = len(resp.Candidates)
+		}
+	}
+	return nodes, threads
 }
 
 // AdvanceStage moves the state machine to the next stage (or holds at the
@@ -264,13 +335,54 @@ func (s *StoryService) stageToScene(job *model.StoryJob, instruction string) (st
 	}
 }
 
-// prompt builds a stage prompt embedding the job title/logline.
+// prompt builds a stage prompt embedding the job title/logline + the
+// author's generation settings (config) so the AI fills the system to spec.
 func (s *StoryService) prompt(base string, job *model.StoryJob, instruction string) string {
 	b := fmt.Sprintf("作品：《%s》\n创意：%s\n任务：%s", job.Title, job.Logline, base)
+	if cfg := s.formatConfig(job.Config); cfg != "" {
+		b += "\n\n【生成设置】\n" + cfg
+	}
 	if instruction != "" {
 		b += "\n补充要求：" + instruction
 	}
 	return b
+}
+
+// formatConfig renders the author's generation settings into a compact
+// directive block the LLM can obey (chapter count / words / style).
+func (s *StoryService) formatConfig(raw []byte) string {
+	var cfg map[string]interface{}
+	if len(raw) == 0 || json.Unmarshal(raw, &cfg) != nil {
+		return ""
+	}
+	var parts []string
+	if v, ok := intVal(cfg["chapter_count"]); ok && v > 0 {
+		parts = append(parts, fmt.Sprintf("全书规划 %d 章", v))
+	}
+	if v, ok := intVal(cfg["words_per_chapter"]); ok && v > 0 {
+		parts = append(parts, fmt.Sprintf("每章约 %d 字", v))
+	}
+	if st, ok := cfg["style"].(string); ok && st != "" {
+		parts = append(parts, fmt.Sprintf("文风：%s", st))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；")
+}
+
+// intVal coerces a JSON number (float64) into an int without panicking.
+func intVal(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 // ownedNovel verifies the novel belongs to the user.
@@ -328,6 +440,7 @@ func (s *StoryService) toResponse(j *model.StoryJob) *dto.StoryJobResponse {
 		Progress:      j.Progress,
 		TotalSteps:    j.TotalSteps,
 		StagePayload:  json.RawMessage(j.StagePayload),
+		Config:        json.RawMessage(j.Config),
 		Result:        json.RawMessage(j.Result),
 		LastError:     j.LastError,
 		ChapterKeys:   j.ChapterKeys,
