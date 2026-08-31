@@ -1,9 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Send, Sparkles, Trash2, Mic, MicOff } from 'lucide-react';
+import { Send, Sparkles, Trash2, Mic, MicOff, Plus } from 'lucide-react';
 import { useAIStore } from '@/stores/ai-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import MessageBubble from './MessageBubble';
 import ModelSelector from './ModelSelector';
+import { CHAT_SKILLS } from './chat-skills';
 
 /** 空状态下的灵感建议词 */
 const SUGGESTIONS = [
@@ -24,6 +25,8 @@ const AIChatPanel: React.FC = () => {
   const clearMessages = useAIStore((s) => s.clearMessages);
 
   const [input, setInput] = useState('');
+  const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -38,6 +41,29 @@ const AIChatPanel: React.FC = () => {
       }
     },
   );
+
+  // 点击 Skill 菜单外部时关闭
+  useEffect(() => {
+    if (!skillMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (skillMenuRef.current && !skillMenuRef.current.contains(e.target as Node)) {
+        setSkillMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [skillMenuOpen]);
+
+  // 触发一个 Skill：prompt 类投递到输入框，navigate 类切面板
+  const invokeSkill = (skill: (typeof CHAT_SKILLS)[number]) => {
+    setSkillMenuOpen(false);
+    if (skill.kind === 'prompt' && skill.prompt) {
+      setInput(skill.prompt);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else if (skill.kind === 'navigate' && skill.event) {
+      window.dispatchEvent(new CustomEvent(skill.event));
+    }
+  };
 
   const handleToggleSpeech = () => {
     if (!listening) {
@@ -186,8 +212,40 @@ const AIChatPanel: React.FC = () => {
             className="w-full bg-transparent text-neutral-200 text-sm px-3.5 pt-3 pb-1 outline-none resize-none placeholder-neutral-500"
           />
           {/* 底部操作栏 */}
-          <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center justify-between px-2 pb-2 relative">
             <div className="flex items-center gap-1">
+              {/* + 号 Skill 菜单（插件形态入口） */}
+              <div ref={skillMenuRef} className="relative">
+                <button
+                  onClick={() => setSkillMenuOpen((v) => !v)}
+                  title="创作 Skill"
+                  className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border transition-all ${
+                    skillMenuOpen
+                      ? 'bg-brand-600/20 border-brand-500/40 text-brand-300'
+                      : 'bg-white/4 border-white/8 text-neutral-400 hover:text-neutral-200 hover:border-white/15'
+                  }`}
+                >
+                  <Plus size={15} />
+                </button>
+                {skillMenuOpen && (
+                  <div className="absolute bottom-10 left-0 z-50 w-64 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
+                    <p className="px-2.5 pt-1.5 pb-1 text-[11px] text-neutral-500">创作 Skill</p>
+                    {CHAT_SKILLS.map((skill) => (
+                      <button
+                        key={skill.id}
+                        onClick={() => invokeSkill(skill)}
+                        className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/6 transition-colors text-left"
+                      >
+                        <span className="mt-0.5 text-brand-300 shrink-0">{skill.icon}</span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-sm text-neutral-200 font-medium">{skill.label}</span>
+                          <span className="block text-[11px] text-neutral-500 leading-snug mt-0.5">{skill.description}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <ModelSelector />
               {speechSupported && (
                 <button

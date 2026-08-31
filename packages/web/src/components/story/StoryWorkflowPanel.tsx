@@ -326,6 +326,38 @@ const StagePreview: React.FC<{
   onRefresh: () => void;
 }> = ({ job, expanded, onToggleExpand, onAdopt, adopting, onRefresh }) => {
   const content = (job.stage_payload?.content as string) || '';
+  const isVerify = job.stage === 'verify';
+  const issues = job.stage_payload?.issues || [];
+  const candidates = job.stage_payload?.settled?.foreshadow_candidates || [];
+
+  // verify 阶段：展示一致性报告（无正文 content）
+  if (isVerify) {
+    return (
+      <div className="rounded-xl bg-white/4 border border-white/8 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-neutral-300">一致性校验报告</span>
+          <button onClick={onRefresh} className="p-1 rounded text-neutral-500 hover:text-neutral-300" title="刷新">
+            <RefreshCw size={12} />
+          </button>
+        </div>
+        {issues.length === 0 ? (
+          <p className="text-sm text-emerald-400">✓ 未发现一致性冲突</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {issues.map((it, i) => (
+              <div key={i} className="text-xs text-neutral-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2.5 py-2">
+                {it.description || JSON.stringify(it)}
+              </div>
+            ))}
+          </div>
+        )}
+        {job.stage_payload?.degraded && (
+          <p className="text-[11px] text-neutral-500 mt-2">（一致性检查不可用，已降级跳过）</p>
+        )}
+      </div>
+    );
+  }
+
   if (!content) {
     return (
       <div className="text-xs text-neutral-500 text-center py-8">
@@ -392,6 +424,23 @@ const StagePreview: React.FC<{
           {adopting ? '采纳中…' : '采纳到章节'}
         </button>
       )}
+
+      {/* 闭环沉淀结果：知识图谱 + 伏笔候选 */}
+      {candidates.length > 0 && (
+        <div className="mt-3 border-t border-white/6 pt-2">
+          <p className="text-[11px] text-neutral-400 mb-1.5">已自动沉淀 · 伏笔候选（待你确认）</p>
+          <div className="flex flex-col gap-1">
+            {candidates.map((c, i) => (
+              <div key={i} className="text-[11px] text-neutral-300 bg-white/3 border border-white/8 rounded-md px-2 py-1.5">
+                <span className="text-amber-300">{Math.round((c.confidence || 0) * 100)}%</span> {c.description}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {job.stage_payload?.settled?.knowledge_nodes ? (
+        <p className="mt-2 text-[11px] text-emerald-400/80">✓ 已提取实体入知识图谱</p>
+      ) : null}
     </div>
   );
 };

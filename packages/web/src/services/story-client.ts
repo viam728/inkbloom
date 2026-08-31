@@ -31,11 +31,33 @@ export interface AdoptedChapter {
   adopted_at?: string;
 }
 
+export interface ForeshadowCandidate {
+  description?: string;
+  anchor?: string;
+  expect_chapter?: number;
+  confidence?: number;
+  reason?: string;
+}
+
+export interface ConsistencyIssue {
+  description?: string;
+  entity?: string;
+  severity?: string;
+  [key: string]: unknown;
+}
+
 export interface StoryStagePayload {
   scene?: string;
   content?: string;
   generated?: string;
   adopted?: AdoptedChapter[];
+  settled?: {
+    knowledge_nodes?: number;
+    foreshadow_candidates?: ForeshadowCandidate[];
+  };
+  issues?: ConsistencyIssue[];
+  issue_count?: number;
+  degraded?: boolean;
   [key: string]: unknown;
 }
 

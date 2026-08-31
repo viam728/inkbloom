@@ -160,7 +160,9 @@ func (s *StoryService) Delete(ctx context.Context, userID, id int64) error {
 
 // GenerateStage runs the AI scene matching the job's current stage and stores
 // the preview in StagePayload. It does NOT write into the real structures —
-// the author confirms via Adopt*.
+// the author confirms via Adopt*. The verify stage is special: it runs a
+// consistency check against the novel's knowledge graph instead of an LLM
+// scene (plan P2-c closed-loop).
 func (s *StoryService) GenerateStage(ctx context.Context, userID, id int64, instruction string) (*dto.StoryJobResponse, error) {
 	job, err := s.repo.GetByID(ctx, userID, id)
 	if err != nil {
@@ -168,6 +170,13 @@ func (s *StoryService) GenerateStage(ctx context.Context, userID, id int64, inst
 	}
 
 	job.Status = model.StoryJobRunning
+
+	// Verify stage: run the existing consistency checker against the latest
+	// adopted chapter(s), no LLM call.
+	if job.Stage == model.StageVerify {
+		return s.runVerifyStage(ctx, job)
+	}
+
 	scene, userPrompt := s.stageToScene(job, instruction)
 
 	payload, err := s.agentContext.BuildAgentContext(ctx, userID, job.NovelID, scene, nil, nil, userPrompt)
@@ -247,11 +256,11 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	// automatically extract its entities into the knowledge graph and detect
 	// planted foreshadow threads. Failures here are best-effort and never
 	// block the adoption — the chapter is already written.
-	extracted, detected := s.settleChapter(ctx, userID, job.NovelID, ch.ID, req.Content)
-	if extracted > 0 || detected > 0 {
+	extracted, candidates := s.settleChapter(ctx, userID, job.NovelID, ch.ID, req.Content)
+	if extracted > 0 || len(candidates) > 0 {
 		payload["settled"] = map[string]interface{}{
-			"knowledge_nodes": extracted,
-			"foreshadows":     detected,
+			"knowledge_nodes":      extracted,
+			"foreshadow_candidates": candidates,
 		}
 	}
 
@@ -260,11 +269,60 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	return s.toResponse(job), nil
 }
 
+// runVerifyStage checks the latest adopted chapter(s) for consistency against
+// the novel's knowledge graph (no LLM call) and stores the report in
+// StagePayload for the workflow panel to render.
+func (s *StoryService) runVerifyStage(ctx context.Context, job *model.StoryJob) (*dto.StoryJobResponse, error) {
+	chapters, err := s.chapterRepo.ListByNovelID(ctx, job.UserID, job.NovelID)
+	if err != nil {
+		job.Status = model.StoryJobFailed
+		job.LastError = err.Error()
+		_ = s.repo.Update(ctx, job)
+		return s.toResponse(job), err
+	}
+
+	issues := []interface{}{}
+	degraded := false
+	if s.knowledgeSvc != nil && len(chapters) > 0 {
+		// Check the most recently written chapter(s) — the tail is what a
+		// verify pass should focus on.
+		last := chapters[len(chapters)-1]
+		var text string
+		if last.Content != nil {
+			text = *last.Content
+		}
+		found, cerr := s.knowledgeSvc.CheckConsistency(ctx, job.UserID, job.NovelID, last.ID, text)
+		if cerr != nil {
+			s.logger.Warn("verify stage: consistency check failed", zap.Int64("chapter_id", last.ID), zap.Error(cerr))
+			degraded = true
+		} else {
+			for _, it := range found {
+				issues = append(issues, it)
+			}
+		}
+	} else {
+		degraded = true
+	}
+
+	job.StagePayload = mustJSON(map[string]interface{}{
+		"scene":       model.StageVerify,
+		"issues":      issues,
+		"issue_count": len(issues),
+		"degraded":    degraded,
+		"generated":   time.Now().UTC(),
+	})
+	job.LastError = ""
+	job.Status = model.StoryJobPending
+	s.repo.Update(ctx, job)
+	return s.toResponse(job), nil
+}
+
 // settleChapter runs the closed-loop binding for a freshly adopted chapter.
-// Returns (knowledgeNodes, foreshadows) counts; best-effort — errors are
-// logged and swallowed so they never block adoption.
-func (s *StoryService) settleChapter(ctx context.Context, userID, novelID, chapterID int64, content string) (int, int) {
-	var nodes, threads int
+// Returns (knowledgeExtracted, foreshadowCandidates). Best-effort — errors
+// are logged and swallowed so they never block adoption.
+func (s *StoryService) settleChapter(ctx context.Context, userID, novelID, chapterID int64, content string) (int, []dto.ForeshadowCandidate) {
+	nodes := 0
+	candidates := []dto.ForeshadowCandidate{}
 	if s.knowledgeSvc != nil {
 		if err := s.knowledgeSvc.ExtractFromChapter(ctx, userID, novelID, chapterID, content); err != nil {
 			s.logger.Warn("closed-loop: knowledge extraction failed",
@@ -278,11 +336,11 @@ func (s *StoryService) settleChapter(ctx context.Context, userID, novelID, chapt
 		if err != nil {
 			s.logger.Warn("closed-loop: foreshadow detection failed",
 				zap.Int64("chapter_id", chapterID), zap.Error(err))
-		} else if resp != nil {
-			threads = len(resp.Candidates)
+		} else if resp != nil && len(resp.Candidates) > 0 {
+			candidates = resp.Candidates
 		}
 	}
-	return nodes, threads
+	return nodes, candidates
 }
 
 // AdvanceStage moves the state machine to the next stage (or holds at the
