@@ -1,0 +1,20 @@
+# Web/Server/AI 镜像构建用的根上下文忽略清单
+# 关键：node_modules 必须排除，否则 COPY 会把宿主机的 Windows 版符号链接拷进 Linux 容器，
+# 覆盖 pnpm install 生成的正规 node_modules，导致 tsc/vite 等二进制无法解析。
+node_modules
+**/node_modules
+.git
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+dist
+build
+coverage
+*.md
+**/*.md
+.vscode
+.idea
+packages/desktop
+packages/desktop/**

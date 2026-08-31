@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# PyPI 下载源可配置（默认清华镜像；海外/CI 可在 build 时用 --build-arg 覆盖为官方源）
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_INDEX_URL=${PIP_INDEX}
+
 WORKDIR /app
 
 # Install system dependencies for grpc
