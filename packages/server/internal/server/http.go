@@ -477,6 +477,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 				aiGroup.POST("/story/jobs/:id/generate", h.Story.GenerateStage)
 				aiGroup.POST("/story/jobs/:id/chapters/adopt", h.Story.AdoptChapter)
 				aiGroup.POST("/story/jobs/:id/advance", h.Story.AdvanceStage)
+				aiGroup.POST("/story/jobs/:id/stage", h.Story.SetStage)
 			}
 		}
 

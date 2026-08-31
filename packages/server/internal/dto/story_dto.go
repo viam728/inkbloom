@@ -41,6 +41,11 @@ type GenerateStageRequest struct {
 	Instruction string `json:"instruction,omitempty"`
 }
 
+// SetStageRequest sets the job's stage directly (sliding selector, any order).
+type SetStageRequest struct {
+	Stage string `json:"stage" binding:"required"`
+}
+
 // AdoptChapterRequest confirms a drafted chapter and writes it into the
 // novel's chapters table.
 type AdoptChapterRequest struct {

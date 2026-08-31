@@ -139,6 +139,12 @@ export async function advanceStoryStage(id: number): Promise<StoryJob> {
   return data;
 }
 
+/** 直接设置阶段（滑动选择器，任意顺序跳转） */
+export async function setStoryStage(id: number, stage: StoryStage): Promise<StoryJob> {
+  const data = (await apiClient.post(`/story/jobs/${id}/stage`, { stage })) as unknown as StoryJob;
+  return data;
+}
+
 /** 阶段中文标签（供工作流面板渲染） */
 export const STORY_STAGE_LABELS: Record<StoryStage, string> = {
   idea: '创意',

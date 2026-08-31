@@ -86,21 +86,17 @@ export const useStoryStore = create<StoryStoreState>((set, get) => ({
   },
 
   jumpStage: async (id: number, target: StoryStage) => {
-    // 滑动到目标阶段：当前阶段早于目标时连续推进；已超过则保持。
-    let job = await storyApi.getStoryJob(id);
-    const targetIdx = STAGE_ORDER.indexOf(target);
-    let guard = 0;
-    while (job && guard < STAGE_ORDER.length) {
-      const curIdx = STAGE_ORDER.indexOf(job.stage);
-      if (job.stage === 'done' || curIdx >= targetIdx) break;
-      if (curIdx >= STAGE_ORDER.length - 1) break;
-      job = await storyApi.advanceStoryStage(id);
-      guard++;
+    // 滑动选择器：直接设置阶段（任意顺序），不限定线性推进。
+    try {
+      const job = await storyApi.setStoryStage(id, target);
+      set((s) => ({
+        activeJob: s.activeJob?.id === id ? job : s.activeJob,
+        jobs: s.jobs.map((j) => (j.id === id ? job : j)),
+      }));
+    } catch (e) {
+      console.error('jumpStage failed', e);
+      toast.show('切换阶段失败', 'error');
     }
-    set((s) => ({
-      activeJob: s.activeJob?.id === id ? job : s.activeJob,
-      jobs: s.jobs.map((j) => (j.id === id ? job : j)),
-    }));
   },
 
   adoptChapter: async (id, req) => {

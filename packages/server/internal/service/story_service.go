@@ -378,6 +378,43 @@ func (s *StoryService) AdvanceStage(ctx context.Context, userID, id int64) (*dto
 	return s.toResponse(job), nil
 }
 
+// SetStage sets the job's stage directly (sliding selector, any order).
+// This powers the draggable stage picker — the author can jump to any
+// stage without stepping through the linear order.
+func (s *StoryService) SetStage(ctx context.Context, userID, id int64, target string) (*dto.StoryJobResponse, error) {
+	job, err := s.repo.GetByID(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	valid := map[string]bool{
+		model.StageIdea:          true,
+		model.StageOutline:       true,
+		model.StagePlanChapters:  true,
+		model.StageDraftChapter:  true,
+		model.StageVerify:        true,
+		model.StageFinalize:      true,
+		model.StageDone:          true,
+	}
+	if !valid[target] {
+		return nil, fmt.Errorf("invalid stage: %s", target)
+	}
+	order := []string{
+		model.StageIdea, model.StageOutline, model.StagePlanChapters,
+		model.StageDraftChapter, model.StageVerify, model.StageFinalize, model.StageDone,
+	}
+	// Progress = 1-based index in the canonical order (idea=0→progress shown as idx+1).
+	for i, st := range order {
+		if st == target {
+			job.Progress = i
+			break
+		}
+	}
+	job.Stage = target
+	job.Status = model.StoryJobPending
+	s.repo.Update(ctx, job)
+	return s.toResponse(job), nil
+}
+
 // stageToScene maps a job stage to the agent scene name and the user prompt
 // that drives generation for that stage.
 func (s *StoryService) stageToScene(job *model.StoryJob, instruction string) (string, string) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
@@ -41,6 +41,9 @@ const StoryWorkflowPanel: React.FC = () => {
   const [wordsPerChapter, setWordsPerChapter] = useState(2000);
   const [style, setStyle] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
+  // 滑动选择器：拖动中的节点索引（预览高亮），松手时提交跳转
+  const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
 
   // 加载当前作品的任务
   useEffect(() => {
@@ -87,6 +90,33 @@ const StoryWorkflowPanel: React.FC = () => {
       await refreshActive();
     } catch (e) {
       console.error('advance failed', e);
+    }
+  };
+
+  // 滑动选择器：指针拖动时据轨道位置换算节点索引并预览高亮
+  const handleTrackPointer = (e: React.PointerEvent) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const idx = Math.round(ratio * (STAGE_ORDER.length - 1));
+    setDragStageIdx(idx);
+  };
+
+  const handleDragEnd = async () => {
+    if (dragStageIdx == null || !activeJob) {
+      setDragStageIdx(null);
+      return;
+    }
+    const target = STAGE_ORDER[dragStageIdx];
+    setDragStageIdx(null);
+    if (target !== activeJob.stage) {
+      try {
+        await jumpStage(activeJob.id, target);
+        await refreshActive();
+      } catch (e) {
+        console.error('jump stage failed', e);
+      }
     }
   };
 
@@ -247,41 +277,62 @@ const StoryWorkflowPanel: React.FC = () => {
             </div>
             <p className="text-xs text-neutral-400 mb-3">{activeJob.logline}</p>
             {/* 阶段节点条（可点击滑动到目标阶段） */}
-            <div className="flex items-center mb-3">
-              {STAGE_ORDER.map((st, idx) => {
-                const reached = idx <= stageIndex;
-                const current = idx === stageIndex;
+            {/* 滑动选择器：可拖动选择任意阶段（不限定顺序） */}
+            <div
+              ref={trackRef}
+              className="relative mb-3 px-2 pt-4 pb-1 select-none touch-none cursor-pointer"
+              onPointerMove={(e) => {
+                if (dragStageIdx !== null) handleTrackPointer(e);
+              }}
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                handleTrackPointer(e);
+              }}
+              onPointerUp={handleDragEnd}
+              onPointerCancel={handleDragEnd}
+            >
+              {(() => {
+                const activeIdx = dragStageIdx ?? stageIndex;
+                const pct = (activeIdx / (STAGE_ORDER.length - 1)) * 100;
                 return (
-                  <React.Fragment key={st}>
-                    <button
-                      onClick={() => jumpStage(activeJob.id, st)}
-                      disabled={idx === 0 || activeJob.status === 'done'}
-                      title={`跳转到「${STORY_STAGE_LABELS[st]}」`}
-                      className="flex-1 flex flex-col items-center gap-1 group"
-                    >
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full transition-all ${
-                          current
-                            ? 'bg-violet-400 ring-2 ring-violet-400/40 scale-110'
-                            : reached
-                              ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500'
-                              : 'bg-white/12 group-hover:bg-white/25'
-                        }`}
-                      />
-                      <span
-                        className={`text-[9px] transition-colors ${current ? 'text-violet-300' : reached ? 'text-neutral-400' : 'text-neutral-600'}`}
-                      >
-                        {STORY_STAGE_LABELS[st]}
-                      </span>
-                    </button>
-                    {idx < STAGE_ORDER.length - 1 && (
-                      <div
-                        className={`h-px flex-1 -mt-3 ${idx < stageIndex ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500' : 'bg-white/8'}`}
-                      />
-                    )}
-                  </React.Fragment>
+                  <div className="absolute left-0 right-0 top-[7px] h-1 rounded-full">
+                    {/* 轨道背景 */}
+                    <div className="absolute inset-0 h-full rounded-full bg-white/10" />
+                    {/* 已走过路径 */}
+                    <div
+                      className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                    {/* 滑块手柄（拖动时放大） */}
+                    <div
+                      className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full shadow-lg transition-transform ${dragStageIdx !== null ? 'scale-110' : ''}`}
+                      style={{
+                        left: `${pct}%`,
+                        background: 'linear-gradient(135deg, #8b5cf6, #d946ef)',
+                        boxShadow: '0 0 0 4px rgba(139,92,246,0.2)',
+                      }}
+                      title={`当前: ${STORY_STAGE_LABELS[STAGE_ORDER[activeIdx]]}`}
+                    />
+                  </div>
                 );
-              })}
+              })()}
+              {/* 节点标签 */}
+              <div className="flex items-start">
+                {STAGE_ORDER.map((st, idx) => {
+                  const activeIdx = dragStageIdx ?? stageIndex;
+                  const current = idx === activeIdx;
+                  const reached = idx <= activeIdx;
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => jumpStage(activeJob.id, st)}
+                      className={`flex-1 flex flex-col items-center gap-1 text-[9px] transition-colors ${current ? 'text-violet-300 font-medium' : reached ? 'text-neutral-400' : 'text-neutral-600'}`}
+                    >
+                      {STORY_STAGE_LABELS[st]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <button

@@ -133,3 +133,24 @@ func (h *StoryHandler) AdvanceStage(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: job})
 }
+
+// SetStage handles POST /api/v1/ai/story/jobs/:id/stage — direct stage jump
+// (sliding selector, no linear order enforced).
+func (h *StoryHandler) SetStage(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var req dto.SetStageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid request: " + err.Error()})
+		return
+	}
+	job, err := h.storySvc.SetStage(c.Request.Context(), GetUserID(c), id, req.Stage)
+	if err != nil {
+		if err == service.ErrStoryJobNotFound {
+			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: job})
+}
