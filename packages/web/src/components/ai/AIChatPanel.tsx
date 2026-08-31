@@ -13,6 +13,9 @@ const SUGGESTIONS = [
   '构思下一章的情节走向',
 ];
 
+/** 对话内「AI 起稿」入口：点击切换到全本创作工作流面板 */
+const START_STORY_EVENT = 'inkbloom:open-story-workflow';
+
 const AIChatPanel: React.FC = () => {
   const messages = useAIStore((s) => s.messages);
   const isStreaming = useAIStore((s) => s.isStreaming);
@@ -115,6 +118,13 @@ const AIChatPanel: React.FC = () => {
             </div>
             <p className="text-sm font-medium text-neutral-300 mb-1">你好！我是 AI 写作助手</p>
             <p className="text-xs text-neutral-500 mb-5">可以帮你构思情节、塑造角色、润色文字…</p>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent(START_STORY_EVENT))}
+              className="w-full mb-3 py-2.5 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-violet-600/20"
+            >
+              <Sparkles size={14} />
+              AI 起稿 · 全本创作
+            </button>
             <div className="flex flex-col gap-1.5 w-full px-2">
               {SUGGESTIONS.map((s) => (
                 <button

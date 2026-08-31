@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo } from 'react';
-import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images, Anchor } from 'lucide-react';
+import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images, Anchor, Wand2 } from 'lucide-react';
 import AIChatPanel from '@/components/ai/AIChatPanel';
 import AIGCPanel from '@/components/aigc/AIGCPanel';
 import ReviewPanel from '@/components/review/ReviewPanel';
 import TitleFactoryPanel from '@/components/media/TitleFactoryPanel';
 import GalleryGrid from '@/components/gallery/GalleryGrid';
 import ForeshadowTracker from '@/components/knowledge/ForeshadowTracker';
+import StoryWorkflowPanel from '@/components/story/StoryWorkflowPanel';
 import { useUIStore, type RightTab } from '@/stores/ui-store';
 
 const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'AI 助手', icon: <MessageSquareText size={14} /> },
+  { id: 'story', label: 'AI 起稿', icon: <Wand2 size={14} /> },
   { id: 'review', label: '批注评审', icon: <MessageSquareQuote size={14} /> },
   { id: 'tracker', label: '伏笔', icon: <Anchor size={14} /> },
   { id: 'aigc', label: '图片生成', icon: <Palette size={14} /> },
@@ -19,6 +21,7 @@ const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = 
 // 自媒体创作者：标题工厂替代批注评审，侧重传播效率
 const MEDIA_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'AI 助手', icon: <MessageSquareText size={14} /> },
+  { id: 'story', label: 'AI 起稿', icon: <Wand2 size={14} /> },
   { id: 'title', label: '标题工厂', icon: <Sparkles size={14} /> },
   { id: 'aigc', label: '配图生成', icon: <Palette size={14} /> },
   { id: 'gallery', label: '图床', icon: <Images size={14} /> },
@@ -43,11 +46,14 @@ const RightPanel: React.FC = () => {
   useEffect(() => {
     const showAigc = () => setActiveTab('aigc');
     const showReview = () => setActiveTab('review');
+    const showStory = () => setActiveTab('story');
     window.addEventListener('inkbloom:show-aigc', showAigc);
     window.addEventListener('inkbloom:show-review', showReview);
+    window.addEventListener('inkbloom:open-story-workflow', showStory);
     return () => {
       window.removeEventListener('inkbloom:show-aigc', showAigc);
       window.removeEventListener('inkbloom:show-review', showReview);
+      window.removeEventListener('inkbloom:open-story-workflow', showStory);
     };
   }, [setActiveTab]);
 
@@ -80,6 +86,7 @@ const RightPanel: React.FC = () => {
       {/* Tab content */}
       <div className="flex-1 overflow-hidden min-h-0">
         {activeTab === 'chat' && <AIChatPanel />}
+        {activeTab === 'story' && <StoryWorkflowPanel />}
         {activeTab === 'review' && <ReviewPanel />}
         {activeTab === 'tracker' && <ForeshadowTracker />}
         {activeTab === 'title' && <TitleFactoryPanel />}

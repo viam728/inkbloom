@@ -11,7 +11,7 @@ import { generateImagePrompt } from './prompt-client';
  *   AIGC 立绘：/aigc/prompt（复用 prompt-client）→ /aigc/generate 建任务 → 轮询 /tasks/:id 取 result
  */
 
-export type AgentScene = 'character' | 'setting' | 'summary' | 'inspiration' | 'outline';
+export type AgentScene = 'character' | 'setting' | 'summary' | 'inspiration' | 'outline' | 'chapter';
 
 export interface AgentGenerateRequest {
   novel_id: number;
