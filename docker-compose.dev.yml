@@ -33,9 +33,9 @@ services:
       - INKBLOOM_AUTH_TOKEN=inkbloom-dev-token
       - INKBLOOM_LOG_LEVEL=debug
     # Override entrypoint to use go run for hot reload
-    command: ["go", "run", "./cmd/server"]
+    command: [ "go", "run", "./cmd/server" ]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -55,7 +55,7 @@ services:
       - INKBLOOM_HTTP_PORT=8100
       - INKBLOOM_GO_SERVICE_URL=http://server:8080
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -73,4 +73,4 @@ services:
       - VITE_API_BASE_URL=http://localhost:8080
     depends_on:
       - server
-    command: ["pnpm", "dev", "--host", "0.0.0.0"]
+    command: [ "pnpm", "dev", "--host", "0.0.0.0" ]
