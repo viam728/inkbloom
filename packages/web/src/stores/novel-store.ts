@@ -59,6 +59,14 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const data = await apiClient.get('/novels', { params: { page: 1, page_size: 100 } }) as any;
       const novels: Novel[] = data?.novels ?? data?.items ?? [];
       set({ novels });
+      // 刷新后自动恢复上次选中的作品（问题3：避免大纲/记忆因 currentNovel 丢失而"消失"）
+      const lastId = localStorage.getItem('inkbloom:currentNovelId');
+      if (lastId && !get().currentNovel) {
+        const nid = Number(lastId);
+        const restored = novels.find((n) => n.id === nid);
+        if (restored) void get().selectNovel(restored);
+        else localStorage.removeItem('inkbloom:currentNovelId');
+      }
     } catch (e) {
       console.error('fetchNovels failed', e);
       if (DEV_MOCK) set({ novels: localNovels() });
@@ -95,6 +103,13 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       if (!DEV_MOCK) throw e;
       removeLocalNovel(id);
     }
+    try {
+      if (localStorage.getItem('inkbloom:currentNovelId') === String(id)) {
+        localStorage.removeItem('inkbloom:currentNovelId');
+      }
+    } catch {
+      // ignore
+    }
     set((s) => ({
       novels: s.novels.filter((n) => n.id !== id),
       currentNovel: s.currentNovel?.id === id ? null : s.currentNovel,
@@ -107,6 +122,11 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     // 切换作品前先把脏草稿尽力落盘，随后 fetchChapters 按新章节 id 清理失效 tab
     useEditorStore.getState().flushDirtyTabs();
     set({ currentNovel: novel, currentChapter: null });
+    try {
+      localStorage.setItem('inkbloom:currentNovelId', String(novel.id));
+    } catch {
+      // localStorage 不可用（隐私模式等）时静默忽略
+    }
     await get().fetchChapters(novel.id);
   },
 

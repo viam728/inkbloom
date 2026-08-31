@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookOpen, Plus, Trash2, PenLine, Maximize2 } from 'lucide-react';
+import { BookOpen, Plus, PenLine, Maximize2 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import type { Novel } from '@/types';
 import Modal from '@/components/common/Modal';
@@ -7,13 +7,12 @@ import { useToast } from '@/components/common/Toast';
 import LibraryExpandedView from './LibraryExpandedView';
 
 const NovelList: React.FC = () => {
-  const { novels, currentNovel, loading, fetchNovels, createNovel, deleteNovel, selectNovel } =
+  const { novels, currentNovel, loading, fetchNovels, createNovel, selectNovel } =
     useNovelStore();
   const { showToast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [creating, setCreating] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [expandedOpen, setExpandedOpen] = useState(false);
 
   React.useEffect(() => {
@@ -35,16 +34,6 @@ const NovelList: React.FC = () => {
     } finally {
       setCreating(false);
     }
-  };
-
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteNovel(id);
-      showToast('作品已删除', 'info');
-    } catch {
-      showToast('删除失败，请重试', 'error');
-    }
-    setDeleteConfirm(null);
   };
 
   return (
@@ -124,40 +113,6 @@ const NovelList: React.FC = () => {
                 {novel.word_count ? `${novel.word_count.toLocaleString()} 字` : '尚未开始'}
               </div>
             </div>
-            {/* 删除按钮 */}
-            {deleteConfirm === novel.id ? (
-              <div className="flex gap-1 shrink-0 animate-fade-in">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(novel.id);
-                  }}
-                  className="text-[11px] px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white transition-colors"
-                >
-                  确认
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteConfirm(null);
-                  }}
-                  className="text-[11px] px-1.5 py-0.5 rounded bg-white/8 text-neutral-300 hover:bg-white/15 transition-colors"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setDeleteConfirm(novel.id);
-                }}
-                title="删除作品"
-                className="opacity-0 group-hover:opacity-100 shrink-0 p-1 rounded text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
-              >
-                <Trash2 size={13} />
-              </button>
-            )}
           </div>
         );
       })}

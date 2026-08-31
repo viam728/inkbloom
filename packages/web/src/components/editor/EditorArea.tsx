@@ -12,6 +12,7 @@ import { useUIStore } from '@/stores/ui-store';
 import { useStatsStore } from '@/stores/stats-store';
 import { useTabStore, countDraftWords } from '@/stores/tab-store';
 import TipTapEditor from './TipTapEditor';
+import NovelOverview from './NovelOverview';
 import Kbd from '@/components/common/Kbd';
 import ForeshadowHintBar from '@/components/knowledge/ForeshadowHintBar';
 
@@ -22,6 +23,7 @@ const TITLE_DEBOUNCE_MS = 500;
 
 const EditorArea: React.FC = () => {
   const currentChapter = useNovelStore((s) => s.currentChapter);
+  const currentNovel = useNovelStore((s) => s.currentNovel);
   const focusMode = useUIStore((s) => s.focusMode);
   const tabs = useTabStore((s) => s.tabs);
   const activeKey = useTabStore((s) => s.activeKey);
@@ -201,8 +203,12 @@ const EditorArea: React.FC = () => {
     </div>
   ) : undefined;
 
-  // 欢迎页（无任何打开的 tab）
+  // 欢迎页 / 作品概览页（无任何打开的 tab）
   if (!activeTab) {
+    // 选中作品 → 显示作品概览；未选作品 → 欢迎页
+    if (currentNovel) {
+      return <NovelOverview />;
+    }
     return (
       <div className="flex-1 flex items-center justify-center bg-surface-0 relative overflow-hidden">
         {/* 背景光晕 */}
