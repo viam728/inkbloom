@@ -83,3 +83,19 @@ type WorkStatsResponse struct {
 	ReaderCount int64             `json:"reader_count"`
 	Chapters    []ChapterStatsDTO `json:"chapters"`
 }
+
+// BlockEmotionsDTO is one paragraph's emotion counts (plan A31).
+type BlockEmotionsDTO struct {
+	BlockIndex int            `json:"block_index"`
+	Moods      map[string]int `json:"moods"` // fire/knife/sweet/mystery
+}
+
+// ChapterEmotionsResponse is the per-chapter emotion aggregation powering the
+// author dashboard's「章节情绪曲线」(plan A31).
+type ChapterEmotionsResponse struct {
+	ChapterID int64             `json:"chapter_id"`
+	// Totals: mood key → count across the whole chapter.
+	Totals    map[string]int    `json:"totals"`
+	// Blocks: one row per block that received any emotion, ordered by index.
+	Blocks    []BlockEmotionsDTO `json:"blocks"`
+}

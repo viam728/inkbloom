@@ -73,6 +73,13 @@ export interface WorkStats {
   chapters: ChapterStats[];
 }
 
+/** 单章情绪曲线数据（plan A31） */
+export interface ChapterEmotions {
+  chapter_id: number;
+  totals: Record<string, number>;
+  blocks: { block_index: number; moods: Record<string, number> }[];
+}
+
 /** 读者互动（plan A28：划线评论 / 情绪点击） */
 export interface Interaction {
   id: number;

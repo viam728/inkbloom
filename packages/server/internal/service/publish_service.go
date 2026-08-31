@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ type PublishService struct {
 	novelRepo     repository.NovelRepository
 	versionRepo   repository.ChapterVersionRepository
 	ledgerRepo    repository.TokenLedgerRepository
+	interactionRepo repository.InteractionRepository
 	history       *HistoryService
 	cs            contentsafety.Checker
 	localMode     bool
@@ -43,13 +46,14 @@ func NewPublishService(
 	nr repository.NovelRepository,
 	vr repository.ChapterVersionRepository,
 	lr repository.TokenLedgerRepository,
+	ir repository.InteractionRepository,
 	h *HistoryService,
 	cs contentsafety.Checker,
 	localMode bool,
 ) *PublishService {
 	return &PublishService{
 		workRepo: wr, readRepo: rr, chapterRepo: cr, novelRepo: nr,
-		versionRepo: vr, ledgerRepo: lr, history: h, cs: cs, localMode: localMode,
+		versionRepo: vr, ledgerRepo: lr, interactionRepo: ir, history: h, cs: cs, localMode: localMode,
 	}
 }
 
@@ -276,6 +280,52 @@ func (s *PublishService) GetWorkStats(ctx context.Context, userID, workID int64)
 		})
 	}
 	return out, nil
+}
+
+// ChapterEmotions returns the author's emotion aggregation for one published
+// chapter (plan A31): per-block mood counts plus chapter totals. It powers
+// the「章节情绪曲线」on the author dashboard — the E5 feedback loop's
+// reader-side signal.
+func (s *PublishService) ChapterEmotions(ctx context.Context, userID, pid int64) (*dto.ChapterEmotionsResponse, error) {
+	pc, err := s.workRepo.ChapterByPublishedID(ctx, userID, pid)
+	if err != nil {
+		return nil, err
+	}
+	if pc == nil {
+		return nil, ErrNotFound
+	}
+	moods, err := s.interactionRepo.ListByChapter(ctx, pid, model.InteractionMood)
+	if err != nil {
+		return nil, err
+	}
+
+	totals := map[string]int{}
+	blockMap := map[int]map[string]int{}
+	order := []int{}
+	for i := range moods {
+		var m struct {
+			Mood string `json:"mood"`
+		}
+		if len(moods[i].Payload) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(moods[i].Payload, &m); err != nil || m.Mood == "" {
+			continue
+		}
+		totals[m.Mood]++
+		if _, ok := blockMap[moods[i].BlockIndex]; !ok {
+			blockMap[moods[i].BlockIndex] = map[string]int{}
+			order = append(order, moods[i].BlockIndex)
+		}
+		blockMap[moods[i].BlockIndex][m.Mood]++
+	}
+	sort.Ints(order)
+
+	blocks := make([]dto.BlockEmotionsDTO, 0, len(order))
+	for _, idx := range order {
+		blocks = append(blocks, dto.BlockEmotionsDTO{BlockIndex: idx, Moods: blockMap[idx]})
+	}
+	return &dto.ChapterEmotionsResponse{ChapterID: pid, Totals: totals, Blocks: blocks}, nil
 }
 
 // UpdateVisibility changes a work's visibility without touching its chapters.

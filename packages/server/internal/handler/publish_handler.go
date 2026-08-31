@@ -131,6 +131,22 @@ func (h *PublishHandler) GetWorkStats(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: stats})
 }
 
+// GetChapterEmotions handles GET /api/v1/publish/chapters/:pid/emotions
+// (plan A31): the author's per-chapter emotion curve data.
+func (h *PublishHandler) GetChapterEmotions(c *gin.Context) {
+	pid, err := strconv.ParseInt(c.Param("pid"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid pid"})
+		return
+	}
+	data, err := h.ps.ChapterEmotions(c.Request.Context(), GetUserID(c), pid)
+	if err != nil {
+		h.respondPublishError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: data})
+}
+
 // respondPublishError maps domain errors to HTTP status codes.
 func (h *PublishHandler) respondPublishError(c *gin.Context, err error) {
 	switch {

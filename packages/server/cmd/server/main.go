@@ -322,7 +322,7 @@ func main() {
 	// storing the public copy. historyService provides the milestone
 	// snapshot written before each published chapter (so "which draft state
 	// did readers see" stays answerable).
-	publishService := service.NewPublishService(publishedRepo, publishedReadRepo, chapterRepo, novelRepo, chapterVersionRepo, tokenLedgerRepo, historyService, csChecker, cfg.IsLocal())
+	publishService := service.NewPublishService(publishedRepo, publishedReadRepo, chapterRepo, novelRepo, chapterVersionRepo, tokenLedgerRepo, repository.NewInteractionRepository(db), historyService, csChecker, cfg.IsLocal())
 	// E4 publishing & reading (plan A17/A18). Reader reuses publishService
 	// for the cross-user reads — one service, two handlers, no duplication.
 	publishHandler := handler.NewPublishHandler(publishService)

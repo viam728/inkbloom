@@ -7,6 +7,7 @@ import type {
   PublishedChapter,
   ReadingProgress,
   WorkStats,
+  ChapterEmotions,
   Interaction,
   InteractionList,
 } from '@/types/published';
@@ -87,6 +88,12 @@ export async function unpublishChapter(pid: number): Promise<void> {
 
 export async function getWorkStats(wid: number): Promise<WorkStats> {
   return (await apiClient.get(`/publish/works/${wid}/stats`)) as unknown as WorkStats;
+}
+
+// ── 章节情绪曲线（A31）───────────────────────────────────────────────
+
+export async function getChapterEmotions(pid: number): Promise<ChapterEmotions> {
+  return (await apiClient.get(`/publish/chapters/${pid}/emotions`)) as unknown as ChapterEmotions;
 }
 
 // ── 读者互动（A28）────────────────────────────────────────────────────
