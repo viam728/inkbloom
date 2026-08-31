@@ -40,6 +40,7 @@ type agentToolCall struct {
 type AgentService struct {
 	novelSvc     *NovelService
 	chapterSvc   *ChapterService
+	docSvc       *NovelDocService
 	agentContext *AgentContextService
 	aiServiceURL string
 	httpClient   *http.Client
@@ -50,6 +51,7 @@ type AgentService struct {
 func NewAgentService(
 	novelSvc *NovelService,
 	chapterSvc *ChapterService,
+	docSvc *NovelDocService,
 	agentContext *AgentContextService,
 	aiServiceURL string,
 	logger *zap.Logger,
@@ -57,6 +59,7 @@ func NewAgentService(
 	return &AgentService{
 		novelSvc:     novelSvc,
 		chapterSvc:   chapterSvc,
+		docSvc:       docSvc,
 		agentContext: agentContext,
 		aiServiceURL: strings.TrimRight(aiServiceURL, "/"),
 		httpClient:   &http.Client{Timeout: 5 * time.Minute},
@@ -104,13 +107,52 @@ func (s *AgentService) toolSchema() []AgentTool {
 			"type":       "object",
 			"properties": map[string]any{},
 		}),
+		ft("save_memory", "把生成/提取的角色、设定、地点等记忆项写入作品的记忆模块（novel_memory）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
+				"items": map[string]any{
+					"type": "array",
+					"description": "记忆项列表。每项含 type（character/setting/location 等）、name、content、fields（可省略）",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":    map[string]any{"type": "string"},
+							"name":    map[string]any{"type": "string"},
+							"content": map[string]any{"type": "string"},
+							"fields":  map[string]any{"type": "object"},
+						},
+					},
+				},
+			},
+			"required": []string{"novel_id", "items"},
+		}),
+		ft("save_outline", "把生成的大纲（幕/节点结构）写入作品的大纲模块（novel_outline）。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
+				"acts": map[string]any{
+					"type": "array",
+					"description": "大纲幕结构。每幕含 title 与 nodes（每节点含 title/summary）",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"title": map[string]any{"type": "string"},
+							"nodes": map[string]any{"type": "array"},
+						},
+					},
+				},
+			},
+			"required": []string{"novel_id", "acts"},
+		}),
 	}
 }
 
 // systemPrompt is the Agent's persona + tool-usage rule.
 const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作小说。" +
-	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels）" +
-	"来实际创建作品、章节并撰写正文。执行工具后，用简洁中文向用户汇报结果。" +
+	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / save_memory / save_outline）" +
+	"来实际创建作品、章节、撰写正文，并把角色/设定写入记忆模块、把情节规划写入大纲模块。" +
+	"执行工具后，用简洁中文向用户汇报结果。" +
 	"当用户想开始创作时，主动调用工具完成任务，而不是只给建议。"
 
 // Run executes one Agent turn: given the conversation messages, it loops with
@@ -283,6 +325,36 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 		}
 		return s.writeChapter(ctx, userID, nid, int64(cid), instr)
 
+	case "save_memory":
+		nid := resolveNovelID()
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）"}`
+		}
+		if raw, ok := args["items"].([]interface{}); ok {
+			count, err := s.syncMemory(ctx, userID, nid, raw)
+			if err != nil {
+				s.logger.Warn("agent save_memory failed", zap.Error(err))
+				return `{"error":"保存记忆失败"}`
+			}
+			return asJSON(map[string]any{"saved": count})
+		}
+		return `{"error":"items 必填"}`
+
+	case "save_outline":
+		nid := resolveNovelID()
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）"}`
+		}
+		if raw, ok := args["acts"].([]interface{}); ok {
+			cnt, err := s.syncOutline(ctx, userID, nid, raw)
+			if err != nil {
+				s.logger.Warn("agent save_outline failed", zap.Error(err))
+				return `{"error":"保存大纲失败"}`
+			}
+			return asJSON(map[string]any{"acts": cnt})
+		}
+		return `{"error":"acts 必填"}`
+
 	case "list_novels":
 		list, err := s.novelSvc.ListNovels(ctx, userID, 1, 50)
 		if err != nil {
@@ -330,6 +402,98 @@ func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapte
 	}
 	b, _ := json.Marshal(map[string]any{"chapter_id": chapterID, "written": len([]rune(content))})
 	return string(b)
+}
+
+// syncMemory merges LLM-provided memory items into the novel's memory module
+// (novel_memory). Existing items are preserved; new items are appended by
+// name-dedup so re-running never duplicates.
+func (s *AgentService) syncMemory(ctx context.Context, userID, novelID int64, rawItems []interface{}) (int, error) {
+	// Read current doc (empty when none).
+	current, err := s.docSvc.GetMemory(ctx, userID, novelID)
+	if err != nil {
+		return 0, err
+	}
+	var existingItems []map[string]any
+	if current != nil && len(current.Items) > 0 {
+		_ = json.Unmarshal(current.Items, &existingItems)
+	}
+	if existingItems == nil {
+		existingItems = []map[string]any{}
+	}
+	names := make(map[string]bool)
+	for _, it := range existingItems {
+		if n, ok := it["name"].(string); ok {
+			names[n] = true
+		}
+	}
+	saved := 0
+	for _, raw := range rawItems {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if name == "" || names[name] {
+			continue
+		}
+		item := map[string]any{
+			"name":    name,
+			"type":    m["type"],
+			"content": m["content"],
+		}
+		if f, ok := m["fields"].(map[string]any); ok {
+			item["fields"] = f
+		}
+		existingItems = append(existingItems, item)
+		names[name] = true
+		saved++
+	}
+	if saved == 0 {
+		return 0, nil
+	}
+	raw, _ := json.Marshal(existingItems)
+	if _, err := s.docSvc.UpdateMemory(ctx, userID, novelID, raw, nil); err != nil {
+		return 0, err
+	}
+	return saved, nil
+}
+
+// syncOutline merges LLM-provided acts into the novel's outline module
+// (novel_outline). Existing acts are preserved; non-empty new acts are
+// appended. Existing version is passed through to avoid lost-update.
+func (s *AgentService) syncOutline(ctx context.Context, userID, novelID int64, rawActs []interface{}) (int, error) {
+	current, err := s.docSvc.GetOutline(ctx, userID, novelID)
+	if err != nil {
+		return 0, err
+	}
+	var existingActs []map[string]any
+	if current != nil && len(current.Acts) > 0 {
+		_ = json.Unmarshal(current.Acts, &existingActs)
+	}
+	if existingActs == nil {
+		existingActs = []map[string]any{}
+	}
+	saved := 0
+	for _, raw := range rawActs {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		title, _ := m["title"].(string)
+		if title == "" {
+			continue
+		}
+		existingActs = append(existingActs, m)
+		saved++
+	}
+	if saved == 0 {
+		return 0, nil
+	}
+	raw, _ := json.Marshal(existingActs)
+	if _, err := s.docSvc.UpdateOutline(ctx, userID, novelID, raw, nil); err != nil {
+		return 0, err
+	}
+	return saved, nil
 }
 
 // postAI forwards a JSON payload to the ai-service and decodes the response.

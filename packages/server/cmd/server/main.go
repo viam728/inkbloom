@@ -277,7 +277,7 @@ func main() {
 		WithClosedLoop(knowledgeService, foreshadowService)
 	// Conversational creation Agent (plan: 对话式创作 Agent) — tool-calling
 	// loop over create_novel/create_chapter/write_chapter/list_novels.
-	agentService := service.NewAgentService(novelService, chapterService, agentContextService, cfg.AIService.URL, logger)
+	agentService := service.NewAgentService(novelService, chapterService, docService, agentContextService, cfg.AIService.URL, logger)
 
 	// M5 data export/import (task #47): .inkbloom packages.
 	syncService := service.NewSyncService(db, fileStorage, novelRepo, docRepo, userRepo, logger)

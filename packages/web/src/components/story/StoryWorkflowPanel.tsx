@@ -27,6 +27,7 @@ const StoryWorkflowPanel: React.FC = () => {
     createJob,
     generateStage,
     advanceStage,
+    jumpStage,
     adoptChapter,
     removeJob,
     refreshActive,
@@ -245,19 +246,39 @@ const StoryWorkflowPanel: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-neutral-400 mb-3">{activeJob.logline}</p>
-            {/* 阶段条 */}
-            <div className="flex items-center gap-1 mb-3">
+            {/* 阶段节点条（可点击滑动到目标阶段） */}
+            <div className="flex items-center mb-3">
               {STAGE_ORDER.map((st, idx) => {
                 const reached = idx <= stageIndex;
                 const current = idx === stageIndex;
                 return (
                   <React.Fragment key={st}>
-                    <div
-                      className={`flex-1 h-1.5 rounded-full transition-colors ${
-                        reached ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500' : 'bg-white/8'
-                      } ${current ? 'ring-2 ring-violet-400/40' : ''}`}
-                    />
-                    {idx < STAGE_ORDER.length - 1 && <span className="text-[9px] text-neutral-600">·</span>}
+                    <button
+                      onClick={() => jumpStage(activeJob.id, st)}
+                      disabled={idx === 0 || activeJob.status === 'done'}
+                      title={`跳转到「${STORY_STAGE_LABELS[st]}」`}
+                      className="flex-1 flex flex-col items-center gap-1 group"
+                    >
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full transition-all ${
+                          current
+                            ? 'bg-violet-400 ring-2 ring-violet-400/40 scale-110'
+                            : reached
+                              ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500'
+                              : 'bg-white/12 group-hover:bg-white/25'
+                        }`}
+                      />
+                      <span
+                        className={`text-[9px] transition-colors ${current ? 'text-violet-300' : reached ? 'text-neutral-400' : 'text-neutral-600'}`}
+                      >
+                        {STORY_STAGE_LABELS[st]}
+                      </span>
+                    </button>
+                    {idx < STAGE_ORDER.length - 1 && (
+                      <div
+                        className={`h-px flex-1 -mt-3 ${idx < stageIndex ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500' : 'bg-white/8'}`}
+                      />
+                    )}
                   </React.Fragment>
                 );
               })}

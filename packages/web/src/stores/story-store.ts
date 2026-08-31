@@ -16,6 +16,7 @@ interface StoryStoreState {
   createJob: (req: { novel_id: number; title: string; logline: string; config?: StoryJobConfig }) => Promise<StoryJob>;
   generateStage: (id: number) => Promise<void>;
   advanceStage: (id: number) => Promise<void>;
+  jumpStage: (id: number, target: StoryStage) => Promise<void>;
   adoptChapter: (id: number, req: { chapter_key: string; title: string; content: string }) => Promise<void>;
   removeJob: (id: number) => Promise<void>;
   refreshActive: () => Promise<void>;
@@ -78,6 +79,24 @@ export const useStoryStore = create<StoryStoreState>((set, get) => ({
 
   advanceStage: async (id: number) => {
     const job = await storyApi.advanceStoryStage(id);
+    set((s) => ({
+      activeJob: s.activeJob?.id === id ? job : s.activeJob,
+      jobs: s.jobs.map((j) => (j.id === id ? job : j)),
+    }));
+  },
+
+  jumpStage: async (id: number, target: StoryStage) => {
+    // 滑动到目标阶段：当前阶段早于目标时连续推进；已超过则保持。
+    let job = await storyApi.getStoryJob(id);
+    const targetIdx = STAGE_ORDER.indexOf(target);
+    let guard = 0;
+    while (job && guard < STAGE_ORDER.length) {
+      const curIdx = STAGE_ORDER.indexOf(job.stage);
+      if (job.stage === 'done' || curIdx >= targetIdx) break;
+      if (curIdx >= STAGE_ORDER.length - 1) break;
+      job = await storyApi.advanceStoryStage(id);
+      guard++;
+    }
     set((s) => ({
       activeJob: s.activeJob?.id === id ? job : s.activeJob,
       jobs: s.jobs.map((j) => (j.id === id ? job : j)),
