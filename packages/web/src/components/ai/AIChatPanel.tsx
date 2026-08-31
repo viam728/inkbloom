@@ -224,9 +224,10 @@ const AIChatPanel: React.FC = () => {
       <div className="px-3 pb-3 pt-1">
         <div className="rounded-xl bg-white/5 border border-white/10 focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-brand-500/15 transition-all">
           {/* 输入头部：挂载的 Skill/附件标签 chips + 挂载按钮 */}
-          <div className="flex items-center gap-1.5 px-2 pt-2 pb-1">
+          <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 relative">
+            {/* 已挂载 chips（Skill + 附件），始终在输入框头部展示 */}
             {(activeSkill || attachments.length > 0) && (
-              <div className="flex items-center gap-1.5 flex-wrap mr-1">
+              <div className="flex items-center gap-1.5 flex-wrap mr-1 flex-1 min-w-0">
                 {activeSkill && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-600/15 border border-violet-500/30 text-violet-300 text-[11px]">
                     <Wand2 size={11} />
@@ -268,7 +269,7 @@ const AIChatPanel: React.FC = () => {
                 <Wand2 size={14} />
               </button>
               {skillMenuOpen && (
-                <div className="absolute top-8 left-0 z-50 w-64 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
+                <div className="absolute bottom-9 left-0 z-50 w-64 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
                   <p className="px-2.5 pt-1.5 pb-1 text-[11px] text-neutral-500">创作 Skill（点击挂载到输入框）</p>
                   {CHAT_SKILLS.map((skill) => (
                     <button
