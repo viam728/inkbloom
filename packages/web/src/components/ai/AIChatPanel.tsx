@@ -3,7 +3,6 @@ import { Send, Sparkles, Trash2, Mic, MicOff, Paperclip, Wand2, X } from 'lucide
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
-import { useToast } from '@/components/common/Toast';
 import MessageBubble from './MessageBubble';
 import ModelSelector from './ModelSelector';
 import { CHAT_SKILLS } from './chat-skills';
@@ -25,7 +24,6 @@ const AIChatPanel: React.FC = () => {
   const fetchNovels = useNovelStore((s) => s.fetchNovels);
   const fetchChapters = useNovelStore((s) => s.fetchChapters);
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
-  const { showToast } = useToast();
 
   const [input, setInput] = useState('');
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
@@ -63,10 +61,6 @@ const AIChatPanel: React.FC = () => {
   const invokeSkill = (skill: (typeof CHAT_SKILLS)[number]) => {
     setSkillMenuOpen(false);
     setActiveSkill(skill);
-    if (skill.id === 'story') {
-      // 起稿 Skill：挂载后提示补充创意，不直接发送
-      showToast('已挂载「AI 起稿」，输入创意后发送', 'info');
-    }
   };
 
   const handleToggleSpeech = () => {
@@ -293,7 +287,6 @@ const AIChatPanel: React.FC = () => {
               <input
                 type="file"
                 multiple
-                accept="image/*"
                 className="hidden"
                 onChange={(e) => {
                   const files = e.target.files;
@@ -305,7 +298,6 @@ const AIChatPanel: React.FC = () => {
                         name: f.name,
                       })),
                     ]);
-                    showToast('附件已挂载（多模态理解待接入）', 'info');
                   }
                   e.target.value = '';
                 }}
