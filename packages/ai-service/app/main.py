@@ -194,12 +194,14 @@ class AgentToolHTTP(BaseModel):
 
 class AgentMessageHTTP(BaseModel):
     """OpenAI-style message for the Agent loop: role/content plus optional
-    tool_calls (assistant) and tool_call_id (tool) — the full protocol."""
+    tool_calls (assistant), tool_call_id (tool), and reasoning_content
+    (DeepSeek thinking mode must be echoed back verbatim)."""
 
     role: str
     content: str | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None
 
 
 class AgentChatHTTPRequest(BaseModel):
@@ -234,6 +236,7 @@ async def agent_chat(request: AgentChatHTTPRequest):
         )
         return {
             "content": result.get("content", ""),
+            "reasoning_content": result.get("reasoning_content", ""),
             "tool_calls": result.get("tool_calls", []),
             "usage": {
                 "prompt_tokens": result.get("prompt_tokens", 0),

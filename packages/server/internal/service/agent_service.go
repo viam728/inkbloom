@@ -145,7 +145,7 @@ func (s *AgentService) Run(ctx context.Context, userID int64, messages []map[str
 				"args":   tc.Arguments,
 				"result": result,
 			})
-			msgs = append(msgs, map[string]any{
+			assistantMsg := map[string]any{
 				"role":    "assistant",
 				"content": "",
 				"tool_calls": []map[string]any{{
@@ -156,7 +156,12 @@ func (s *AgentService) Run(ctx context.Context, userID int64, messages []map[str
 						"arguments": tc.Arguments,
 					},
 				}},
-			})
+			}
+			// DeepSeek thinking mode: echo reasoning_content back verbatim.
+			if resp.ReasoningContent != "" {
+				assistantMsg["reasoning_content"] = resp.ReasoningContent
+			}
+			msgs = append(msgs, assistantMsg)
 			msgs = append(msgs, map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -170,8 +175,9 @@ func (s *AgentService) Run(ctx context.Context, userID int64, messages []map[str
 
 // llmResponse is the decoded /api/agent/chat response.
 type llmResponse struct {
-	Content   string          `json:"content"`
-	ToolCalls []agentToolCall `json:"tool_calls"`
+	Content          string          `json:"content"`
+	ReasoningContent string          `json:"reasoning_content"`
+	ToolCalls        []agentToolCall `json:"tool_calls"`
 }
 
 // callLLM performs one tool-calling LLM request.

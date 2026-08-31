@@ -90,6 +90,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         return {
             "content": message.content or "",
+            "reasoning_content": getattr(message, "reasoning_content", "") or "",
             "tool_calls": tool_calls,
             "prompt_tokens": usage.prompt_tokens if usage else 0,
             "completion_tokens": usage.completion_tokens if usage else 0,
