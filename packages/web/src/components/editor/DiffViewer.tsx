@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { createPortal } from 'react-dom';
 
 interface DiffViewerProps {
   original: string;
@@ -95,7 +96,11 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
 }) => {
   const segments = useMemo(() => computeDiff(original, modified), [original, modified]);
 
-  return (
+  // Portal 到 body：本组件会被 VersionCompare（历史版本对比）渲染在
+  // common/Modal 的 glass-panel 内部，而 glass-panel 带 backdrop-filter，
+  // 会为 fixed 后代建立 containing block——不挂 portal 的话全屏遮罩会被
+  // 困在弹窗面板内（“弹窗内容被遮挡/错位”同类根因）。
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-neutral-800 border border-neutral-600 rounded-lg shadow-2xl w-[720px] max-w-[90vw] max-h-[80vh] flex flex-col">
         {/* Header */}
@@ -156,7 +161,8 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 

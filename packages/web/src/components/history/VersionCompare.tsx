@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2 } from 'lucide-react';
 import DiffViewer from '@/components/editor/DiffViewer';
 import { useHistoryStore } from '@/stores/history-store';
@@ -89,10 +90,13 @@ const VersionCompare: React.FC<VersionCompareProps> = ({
   if (!open) return null;
 
   if (loading || !detail) {
-    return (
+    // Portal 到 body：本组件渲染在 HistoryPanel 的 Modal（glass-panel，带
+    // backdrop-filter）内部，fixed 遮罩若不挂 portal 会被困在弹窗面板内。
+    return createPortal(
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60">
         <Loader2 className="w-5 h-5 animate-spin text-neutral-400" />
-      </div>
+      </div>,
+      document.body,
     );
   }
 

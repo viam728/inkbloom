@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import {
@@ -130,7 +131,12 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
 
   if (!open) return null;
 
-  return (
+  // Portal 到 document.body：本弹窗挂载在 Toolbar 内，而 Toolbar 根节点带
+  // backdrop-blur——backdrop-filter 会为 fixed 后代建立 containing block，
+  // 使 inset-0 只覆盖工具栏那一小条、弹窗内容被编辑器其它表面遮挡（历史
+  // 多发的“弹窗内容被盖住”根因）。挂到 body 后 fixed 恢复相对视口定位。
+  // 与 common/Modal.tsx 的 Portal 策略保持一致，避免同类问题复发。
+  return createPortal(
     <div className="fixed inset-0 z-[1000] flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
       <div
@@ -302,7 +308,8 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
