@@ -248,6 +248,8 @@ func main() {
 	// E4 publishing & reading (business plan v3, plan A16).
 	publishedRepo := repository.NewPublishedRepository(db)
 	publishedReadRepo := repository.NewPublishedReadRepository(db)
+	// Agent full-book creation pipeline (plan P1).
+	storyJobRepo := repository.NewStoryJobRepository(db)
 
 	// Initialize services
 	novelService := service.NewNovelService(novelRepo, chapterRepo, cacheMgr, docRepo)
@@ -264,6 +266,9 @@ func main() {
 	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo)
 	agentContextService := service.NewAgentContextService(novelRepo, docRepo, chapterRepo)
 	mediaService := service.NewMediaService(mediaRepo)
+	// Agent full-book creation pipeline (plan P1): drives AI stage generation
+	// + author-confirmed adoption into real chapters.
+	storyService := service.NewStoryService(storyJobRepo, novelRepo, chapterRepo, docService, chapterService, agentContextService, cfg.AIService.URL, logger)
 
 	// M5 data export/import (task #47): .inkbloom packages.
 	syncService := service.NewSyncService(db, fileStorage, novelRepo, docRepo, userRepo, logger)
@@ -330,6 +335,8 @@ func main() {
 	// E5 reader interactions (plan A28).
 	interactionService := service.NewInteractionService(repository.NewInteractionRepository(db), publishedReadRepo, userRepo, csChecker)
 	interactionHandler := handler.NewInteractionHandler(interactionService)
+	// Agent full-book creation pipeline (plan P1).
+	storyHandler := handler.NewStoryHandler(storyService)
 
 	// Local mode (v2 §3.2): the LocalBus doubles as the task feed — route
 	// outbox-published creation events into the engine's in-process queue.
@@ -388,6 +395,7 @@ func main() {
 		Publish:       publishHandler,
 		Reader:        readerHandler,
 		Interaction:   interactionHandler,
+		Story:         storyHandler,
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

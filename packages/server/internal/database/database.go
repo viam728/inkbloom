@@ -62,6 +62,8 @@ func automigrateModels() []interface{} {
 		// E5 interactive micro-creation (business plan v3, plan A28).
 		&model.Interaction{},
 		&model.InteractionVote{},
+		// Agent 全本创作流水线 (business plan v3, plan P1): story job state machine.
+		&model.StoryJob{},
 	}
 }
 

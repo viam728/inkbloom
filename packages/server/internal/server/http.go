@@ -66,6 +66,8 @@ type Handlers struct {
 	Reader *handler.ReaderHandler
 	// Interaction serves the E5 reader-interaction endpoints (plan A28). Optional.
 	Interaction *handler.InteractionHandler
+	// Story drives the Agent full-book creation pipeline (plan P1). Optional.
+	Story *handler.StoryHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -458,6 +460,17 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			aiGroup.POST("/ai/adapt-content", h.AI.AdaptContent)
 			aiGroup.POST("/ai/agent/generate", h.AI.AgentGenerate)
 			aiGroup.POST("/prompt/build", h.AI.PromptBuild)
+
+			// Agent full-book creation pipeline (plan P1): story jobs.
+			if h.Story != nil {
+				aiGroup.POST("/story/jobs", h.Story.Create)
+				aiGroup.GET("/story/jobs", h.Story.List)
+				aiGroup.GET("/story/jobs/:id", h.Story.Get)
+				aiGroup.DELETE("/story/jobs/:id", h.Story.Delete)
+				aiGroup.POST("/story/jobs/:id/generate", h.Story.GenerateStage)
+				aiGroup.POST("/story/jobs/:id/chapters/adopt", h.Story.AdoptChapter)
+				aiGroup.POST("/story/jobs/:id/advance", h.Story.AdvanceStage)
+			}
 		}
 
 		// Tasks
