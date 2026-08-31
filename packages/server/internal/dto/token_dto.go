@@ -78,3 +78,16 @@ type TokenOrderDTO struct {
 type TokenOrderListResponse struct {
 	Orders []TokenOrderDTO `json:"orders"`
 }
+
+// TokenDailyUsagePoint is one day bucket of the consumption aggregate (A30).
+type TokenDailyUsagePoint struct {
+	Date       string `json:"date"` // YYYY-MM-DD
+	TextUnits  int64  `json:"text_units"`
+	ImageCount int64  `json:"image_count"`
+	ImageUnits int64  `json:"image_units"`
+}
+
+// TokenDailyUsageResponse is the payload of GET /api/v1/token/usage/daily.
+type TokenDailyUsageResponse struct {
+	Items []TokenDailyUsagePoint `json:"items"`
+}

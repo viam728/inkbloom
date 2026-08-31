@@ -8,3 +8,7 @@ pydantic-settings>=2.6.0
 tiktoken>=0.8.0
 python-dotenv>=1.0.0
 prometheus-fastapi-instrumentator>=7.0.0
+# 代码直接 import 但之前未声明的依赖（多 agent 施工遗留）：httpx 用于 LLM
+# 调用、Pillow 用于文生图后处理。缺其一 ai-service 无法启动。
+httpx>=0.27.0
+pillow>=10.0.0

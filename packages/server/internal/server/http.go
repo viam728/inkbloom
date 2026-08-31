@@ -396,6 +396,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.GET("/token/balance", h.Token.Balance)
 			api.GET("/token/ledger", h.Token.Ledger)
 			api.GET("/token/stats", h.Token.Stats)
+			api.GET("/token/usage/daily", h.Token.DailyUsage)
 			api.POST("/token/orders", h.Token.CreateOrder)
 			api.GET("/token/orders", h.Token.ListOrders)
 		}

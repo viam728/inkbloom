@@ -78,6 +78,32 @@ func (h *TokenHandler) Ledger(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: dto.TokenLedgerResponse{Items: items}})
 }
 
+// DailyUsage handles GET /api/v1/token/usage/daily?days=30 (plan A30): the
+// per-day consumption trend read from the aggregate table instead of the
+// append-only ledger.
+func (h *TokenHandler) DailyUsage(c *gin.Context) {
+	uid, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	rows, err := h.tokenService.DailyUsage(c.Request.Context(), uid, days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	items := make([]dto.TokenDailyUsagePoint, 0, len(rows))
+	for i := range rows {
+		items = append(items, dto.TokenDailyUsagePoint{
+			Date:       rows[i].Date,
+			TextUnits:  rows[i].TextUnits,
+			ImageCount: rows[i].ImageCount,
+			ImageUnits: rows[i].ImageUnits,
+		})
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: dto.TokenDailyUsageResponse{Items: items}})
+}
+
 // Stats handles GET /api/v1/token/stats?range=day|week|month
 func (h *TokenHandler) Stats(c *gin.Context) {
 	uid, ok := userIDFromContext(c)

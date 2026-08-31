@@ -44,6 +44,8 @@ func automigrateModels() []interface{} {
 		&model.TokenAccount{},
 		&model.TokenLedger{},
 		&model.TokenOrder{},
+		// T3 daily usage aggregation (business plan v3, plan A30).
+		&model.TokenUsageDaily{},
 		&model.Feedback{},
 		// Product analytics (business plan v3 appendix B, plan A40).
 		&model.Event{},

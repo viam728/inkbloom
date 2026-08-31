@@ -62,6 +62,7 @@ type TokenService struct {
 	accounts repository.TokenAccountRepository
 	ledger   repository.TokenLedgerRepository
 	orders   repository.TokenOrderRepository
+	usage    repository.TokenUsageRepository
 	logger   *zap.Logger
 }
 
@@ -70,9 +71,10 @@ func NewTokenService(
 	accounts repository.TokenAccountRepository,
 	ledger repository.TokenLedgerRepository,
 	orders repository.TokenOrderRepository,
+	usage repository.TokenUsageRepository,
 	logger *zap.Logger,
 ) *TokenService {
-	return &TokenService{accounts: accounts, ledger: ledger, orders: orders, logger: logger}
+	return &TokenService{accounts: accounts, ledger: ledger, orders: orders, usage: usage, logger: logger}
 }
 
 // tokenPackSpec binds a pack name to its price and granted units.
@@ -139,7 +141,27 @@ func (s *TokenService) Consume(ctx context.Context, userID int64, units int64, m
 	if meta.Endpoint != nil {
 		middleware.ObserveTokenConsume(*meta.Endpoint, units)
 	}
-	return s.accounts.Consume(ctx, userID, units, entry)
+	if err := s.accounts.Consume(ctx, userID, units, entry); err != nil {
+		return err
+	}
+	// T3 (plan A30): accumulate the daily usage aggregate. Best effort — a
+	// failed aggregation must not fail the deduction itself.
+	if s.usage != nil {
+		if err := s.recordDailyUsage(ctx, userID, units, meta); err != nil {
+			s.logger.Warn("daily usage aggregation failed", zap.Int64("user_id", userID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// recordDailyUsage writes one day-bucket increment for a deduction. Image
+// generations go to the image counters; everything else counts as text.
+func (s *TokenService) recordDailyUsage(ctx context.Context, userID, units int64, meta ConsumeMeta) error {
+	date := time.Now().In(statsLocation()).Format("2006-01-02")
+	if meta.Reason == model.LedgerReasonImageGen {
+		return s.usage.UpsertDaily(ctx, userID, date, 0, 1, units)
+	}
+	return s.usage.UpsertDaily(ctx, userID, date, units, 0, 0)
 }
 
 // UnitsFromUsage converts an upstream usage block into deduction units:
@@ -171,6 +193,22 @@ func (s *TokenService) Refund(ctx context.Context, userID int64, units int64, me
 // Ledger returns the most recent statement rows, created_at descending.
 func (s *TokenService) Ledger(ctx context.Context, userID int64, limit int) ([]model.TokenLedger, error) {
 	return s.ledger.ListByUser(ctx, userID, limit)
+}
+
+// DailyUsage returns the recent daily consumption aggregates (plan A30),
+// ordered oldest-first for chart rendering.
+func (s *TokenService) DailyUsage(ctx context.Context, userID int64, days int) ([]model.TokenUsageDaily, error) {
+	if s.usage == nil {
+		return []model.TokenUsageDaily{}, nil
+	}
+	list, err := s.usage.ListDaily(ctx, userID, days)
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(list)-1; i < j; i, j = i+1, j-1 {
+		list[i], list[j] = list[j], list[i]
+	}
+	return list, nil
 }
 
 // StatsPoint is one aggregated consumption bucket of the stats series.

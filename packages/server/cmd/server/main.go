@@ -166,7 +166,7 @@ func main() {
 	tokenAccountRepo := repository.NewTokenAccountRepository(db)
 	tokenLedgerRepo := repository.NewTokenLedgerRepository(db)
 	tokenOrderRepo := repository.NewTokenOrderRepository(db)
-	tokenService := service.NewTokenService(tokenAccountRepo, tokenLedgerRepo, tokenOrderRepo, logger)
+	tokenService := service.NewTokenService(tokenAccountRepo, tokenLedgerRepo, tokenOrderRepo, repository.NewTokenUsageRepository(db), logger)
 
 	authService := service.NewAuthService(userRepo, kv, tokenMgr, userSessionRepo, smsProvider, subService, tokenService, cfg.Admin.Phones, logger)
 
