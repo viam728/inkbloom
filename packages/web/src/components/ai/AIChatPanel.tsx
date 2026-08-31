@@ -113,9 +113,13 @@ const AIChatPanel: React.FC = () => {
     if (!text && !activeSkill) return;
     if (isStreaming) return;
     // 若挂载了 Skill chip，发送其指令（用户可先编辑输入框补充细节）
-    const payload = activeSkill
+    let payload = activeSkill
       ? `${activeSkill.prompt}${text ? ` ${text}` : ''}`
       : text;
+    // 附件随消息一并交给 Agent（由 AI 返回的信息处理，前端不做额外提示）
+    if (attachments.length > 0) {
+      payload += `\n\n[已挂载附件: ${attachments.map((a) => a.name).join(', ')}]`;
+    }
     setInput('');
     setActiveSkill(null);
     setAttachments([]);
