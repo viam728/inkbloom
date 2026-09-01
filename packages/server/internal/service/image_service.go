@@ -64,7 +64,7 @@ func NewImageService(assetRepo repository.AssetRepository, fs *storage.FileStora
 // archives the file into the scope gallery directory. It returns the asset
 // record and whether an existing record was reused (deduplicated).
 func (s *ImageService) Ingest(ctx context.Context, r io.Reader, meta IngestMeta) (*model.Asset, bool, error) {
-	dir := s.fs.GalleryDir(meta.Scope, meta.NovelID)
+	dir := s.fs.GalleryDir(meta.Scope, meta.UserID, meta.NovelID)
 	thumbDir := filepath.Join(dir, "thumbs")
 	if err := s.fs.EnsureDir(dir); err != nil {
 		return nil, false, fmt.Errorf("create gallery dir: %w", err)
@@ -149,7 +149,7 @@ func (s *ImageService) Ingest(ctx context.Context, r io.Reader, meta IngestMeta)
 		}
 	}
 
-	urlPrefix := s.fs.GalleryURLPrefix(meta.Scope, meta.NovelID)
+	urlPrefix := s.fs.GalleryURLPrefix(meta.Scope, meta.UserID, meta.NovelID)
 	url := fmt.Sprintf("%s/%s/%s%s", urlPrefix, hash[:2], hash, meta.Extension)
 
 	displayName := time.Now().Format("20060102_150405") + meta.Extension

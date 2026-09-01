@@ -99,17 +99,21 @@ func (s *FileStorage) DeleteFile(path string) error {
 
 // GalleryDir returns the archive directory for gallery images of the given
 // scope (task #57). All directories live under the StaticFS root
-// ({base}/novels) so files are directly servable via /assets/files/*:
+// ({base}/novels) so files are directly servable via /assets/files/*.
+//
+// media/memo scopes are per-user partitioned (u{user_id}) so the static file
+// route can attribute ownership without a database lookup; novel scopes stay
+// keyed by novel_id (attributed via the novel's owner).
 //
 //	novel -> {base}/novels/{novel_id}/assets/gallery
-//	media -> {base}/novels/_media/gallery
-//	memo  -> {base}/novels/_memo/gallery
-func (s *FileStorage) GalleryDir(scope string, novelID int64) string {
+//	media -> {base}/novels/_media/u{user_id}/gallery
+//	memo  -> {base}/novels/_memo/u{user_id}/gallery
+func (s *FileStorage) GalleryDir(scope string, userID, novelID int64) string {
 	switch scope {
 	case GalleryScopeMedia:
-		return filepath.Join(s.NovelAssetDir(0), "_media", "gallery")
+		return filepath.Join(s.NovelAssetDir(0), "_media", userSegment(userID), "gallery")
 	case GalleryScopeMemo:
-		return filepath.Join(s.NovelAssetDir(0), "_memo", "gallery")
+		return filepath.Join(s.NovelAssetDir(0), "_memo", userSegment(userID), "gallery")
 	default: // novel
 		return filepath.Join(s.NovelAssetDir(novelID), "gallery")
 	}
@@ -117,18 +121,26 @@ func (s *FileStorage) GalleryDir(scope string, novelID int64) string {
 
 // GalleryURLPrefix returns the public URL prefix (relative to the
 // /assets/files static mount) matching GalleryDir.
-func (s *FileStorage) GalleryURLPrefix(scope string, novelID int64) string {
+func (s *FileStorage) GalleryURLPrefix(scope string, userID, novelID int64) string {
 	switch scope {
 	case GalleryScopeMedia:
-		return "/assets/files/_media/gallery"
+		return "/assets/files/_media/" + userSegment(userID) + "/gallery"
 	case GalleryScopeMemo:
-		return "/assets/files/_memo/gallery"
+		return "/assets/files/_memo/" + userSegment(userID) + "/gallery"
 	default: // novel
 		if novelID == 0 {
 			return "/assets/files/gallery"
 		}
 		return fmt.Sprintf("/assets/files/%d/assets/gallery", novelID)
 	}
+}
+
+// userSegment renders the per-user path component for media/memo scopes.
+func userSegment(userID int64) string {
+	if userID <= 0 {
+		return "u0"
+	}
+	return fmt.Sprintf("u%d", userID)
 }
 
 // AbsFromURL converts a /assets/files/... relative URL back to an absolute
