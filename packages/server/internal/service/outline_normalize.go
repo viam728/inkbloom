@@ -2,9 +2,28 @@ package service
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/inkbloom/server/internal/pkg/idgen"
+)
+
+// outlineOrdinalRe matches a leading Chinese/Arabic ordinal prefix such as
+// "第一幕", "第48章", "第三卷" so that "第一幕《神陨之后》" and "神陨之后"
+// normalize to the same key (R1 outline dedup). It must anchor at ^ and run
+// immediately after 第 with no whitespace, so "第 1 幕" (with a space) is left
+// untouched and still matches its own kind.
+var outlineOrdinalRe = regexp.MustCompile(`^第[一二三四五六七八九十百千零0-9]+[幕章节卷部篇回]`)
+
+// outlineTitleStrip removes book-title / quoting marks so titles wrapped in
+// 《》「」（）""''() etc. compare equal to their bare form.
+var outlineTitleStrip = strings.NewReplacer(
+	"《", "", "》", "",
+	"\"", "", "'", "",
+	"（", "", "）", "",
+	"(", "", ")", "",
+	"「", "", "」", "",
+	"『", "", "』", "",
 )
 
 // Outline node lifecycle statuses — the closed set the web outline contract
@@ -186,9 +205,28 @@ func mergeOutlineAct(existing []map[string]any, incoming map[string]any) bool {
 	return false
 }
 
-// outlineTitleKey collapses whitespace so "第一幕" and "第一幕 " compare equal
-// when deduplicating acts and nodes.
+// outlineTitleKey collapses whitespace and strips wrapping/quote marks
+// (《》「」（） etc.), then a leading ordinal prefix ("第一幕" / "第48章" /
+// "第三卷"), so phrasings like "第一幕《神陨之后》" and "神陨之后" dedupe to the
+// SAME key (R1 outline dedup). The enhanced normalization is also safe for node
+// dedup, where titles rarely carry ordinals and bracket stripping is harmless.
+//
+// The ordinal is stripped ONLY when a non-empty remainder survives: a bare
+// ordinal such as "第二幕" or a single-node "第一章" keeps a distinct key
+// instead of collapsing to "" (which would otherwise merge with every other
+// bare-ordinal act/node and silently drop legitimate content).
 func outlineTitleKey(v any) string {
 	s, _ := v.(string)
-	return strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(s), " ")
+	s = outlineTitleStrip.Replace(s)
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	ord := outlineOrdinalRe.ReplaceAllString(trimmed, "")
+	ord = strings.TrimSpace(ord)
+	if ord == "" {
+		return trimmed
+	}
+	return ord
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,15 +146,31 @@ func (s *AgentService) toolSchema() []AgentTool {
 			},
 			"required": []string{"novel_id", "acts"},
 		}),
+		ft("list_chapters", "列出某部小说的全部章节（chapter_id + title），写章节前先确认正确的 chapter_id，避免误建章节。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
+			},
+			"required": []string{"novel_id"},
+		}),
+		ft("get_chapter_by_title", "按标题或关键词查找章节，返回匹配的 chapter_id 与 title；找不到返回 found:false。用于把用户口述的'第N章/某章'解析成真实 chapter_id。", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
+				"title":    map[string]any{"type": "string", "description": "章节标题或关键词（可含'第N章'/'《》'等）"},
+			},
+			"required": []string{"novel_id", "title"},
+		}),
 	}
 }
 
 // systemPrompt is the Agent's persona + tool-usage rule.
 const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作小说。" +
-	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / save_memory / save_outline）" +
+	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / list_chapters / get_chapter_by_title / save_memory / save_outline）" +
 	"来实际创建作品、章节、撰写正文，并把角色/设定写入记忆模块、把情节规划写入大纲模块。" +
 	"执行工具后，用简洁中文向用户汇报结果。" +
-	"当用户想开始创作时，主动调用工具完成任务，而不是只给建议。"
+	"当用户想开始创作时，主动调用工具完成任务，而不是只给建议。" +
+	"当用户用'第N章/某章'口吻指代章节时，先调用 list_chapters 或 get_chapter_by_title 解析出真实 chapter_id，再 write_chapter；不要凭空新建章节。"
 
 // Run executes one Agent turn: given the conversation messages, it loops with
 // the LLM (execute tool calls, feed results back) until the model returns a
@@ -313,6 +330,24 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 		if title == "" {
 			return `{"error":"title 必填"}`
 		}
+		// R2 guardrail (§七.3.5a): do not create a twin chapter when an
+		// existing one already has the same normalized title. Resolve and
+		// return it with a warning instead of silently duplicating.
+		existingList, lerr := s.chapterSvc.ListChaptersByNovel(ctx, userID, nid)
+		if lerr != nil {
+			s.logger.Warn("agent create_chapter dedupe lookup failed", zap.Error(lerr))
+		} else {
+			key := outlineTitleKey(title)
+			for _, e := range existingList {
+				if outlineTitleKey(e.Title) == key {
+					return asJSON(map[string]any{
+						"chapter_id": e.ID,
+						"title":      e.Title,
+						"warning":    "已存在同名章节，未新建",
+					})
+				}
+			}
+		}
 		ch, err := s.chapterSvc.CreateChapter(ctx, userID, &dto.CreateChapterRequest{
 			NovelID: nid,
 			Title:   title,
@@ -374,6 +409,41 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 		}
 		return asJSON(map[string]any{"novels": items})
 
+	case "list_chapters":
+		nid := resolveNovelID()
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
+		list, err := s.chapterSvc.ListChaptersByNovel(ctx, userID, nid)
+		if err != nil {
+			s.logger.Warn("agent list_chapters failed", zap.Error(err))
+			return `{"error":"列出章节失败"}`
+		}
+		items := make([]map[string]any, 0, len(list))
+		for _, c := range list {
+			items = append(items, map[string]any{"chapter_id": c.ID, "title": c.Title})
+		}
+		return asJSON(map[string]any{"chapters": items})
+
+	case "get_chapter_by_title":
+		nid := resolveNovelID()
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
+		title, _ := args["title"].(string)
+		if title == "" {
+			return `{"error":"title 必填"}`
+		}
+		ch, err := s.chapterSvc.GetChapterByTitle(ctx, userID, nid, title)
+		if err != nil {
+			s.logger.Warn("agent get_chapter_by_title failed", zap.Error(err))
+			return `{"error":"查找章节失败"}`
+		}
+		if ch == nil {
+			return asJSON(map[string]any{"found": false})
+		}
+		return asJSON(map[string]any{"found": true, "chapter_id": ch.ID, "title": ch.Title})
+
 	default:
 		return `{"error":"未知工具: ` + tc.Name + `"}`
 	}
@@ -406,6 +476,16 @@ func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapte
 		return `{"error":"生成内容为空"}`
 	}
 	content := out.Content
+	// R2 guardrail (§七.3.5b): detect a missing chapter and return a clear,
+	// actionable error instead of the generic "保存章节失败", so the Agent is
+	// steered toward resolving the real chapter_id rather than creating junk.
+	if _, gerr := s.chapterSvc.GetChapter(ctx, userID, chapterID); gerr != nil {
+		if errors.Is(gerr, ErrNotFound) {
+			return fmt.Sprintf(`{"error":"章节 ID %d 不存在，请先用 list_chapters 查询并传入正确的 chapter_id，不要新建章节"}`, chapterID)
+		}
+		// Any other lookup error falls through to the update attempt, which
+		// surfaces its own error message.
+	}
 	if _, err := s.chapterSvc.UpdateChapter(ctx, userID, chapterID, &dto.UpdateChapterRequest{
 		Content: &content,
 	}); err != nil {

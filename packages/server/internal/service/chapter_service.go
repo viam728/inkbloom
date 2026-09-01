@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -305,6 +306,54 @@ func (s *ChapterService) ListChaptersByNovel(ctx context.Context, userID, novelI
 		responses = append(responses, *toChapterResponse(&chapters[i]))
 	}
 	return responses, nil
+}
+
+// GetChapterByTitle resolves a chapter by a (possibly ordinal-wrapped) title or
+// keyword within the user's scope, returning the BEST match. It normalizes both
+// the query and each chapter title with outlineTitleKey (which already strips a
+// leading "第N章" prefix and 《》 brackets), so "第48章《余生长歌》" resolves to a
+// chapter whose raw title is "余生长歌" (or contains it). Match priority:
+//  1. exact normalized title match wins;
+//  2. else a normalized substring/containment match wins;
+//  3. else nil is returned.
+//
+// All repo access is user-scoped (contract C3) via ListByNovelID.
+func (s *ChapterService) GetChapterByTitle(ctx context.Context, userID, novelID int64, title string) (*dto.ChapterResponse, error) {
+	chapters, err := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
+	if err != nil {
+		return nil, err
+	}
+	query := outlineTitleKey(title)
+	if query == "" {
+		return nil, nil
+	}
+	var exact *dto.ChapterResponse
+	var partial *dto.ChapterResponse
+	for i := range chapters {
+		ch := toChapterResponse(&chapters[i])
+		norm := outlineTitleKey(ch.Title)
+		if norm == "" {
+			continue
+		}
+		if norm == query {
+			if exact == nil {
+				exact = ch
+			}
+			continue
+		}
+		if strings.Contains(norm, query) || strings.Contains(query, norm) {
+			if partial == nil {
+				partial = ch
+			}
+		}
+	}
+	if exact != nil {
+		return exact, nil
+	}
+	if partial != nil {
+		return partial, nil
+	}
+	return nil, nil
 }
 
 // UpdateChapter updates an existing chapter within the user's scope.

@@ -302,3 +302,45 @@ func TestSyncOutlineNoWriteWhenNothingUsable(t *testing.T) {
 		t.Errorf("version bumped from %d to %d on a no-op", before.Version, after.Version)
 	}
 }
+
+// TestSyncOutlineDedupesOrdinalAndBareTitles is the regression test for R1:
+// the old outlineTitleKey only collapsed whitespace, so "第一幕《神陨之后》" and
+// "神陨之后" produced DIFFERENT keys and mergeOutlineAct treated them as two
+// distinct acts → duplicate. The strengthened key strips the leading ordinal
+// ("第一幕") and the 《》 marks, so both phrasings collapse to "神陨之后" and a
+// second save_outline must NOT create a twin act.
+func TestSyncOutlineDedupesOrdinalAndBareTitles(t *testing.T) {
+	agent, db := newTestOutlineAgent(t)
+	const userID, novelID = int64(1), int64(37)
+	seedNovel(t, db, userID, novelID)
+
+	// First pass: ordinal + 《》 wrapped title.
+	if _, err := agent.syncOutline(context.Background(), userID, novelID, []interface{}{
+		map[string]any{"title": "第一幕《神陨之后》", "nodes": []interface{}{}},
+	}); err != nil {
+		t.Fatalf("syncOutline (1st): %v", err)
+	}
+
+	// Second pass: the same act referred to by its bare (inner) title.
+	if _, err := agent.syncOutline(context.Background(), userID, novelID, []interface{}{
+		map[string]any{"title": "神陨之后", "nodes": []interface{}{}},
+	}); err != nil {
+		t.Fatalf("syncOutline (2nd): %v", err)
+	}
+
+	doc, err := agent.docSvc.GetOutline(context.Background(), userID, novelID)
+	if err != nil {
+		t.Fatalf("GetOutline: %v", err)
+	}
+	assertContractCompliant(t, doc.Acts)
+
+	var acts []map[string]any
+	_ = json.Unmarshal(doc.Acts, &acts)
+	if len(acts) != 1 {
+		t.Fatalf("stored %d acts, want exactly 1 (R1 dedup): %s", len(acts), doc.Acts)
+	}
+	got := acts[0]["title"].(string)
+	if got != "第一幕《神陨之后》" && got != "神陨之后" {
+		t.Errorf("surviving act title = %q, want one of the two phrasings", got)
+	}
+}
