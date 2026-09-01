@@ -28,6 +28,7 @@ import {
   Sparkles,
   Loader2,
   History,
+    BookMarked,
 } from 'lucide-react';
 import ExportModal from '@/components/export/ExportModal';
 import PublishModal from '@/components/publish/PublishModal';
@@ -78,6 +79,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
   const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
   const setHistoryOpen = useUIStore((s) => s.setHistoryOpen);
+    const setNovelVersionOpen = useUIStore((s) => s.setNovelVersionOpen);
   const focusMode = useUIStore((s) => s.focusMode);
   const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
 
@@ -194,8 +196,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
             type="button"
             title={btn.label}
             onClick={btn.action}
-            className={`${toolBtnCls} ${
-              active
+                        className={`${toolBtnCls} ${active
                 ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
                 : ''
             }`}
@@ -214,8 +215,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
               type="button"
               onClick={onToggleFocus}
               title={focused ? '退出局部专注' : '局部专注'}
-              className={`${toolBtnCls} ${
-                focused
+                            className={`${toolBtnCls} ${focused
                   ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
                   : ''
               }`}
@@ -257,6 +257,17 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
           <History className="w-3.5 h-3.5" />
         </button>
       )}
+                    {/* 整本里程碑快照（Agent safety work Q3）：作品级，仅小说模式 */}
+                    {isNovel && (
+                        <button
+                            type="button"
+                            onClick={() => setNovelVersionOpen(true)}
+                            className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-brand-300 active:scale-95`}
+                            title="整本版本"
+                        >
+                            <BookMarked className="w-3.5 h-3.5" />
+                        </button>
+                    )}
       {/* AI 洞察入口（节奏图/批注评审依赖章节，仅小说模式） */}
       {isNovel && (
         <>
@@ -316,8 +327,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         type="button"
         onClick={toggleFocusMode}
         title={focusMode ? '退出专注模式 (Esc)' : '进入专注模式'}
-        className={`p-1.5 rounded-md transition-all duration-150 hover:bg-white/8 active:scale-95 ${
-          focusMode ? '!bg-brand-600/25 !text-brand-300' : 'text-neutral-400 hover:text-neutral-100'
+                        className={`p-1.5 rounded-md transition-all duration-150 hover:bg-white/8 active:scale-95 ${focusMode ? '!bg-brand-600/25 !text-brand-300' : 'text-neutral-400 hover:text-neutral-100'
         }`}
       >
         {focusMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}

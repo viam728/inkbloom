@@ -14,6 +14,7 @@ import DashboardModal from '@/components/insights/DashboardModal';
 import RhythmModal from '@/components/insights/RhythmModal';
 import InspirationModal from '@/components/insights/InspirationModal';
 import HistoryPanel from '@/components/history/HistoryPanel';
+import NovelVersionPanel from '@/components/history/NovelVersionPanel';
 
 /** 拖拽调整宽度的手柄：raf 节流 + 双击折叠/还原 */
 const ResizeHandle: React.FC<{
@@ -273,6 +274,8 @@ const AppLayout: React.FC = () => {
       <InspirationModal />
       {/* 章节版本历史（业务方案 v3 E1） */}
       <HistoryPanel />
+            {/* 整本里程碑快照（Agent safety work Q3） */}
+            <NovelVersionPanel />
     </div>
   );
 };

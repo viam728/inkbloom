@@ -50,6 +50,8 @@ interface UIState {
   feedbackOpen: boolean;
   /** 章节版本历史抽屉（业务方案 v3 E1） */
   historyOpen: boolean;
+    /** 整本里程碑快照抽屉（Agent safety work Q3） */
+    novelVersionOpen: boolean;
   /**
    * 写作侧边主动提示条开关（业务方案 v3 A15）。
    * 默认开启：主动提醒的价值就在于"不用你记得去看"，默认关闭等于没有。
@@ -81,6 +83,7 @@ interface UIState {
   setDataOpen: (open: boolean) => void;
   setFeedbackOpen: (open: boolean) => void;
   setHistoryOpen: (open: boolean) => void;
+    setNovelVersionOpen: (open: boolean) => void;
   setHintBarEnabled: (enabled: boolean) => void;
 }
 
@@ -110,6 +113,7 @@ export const useUIStore = create<UIState>()(
       dataOpen: false,
       feedbackOpen: false,
       historyOpen: false,
+            novelVersionOpen: false,
       hintBarEnabled: true,
 
       setLeftWidth: (w) =>
@@ -155,6 +159,7 @@ export const useUIStore = create<UIState>()(
       setDataOpen: (open) => set({ dataOpen: open }),
       setFeedbackOpen: (open) => set({ feedbackOpen: open }),
       setHistoryOpen: (open) => set({ historyOpen: open }),
+            setNovelVersionOpen: (open) => set({ novelVersionOpen: open }),
       setHintBarEnabled: (enabled) => set({ hintBarEnabled: enabled }),
     }),
     {
