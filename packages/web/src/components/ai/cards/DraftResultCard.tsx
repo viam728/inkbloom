@@ -4,6 +4,7 @@ import { useAIStore } from '@/stores/ai-store';
 import {
   STORY_STAGE_LABELS,
   generateStoryStage,
+  advanceStoryStage,
   adoptStoryChapter,
   deleteStoryJob,
 } from '@/services/story-client';
@@ -76,7 +77,10 @@ const DraftResultCard: React.FC<DraftResultCardProps> = ({ messageId, card }) =>
       c.kind === 'draft_result' ? { ...c, status: 'running', error: undefined } : c,
     );
     try {
-      const job = await generateStoryStage(card.jobId);
+      const generated = await generateStoryStage(card.jobId);
+      // 「生成下一阶段」= 生成当前阶段产物后，再推进到下一阶段（对齐旧面板「生成当前阶段 + 下一阶段」两步）。
+      // 「重新生成 / 重试」仅重新生成当前阶段、停在原地。
+      const job = action === 'next' ? await advanceStoryStage(card.jobId) : generated;
       applyJob(job);
       notifyAgentContext(`「${card.title}」的${STORY_STAGE_LABELS[job.stage]}阶段已生成`);
     } catch (e) {
