@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Send, Sparkles, Trash2, Mic, MicOff, Paperclip, Wand2, X } from 'lucide-react';
+import { Send, Sparkles, Trash2, Mic, MicOff, Paperclip, Wand2, X, Square, History, Plus } from 'lucide-react';
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
@@ -65,15 +65,23 @@ const AIChatPanel: React.FC = () => {
   const sendMessage = useAIStore((s) => s.sendMessage);
   const clearMessages = useAIStore((s) => s.clearMessages);
   const pushCardMessage = useAIStore((s) => s.pushCardMessage);
+  const cancelMessage = useAIStore((s) => s.cancelMessage);
+  const sessions = useAIStore((s) => s.sessions);
+  const currentSessionId = useAIStore((s) => s.currentSessionId);
+  const newSession = useAIStore((s) => s.newSession);
+  const loadSession = useAIStore((s) => s.loadSession);
+  const deleteSession = useAIStore((s) => s.deleteSession);
   const fetchNovels = useNovelStore((s) => s.fetchNovels);
   const fetchChapters = useNovelStore((s) => s.fetchChapters);
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
 
   const [input, setInput] = useState('');
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
     const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [activeSkill, setActiveSkill] = useState<(typeof CHAT_SKILLS)[number] | null>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -91,15 +99,18 @@ const AIChatPanel: React.FC = () => {
 
   // 点击 Skill 菜单外部时关闭
   useEffect(() => {
-    if (!skillMenuOpen) return;
+    if (!skillMenuOpen && !historyOpen) return;
     const onDown = (e: MouseEvent) => {
       if (skillMenuRef.current && !skillMenuRef.current.contains(e.target as Node)) {
         setSkillMenuOpen(false);
       }
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [skillMenuOpen]);
+  }, [skillMenuOpen, historyOpen]);
 
   // 触发一个 Skill：带 card 标记的直接在消息流插入配置卡片（P0-2）；
   // 其余挂载为输入头部的标签 chip（可删除），发送时携带到 Agent
@@ -198,15 +209,61 @@ const AIChatPanel: React.FC = () => {
           </span>
           <span className="text-sm font-medium text-neutral-200">AI 助手</span>
         </div>
-        {messages.length > 0 && (
-          <button
-            onClick={clearMessages}
-            className="p-1.5 rounded-lg text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-            title="清空对话"
-          >
-            <Trash2 size={13} />
-          </button>
-        )}
+        <div className="flex items-center gap-1">
+          {/* 会话历史（C8） */}
+          <div ref={historyRef} className="relative">
+            <button
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="p-1.5 rounded-lg text-neutral-500 hover:text-neutral-300 hover:bg-white/8 transition-colors"
+              title="会话历史"
+            >
+              <History size={13} />
+            </button>
+            {historyOpen && (
+              <div className="absolute right-0 top-9 z-50 w-60 rounded-xl bg-surface-2 border border-white/10 shadow-2xl shadow-black/40 p-1.5 animate-fade-in">
+                <div className="flex items-center justify-between px-2.5 py-1.5">
+                  <p className="text-[11px] text-neutral-500">会话历史</p>
+                  <button
+                    onClick={() => { newSession(); setHistoryOpen(false); }}
+                    className="p-1 rounded text-brand-300 hover:bg-white/8"
+                    title="新建会话"
+                  >
+                    <Plus size={13} />
+                  </button>
+                </div>
+                {sessions.length === 0 ? (
+                  <p className="px-2.5 py-2 text-[11px] text-neutral-600">暂无历史会话</p>
+                ) : (
+                  sessions.map((s) => (
+                    <div
+                      key={s.id}
+                      onClick={() => { loadSession(s.id); setHistoryOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-white/6 ${s.id === currentSessionId ? 'bg-white/8' : ''}`}
+                    >
+                      <span className="text-xs text-neutral-300 truncate flex-1">{s.title}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
+                        className="p-0.5 rounded text-neutral-600 hover:text-red-400"
+                        title="删除会话"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          {messages.length > 0 && (
+            <button
+              onClick={clearMessages}
+              className="p-1.5 rounded-lg text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              title="清空对话"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages area */}
@@ -394,14 +451,24 @@ const AIChatPanel: React.FC = () => {
                 </button>
               )}
             </div>
-            <button
-              onClick={handleSend}
-              disabled={isStreaming || !input.trim()}
-              title="发送"
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-neutral-700 disabled:to-neutral-700 disabled:text-neutral-500 text-white transition-all shadow-lg shadow-indigo-600/20 disabled:shadow-none"
-            >
-              <Send size={14} />
-            </button>
+            {isStreaming ? (
+              <button
+                onClick={cancelMessage}
+                title="停止生成"
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 transition-all"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                title="发送"
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-neutral-700 disabled:to-neutral-700 disabled:text-neutral-500 text-white transition-all shadow-lg shadow-indigo-600/20 disabled:shadow-none"
+              >
+                <Send size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>

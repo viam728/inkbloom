@@ -53,10 +53,11 @@ export function buildUserContent(
 export async function agentChat(
     messages: AgentChatMessage[],
   novelId?: number,
+  signal?: AbortSignal,
 ): Promise<AgentChatResult> {
   const data = (await apiClient.post('/agent/chat', {
     messages,
     novel_id: novelId ?? 0,
-  })) as unknown as AgentChatResult;
+  }, { signal })) as unknown as AgentChatResult;
   return data;
 }

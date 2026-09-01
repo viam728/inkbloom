@@ -11,11 +11,92 @@ interface RewriteResult {
   action?: RewriteAction;
 }
 
+/** 对话会话（历史管理，localStorage 持久化） */
+export interface AISession {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+const LS_SESSIONS = 'inkbloom:ai:sessions';
+const LS_MSG_PREFIX = 'inkbloom:ai:msg:';
+
+// agentAbort 是当前进行中 Agent 请求的中止控制器：停止按钮据此取消网络请求。
+let agentAbort: AbortController | null = null;
+
+function loadSessions(): AISession[] {
+  try {
+    const raw = localStorage.getItem(LS_SESSIONS);
+    return raw ? (JSON.parse(raw) as AISession[]) : [];
+  } catch {
+    return [];
+  }
+}
+function saveSessions(sessions: AISession[]): void {
+  try {
+    localStorage.setItem(LS_SESSIONS, JSON.stringify(sessions));
+  } catch {
+    /* 存储满/隐私模式忽略 */
+  }
+}
+function loadMessages(sessionId: string): AIMessage[] {
+  try {
+    const raw = localStorage.getItem(LS_MSG_PREFIX + sessionId);
+    const arr = raw ? (JSON.parse(raw) as AIMessage[]) : [];
+    return arr.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }));
+  } catch {
+    return [];
+  }
+}
+function saveMessages(sessionId: string, messages: AIMessage[]): void {
+  try {
+    localStorage.setItem(LS_MSG_PREFIX + sessionId, JSON.stringify(messages));
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 启动时恢复最近一次会话（无会话则空）。 */
+function initialSessionState(): {
+  sessions: AISession[];
+  currentSessionId: string | null;
+  messages: AIMessage[];
+} {
+  const sessions = loadSessions();
+  const current = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+  return {
+    sessions,
+    currentSessionId: current?.id ?? null,
+    messages: current ? loadMessages(current.id) : [],
+  };
+}
+
+/** 持久化某会话：写消息 + 更新标题（取首条用户消息）/时间，返回新的 sessions 列表。 */
+function touchSession(id: string, messages: AIMessage[], sessions: AISession[]): AISession[] {
+  saveMessages(id, messages);
+  const first = messages.find((m) => m.role === 'user');
+  const next = sessions.map((s) =>
+    s.id === id ? { ...s, title: truncate(first?.content ?? ''), updatedAt: Date.now() } : s,
+  );
+  saveSessions(next);
+  return next;
+}
+
+function truncate(s: string): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  if (!t) return '新对话';
+  return t.length > 18 ? t.slice(0, 18) + '…' : t;
+}
+
 interface AIStore {
   messages: AIMessage[];
   isStreaming: boolean;
   streamingContent: string;
   currentModel: string;
+
+  // 会话历史（C8）
+  sessions: AISession[];
+  currentSessionId: string | null;
 
   // Inline completion state
   inlineSuggestion: string | null;
@@ -30,6 +111,14 @@ interface AIStore {
   clearMessages: () => void;
   setModel: (model: string) => void;
   stopStreaming: () => void;
+  /** 停止当前正在进行的 Agent 请求（C8 停止中断） */
+  cancelMessage: () => void;
+  /** 新建会话并切过去 */
+  newSession: () => void;
+  /** 切换到指定会话 */
+  loadSession: (id: string) => void;
+  /** 删除会话 */
+  deleteSession: (id: string) => void;
 
   // Inline actions
   triggerInline: (params: {
@@ -60,8 +149,12 @@ interface AIStore {
   notifyAgentContext: (text: string) => void;
 }
 
+const initial = initialSessionState();
+
 export const useAIStore = create<AIStore>((set, get) => ({
-  messages: [],
+  messages: initial.messages,
+  sessions: initial.sessions,
+  currentSessionId: initial.currentSessionId,
   isStreaming: false,
   streamingContent: '',
   currentModel: 'deepseek-v4-flash',
@@ -74,32 +167,42 @@ export const useAIStore = create<AIStore>((set, get) => ({
   isRewriteStreaming: false,
 
     sendMessage: async (content: string, attachments?: ChatAttachment[]) => {
-    const { messages } = get();
+    const { messages, sessions, currentSessionId } = get();
+
+    // 无会话时自动建一个（首条消息即成为会话标题）。
+    let sid = currentSessionId;
+    let sess = sessions;
+    if (!sid) {
+      sid = crypto.randomUUID();
+      sess = [{ id: sid, title: '新对话', updatedAt: Date.now() }, ...sessions];
+      set({ currentSessionId: sid, sessions: sess });
+    }
 
     const userMsg: AIMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content,
       timestamp: new Date(),
-            attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
     };
 
     const updatedMessages = [...messages, userMsg];
     set({ messages: updatedMessages, isStreaming: true, streamingContent: '' });
 
-        // 历史只保留 user/assistant（工具消息由后端 Agent 循环内部管理）。
-        // 带附件的 user 消息转成 OpenAI 多模态 content（图片 vision + 文档文本）。
-        const history = updatedMessages.map((m) => ({
-            role: m.role,
-            content: buildUserContent(m.content, m.attachments),
-        }));
+    // 历史只保留 user/assistant（工具消息由后端 Agent 循环内部管理）。
+    // 带附件的 user 消息转成 OpenAI 多模态 content（图片 vision + 文档文本）。
+    const history = updatedMessages.map((m) => ({
+      role: m.role,
+      content: buildUserContent(m.content, m.attachments),
+    }));
+
+    // C8 停止中断：AbortController 使「停止」按钮可取消进行中的请求。
+    const controller = new AbortController();
+    agentAbort = controller;
 
     try {
-      // 走对话式创作 Agent：一次完整 Agent 循环，Agent 自主决定调用工具
-      // （create_novel / create_chapter / write_chapter / list_novels）。
-      // 传入当前选中作品，起稿类工具默认作用于该作品（问题2）。
       const currentNovelId = useNovelStore.getState().currentNovel?.id ?? 0;
-      const result = await agentChat(history, currentNovelId);
+      const result = await agentChat(history, currentNovelId, controller.signal);
 
       const toolExecutions = (result.tool_executions ?? []).map((t) => ({
         tool: t.tool,
@@ -113,10 +216,12 @@ export const useAIStore = create<AIStore>((set, get) => ({
         timestamp: new Date(),
         toolExecutions: toolExecutions.length > 0 ? toolExecutions : undefined,
       };
+      const nextMessages = [...get().messages, assistantMsg];
       set((s) => ({
-        messages: [...s.messages, assistantMsg],
+        messages: nextMessages,
         isStreaming: false,
         streamingContent: '',
+        sessions: touchSession(sid, nextMessages, s.sessions),
       }));
 
       // Agent 执行了工具（创建了小说/章节等）→ 通知创作系统刷新。
@@ -124,6 +229,11 @@ export const useAIStore = create<AIStore>((set, get) => ({
         window.dispatchEvent(new CustomEvent('inkbloom:agent-executed'));
       }
     } catch (e) {
+      // 被用户「停止」取消：不追加错误消息。
+      if (controller.signal.aborted) {
+        set({ isStreaming: false, streamingContent: '' });
+        return;
+      }
       console.error('agent chat failed', e);
       const assistantMsg: AIMessage = {
         id: crypto.randomUUID(),
@@ -131,16 +241,61 @@ export const useAIStore = create<AIStore>((set, get) => ({
         content: '抱歉，Agent 执行出错，请重试。',
         timestamp: new Date(),
       };
+      const nextMessages = [...get().messages, assistantMsg];
       set((s) => ({
-        messages: [...s.messages, assistantMsg],
+        messages: nextMessages,
         isStreaming: false,
         streamingContent: '',
+        sessions: touchSession(sid, nextMessages, s.sessions),
       }));
+    } finally {
+      if (agentAbort === controller) agentAbort = null;
     }
   },
 
   clearMessages: () => {
+    const { currentSessionId, sessions } = get();
+    if (currentSessionId) {
+      touchSession(currentSessionId, [], sessions);
+    }
     set({ messages: [], streamingContent: '', isStreaming: false });
+  },
+
+  cancelMessage: () => {
+    agentAbort?.abort();
+    agentAbort = null;
+    set({ isStreaming: false, streamingContent: '' });
+  },
+
+  newSession: () => {
+    const id = crypto.randomUUID();
+    const sessions = [{ id, title: '新对话', updatedAt: Date.now() }, ...get().sessions];
+    saveSessions(sessions);
+    set({ sessions, currentSessionId: id, messages: [], streamingContent: '', isStreaming: false });
+  },
+
+  loadSession: (id: string) => {
+    set({ currentSessionId: id, messages: loadMessages(id), streamingContent: '', isStreaming: false });
+  },
+
+  deleteSession: (id: string) => {
+    const sessions = get().sessions.filter((s) => s.id !== id);
+    saveSessions(sessions);
+    try {
+      localStorage.removeItem(LS_MSG_PREFIX + id);
+    } catch {
+      /* 忽略 */
+    }
+    if (get().currentSessionId === id) {
+      const next = sessions[0];
+      set({
+        sessions,
+        currentSessionId: next?.id ?? null,
+        messages: next ? loadMessages(next.id) : [],
+      });
+    } else {
+      set({ sessions });
+    }
   },
 
   setModel: (model: string) => {
