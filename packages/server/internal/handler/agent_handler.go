@@ -18,7 +18,7 @@ func NewAgentHandler(svc *service.AgentService) *AgentHandler {
 	return &AgentHandler{agentSvc: svc}
 }
 
-// Chat handles POST /api/v1/ai/agent/chat — one full Agent loop.
+// Chat handles POST /api/v1/agent/chat — one full Agent loop.
 func (h *AgentHandler) Chat(c *gin.Context) {
 	var req dto.AgentChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

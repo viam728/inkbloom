@@ -186,6 +186,30 @@ func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, mes
 			return resp.Content, executed, nil
 		}
 
+		// Build ONE assistant message carrying every tool call returned this
+		// turn (the standard OpenAI/DeepSeek shape), and echo reasoning_content
+		// back exactly once for DeepSeek thinking mode. Spawning a separate
+		// assistant message per tool call (old behaviour) duplicated
+		// reasoning_content across messages and is not accepted by all models.
+		assistantMsg := map[string]any{
+			"role":      "assistant",
+			"content":   "",
+			"tool_calls": make([]map[string]any, 0, len(resp.ToolCalls)),
+		}
+		for _, tc := range resp.ToolCalls {
+			assistantMsg["tool_calls"] = append(assistantMsg["tool_calls"].([]map[string]any), map[string]any{
+				"id":   tc.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      tc.Name,
+					"arguments": tc.Arguments,
+				},
+			})
+		}
+		if resp.ReasoningContent != "" {
+			assistantMsg["reasoning_content"] = resp.ReasoningContent
+		}
+		msgs = append(msgs, assistantMsg)
 		for _, tc := range resp.ToolCalls {
 			result := s.executeTool(ctx, userID, novelID, tc)
 			executed = append(executed, map[string]any{
@@ -193,23 +217,6 @@ func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, mes
 				"args":   tc.Arguments,
 				"result": result,
 			})
-			assistantMsg := map[string]any{
-				"role":    "assistant",
-				"content": "",
-				"tool_calls": []map[string]any{{
-					"id":   tc.ID,
-					"type": "function",
-					"function": map[string]any{
-						"name":      tc.Name,
-						"arguments": tc.Arguments,
-					},
-				}},
-			}
-			// DeepSeek thinking mode: echo reasoning_content back verbatim.
-			if resp.ReasoningContent != "" {
-				assistantMsg["reasoning_content"] = resp.ReasoningContent
-			}
-			msgs = append(msgs, assistantMsg)
 			msgs = append(msgs, map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
