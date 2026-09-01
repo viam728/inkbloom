@@ -157,6 +157,27 @@ func TestSyncOutlineWritesNormalizedActs(t *testing.T) {
 	if sum != "<p>陈默离开师门</p>" {
 		t.Errorf("summary mutated: %q", sum)
 	}
+
+	// --- Agent write-before snapshot safeguard (commit 44e0444) ----------
+	// syncOutline snapshots the PRE-WRITE outline: the first call above hit an
+	// empty outline, so no outline_versions row was written yet. A second
+	// syncOutline over the now-populated outline must persist an
+	// outline_versions row whose Acts equals the pre-write outline.
+	preWriteActs := doc.Acts
+	if _, err := agent.syncOutline(context.Background(), userID, novelID, rawActs); err != nil {
+		t.Fatalf("syncOutline (2nd): %v", err)
+	}
+	var versions []model.OutlineVersion
+	if err := db.Where("user_id = ? AND novel_id = ?", userID, novelID).
+		Order("id DESC").Find(&versions).Error; err != nil {
+		t.Fatalf("query outline_versions: %v", err)
+	}
+	if len(versions) < 1 {
+		t.Fatalf("expected >= 1 outline_versions row after agent write, got %d", len(versions))
+	}
+	if string(versions[0].Acts) != string(preWriteActs) {
+		t.Errorf("snapshot Acts = %s, want pre-write Acts = %s", versions[0].Acts, preWriteActs)
+	}
 }
 
 // TestSyncOutlineIsIdempotentAndPreservesExisting guards the merge strategy:
