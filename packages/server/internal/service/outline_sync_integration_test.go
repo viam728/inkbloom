@@ -344,3 +344,48 @@ func TestSyncOutlineDedupesOrdinalAndBareTitles(t *testing.T) {
 		t.Errorf("surviving act title = %q, want one of the two phrasings", got)
 	}
 }
+
+// TestUpdateOutlineDedupesDuplicateActTitles is the regression test for the R1
+// gap the live e2e exposed (reddots §十): the dedup used to live ONLY in the
+// Agent's syncOutline, so a plain PUT /novels/:id/outline carrying
+// "第一幕《神陨之后》" and "神陨之后" stored TWO acts. dedupOutlineActs now runs
+// inside the shared UpdateOutline write path, so every outline writer — the web
+// panel as well as the Agent — is protected.
+func TestUpdateOutlineDedupesDuplicateActTitles(t *testing.T) {
+	agent, db := newTestOutlineAgent(t)
+	const userID, novelID = int64(1), int64(38)
+	seedNovel(t, db, userID, novelID)
+
+	dup := json.RawMessage(`[{"title":"第一幕《神陨之后》","nodes":[{"title":"天穹裂开","summary":"x"}]},
+		{"title":"神陨之后","nodes":[{"title":"觉醒","summary":"y"}]}]`)
+	if _, err := agent.docSvc.UpdateOutline(context.Background(), userID, novelID, dup, nil); err != nil {
+		t.Fatalf("UpdateOutline: %v", err)
+	}
+
+	doc, err := agent.docSvc.GetOutline(context.Background(), userID, novelID)
+	if err != nil {
+		t.Fatalf("GetOutline: %v", err)
+	}
+	assertContractCompliant(t, doc.Acts)
+
+	var acts []map[string]any
+	_ = json.Unmarshal(doc.Acts, &acts)
+	if len(acts) != 1 {
+		t.Fatalf("stored %d acts, want 1 (R1 dedup on the public write path): %s", len(acts), doc.Acts)
+	}
+	// Folding must MERGE nodes, not drop them: both phrasings' nodes survive.
+	nodes, _ := acts[0]["nodes"].([]any)
+	if len(nodes) != 2 {
+		t.Fatalf("merged act has %d nodes, want 2 (nodes merged, not dropped): %s", len(nodes), doc.Acts)
+	}
+}
+
+// TestDedupOutlineActsPreservesBytesWhenNothingFolds guards the minimal-change
+// contract: a payload with no duplicate titles must come back byte-identical,
+// so ordinary outline saves are never needlessly rewritten.
+func TestDedupOutlineActsPreservesBytesWhenNothingFolds(t *testing.T) {
+	in := json.RawMessage(`[{"title":"第一幕"},{"title":"第二幕"}]`)
+	if got := dedupOutlineActs(in); string(got) != string(in) {
+		t.Fatalf("dedup rewrote a clean payload:\n got=%s\nwant=%s", got, in)
+	}
+}

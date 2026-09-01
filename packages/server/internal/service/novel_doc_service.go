@@ -130,6 +130,10 @@ func (s *NovelDocService) UpdateOutline(ctx context.Context, userID, novelID int
 	if err := validateDocPayload(acts); err != nil {
 		return 0, err
 	}
+	// R1 dedup (reddots §十): fold near-duplicate act titles for EVERY writer
+	// of the outline — the web panel's PUT as well as the Agent's
+	// save_outline, which previously was the only deduplicated path.
+	acts = dedupOutlineActs(acts)
 	if expectedVersion != nil {
 		current, err := s.docRepo.GetOutline(ctx, userID, novelID)
 		if err != nil {

@@ -230,3 +230,42 @@ func outlineTitleKey(v any) string {
 	}
 	return ord
 }
+
+// dedupOutlineActs folds acts that share the same outlineTitleKey (R1 dedup)
+// so that every writer of the outline — the web outline panel's PUT as well as
+// the Agent's save_outline — is protected from near-duplicate acts such as
+// "第一幕《神陨之后》" alongside "神陨之后".
+//
+// The fold is the same one the Agent path already applies (mergeOutlineAct):
+// the second act's nodes are appended into the first, skipping nodes whose
+// non-empty title already exists. When nothing folds, the caller's exact bytes
+// are returned untouched, so the ordinary non-duplicate write path stays
+// byte-identical to before and no client payload is needlessly rewritten.
+func dedupOutlineActs(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var acts []map[string]any
+	if err := json.Unmarshal(raw, &acts); err != nil || len(acts) == 0 {
+		return raw
+	}
+	merged := make([]map[string]any, 0, len(acts))
+	for _, item := range acts {
+		act := repairOutlineAct(item)
+		if act == nil {
+			continue
+		}
+		if !mergeOutlineAct(merged, act) {
+			merged = append(merged, act)
+		}
+	}
+	// Nothing folded, or every act was unusable: keep the original bytes.
+	if len(merged) == len(acts) {
+		return raw
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return raw
+	}
+	return out
+}
