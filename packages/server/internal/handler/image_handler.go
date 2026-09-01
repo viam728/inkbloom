@@ -175,8 +175,8 @@ func (h *ImageHandler) List(c *gin.Context) {
 		a := &assets[i]
 		items = append(items, dto.ImageItem{
 			ID:          a.ID,
-			URL:         a.FilePath,
-			ThumbURL:    a.ThumbnailPath,
+			URL:         signedurl.SignURL(GetUserID(c), a.FilePath),
+			ThumbURL:    signedurl.SignURL(GetUserID(c), a.ThumbnailPath),
 			ContentHash: a.ContentHash,
 			DisplayName: a.DisplayName,
 			Width:       a.Width,

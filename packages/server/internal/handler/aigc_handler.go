@@ -18,6 +18,7 @@ import (
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/model"
 	"github.com/inkbloom/server/internal/pkg/contentsafety"
+	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/repository"
 	"github.com/inkbloom/server/internal/service"
 	"github.com/inkbloom/server/internal/service/task_engine"
@@ -523,8 +524,8 @@ func (h *AIGCHandler) ListAIGCRecords(c *gin.Context) {
 		// Asset snapshot: GetByID is unscoped (static-route legacy), so
 		// enforce ownership here (M1 isolation).
 		if asset, aerr := h.assetRepo.GetByID(c.Request.Context(), r.AssetID); aerr == nil && asset.UserID == userID {
-			item.URL = asset.FilePath
-			item.ThumbURL = asset.ThumbnailPath
+			item.URL = signedurl.SignURL(userID, asset.FilePath)
+			item.ThumbURL = signedurl.SignURL(userID, asset.ThumbnailPath)
 			item.DisplayName = asset.DisplayName
 			item.ContentHash = asset.ContentHash
 		}
