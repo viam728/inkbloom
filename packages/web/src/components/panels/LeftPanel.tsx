@@ -7,6 +7,8 @@ import MemoryPanel from '../memory/MemoryPanel';
 import OutlinePanel from '../outline/OutlinePanel';
 import MediaLibraryPanel from '../media/MediaLibraryPanel';
 import TopicPoolPanel from '../media/TopicPoolPanel';
+import ErrorBoundary from '../common/ErrorBoundary';
+import { useNovelStore } from '@/stores/novel-store';
 import { useUIStore, type LeftTab, type CreatorRole } from '@/stores/ui-store';
 
 /** 小说作者：作品库 / 大纲 / 记忆 */
@@ -33,6 +35,8 @@ const LeftPanel: React.FC = () => {
   const leftTab = useUIStore((s) => s.leftTab);
   const setLeftTab = useUIStore((s) => s.setLeftTab);
   const role = useUIStore((s) => s.role);
+  // 切换作品时重置大纲错误边界，避免上一部作品的崩溃态残留
+  const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
 
   const tabs = TABS_BY_ROLE[role] ?? NOVELIST_TABS;
   // 持久化的 leftTab 可能与当前角色不匹配，回退到第一个 Tab
@@ -71,7 +75,9 @@ const LeftPanel: React.FC = () => {
       )}
       {activeTab === 'outline' && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          <OutlinePanel />
+          <ErrorBoundary label="大纲面板" resetKey={currentNovelId}>
+            <OutlinePanel />
+          </ErrorBoundary>
         </div>
       )}
       {activeTab === 'memory' && (

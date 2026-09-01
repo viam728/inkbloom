@@ -459,8 +459,13 @@ func (s *AgentService) syncMemory(ctx context.Context, userID, novelID int64, ra
 }
 
 // syncOutline merges LLM-provided acts into the novel's outline module
-// (novel_outline). Existing acts are preserved; non-empty new acts are
-// appended. Existing version is passed through to avoid lost-update.
+// (novel_outline). Every act the Agent produces is normalized to the web
+// outline contract (id / nodes[] / node id+status) before it is stored, so a
+// partially-shaped LLM payload can never reach the panel.
+//
+// Existing acts are preserved and repaired in place. A new act is folded into
+// an existing act of the same title (nodes deduped by title) when one exists,
+// and appended otherwise — keeping repeated save_outline calls idempotent.
 func (s *AgentService) syncOutline(ctx context.Context, userID, novelID int64, rawActs []interface{}) (int, error) {
 	current, err := s.docSvc.GetOutline(ctx, userID, novelID)
 	if err != nil {
@@ -470,26 +475,35 @@ func (s *AgentService) syncOutline(ctx context.Context, userID, novelID int64, r
 	if current != nil && len(current.Acts) > 0 {
 		_ = json.Unmarshal(current.Acts, &existingActs)
 	}
-	if existingActs == nil {
-		existingActs = []map[string]any{}
+	// Repair what is already stored: rows written before normalization may lack
+	// ids/nodes, and merging requires a uniform shape. Nothing is dropped here.
+	repaired := make([]map[string]any, 0, len(existingActs))
+	for _, item := range existingActs {
+		if act := repairOutlineAct(item); act != nil {
+			repaired = append(repaired, act)
+		}
 	}
+	existingActs = repaired
+
 	saved := 0
 	for _, raw := range rawActs {
-		m, ok := raw.(map[string]any)
-		if !ok {
+		act := normalizeOutlineAct(raw)
+		if act == nil {
+			// Unusable act: not an object, or a blank title.
 			continue
 		}
-		title, _ := m["title"].(string)
-		if title == "" {
-			continue
+		if !mergeOutlineAct(existingActs, act) {
+			existingActs = append(existingActs, act)
 		}
-		existingActs = append(existingActs, m)
 		saved++
 	}
 	if saved == 0 {
 		return 0, nil
 	}
-	raw, _ := json.Marshal(existingActs)
+	raw, err := json.Marshal(existingActs)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := s.docSvc.UpdateOutline(ctx, userID, novelID, raw, nil); err != nil {
 		return 0, err
 	}

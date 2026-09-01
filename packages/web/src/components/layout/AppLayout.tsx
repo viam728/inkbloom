@@ -6,6 +6,7 @@ import EditorArea from '@/components/editor/EditorArea';
 import MediaEditorArea from '@/components/media/MediaEditorArea';
 import RightPanel from '@/components/panels/RightPanel';
 import StoryAnalysisPanel from '@/components/analysis/StoryAnalysisPanel';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
 import CommandPalette from '@/components/layout/CommandPalette';
 import ShortcutsDialog from '@/components/layout/ShortcutsDialog';
 import MemoPad from '@/components/memo/MemoPad';
@@ -257,7 +258,9 @@ const AppLayout: React.FC = () => {
               className="shrink-0 h-full overflow-hidden animate-fade-in"
               style={{ width: clamp(analysisWidth, ANALYSIS_MIN, ANALYSIS_MAX) }}
             >
-              <StoryAnalysisPanel />
+              <ErrorBoundary label="整体分析面板">
+                <StoryAnalysisPanel />
+              </ErrorBoundary>
             </div>
           </>
         ))}

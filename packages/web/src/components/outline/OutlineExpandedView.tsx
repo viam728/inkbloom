@@ -64,7 +64,8 @@ const OutlineExpandedView: React.FC<OutlineExpandedViewProps> = ({
                 <p className="text-[11px] text-neutral-600 px-1 py-3">暂无章节要点</p>
               ) : (
                 act.nodes.map((node) => {
-                  const status = STATUS_CONFIG[node.status];
+                  // 兜底：status 非法时回落 planned，避免解引用 status.dot 抛错白屏
+                  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.planned;
                   const preview = htmlToPlainText(node.summary);
                   return (
                     <div

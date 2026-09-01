@@ -62,6 +62,12 @@ func NewNovelDocService(
 
 // GetOutline returns the outline document of a novel within the user's
 // scope (empty acts when absent).
+//
+// Acts are normalized on the way out: legacy rows written before outline
+// normalization existed (or by an unpatched Agent build) may lack act ids,
+// node ids or node statuses, which crashed the web panel. Repairing at the read
+// boundary heals them without a migration, and the client's next PUT persists
+// the repaired shape.
 func (s *NovelDocService) GetOutline(ctx context.Context, userID, novelID int64) (*OutlineDoc, error) {
 	if err := s.ensureNovelExists(ctx, userID, novelID); err != nil {
 		return nil, err
@@ -70,7 +76,7 @@ func (s *NovelDocService) GetOutline(ctx context.Context, userID, novelID int64)
 	if err != nil {
 		return nil, err
 	}
-	return &OutlineDoc{Acts: json.RawMessage(doc.Acts), Version: doc.Version}, nil
+	return &OutlineDoc{Acts: normalizeOutlineActsJSON(json.RawMessage(doc.Acts)), Version: doc.Version}, nil
 }
 
 // UpdateOutline wholesale-replaces the outline acts of a novel and returns

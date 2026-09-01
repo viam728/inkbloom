@@ -678,7 +678,8 @@ interface NodeCardProps {
 }
 
 const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onExpand, onJump }) => {
-  const status = STATUS_CONFIG[node.status];
+  // 兜底：node.status 由 Record 查表拿到，非法值会让解引用 status.dot 抛错白屏
+  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.planned;
   return (
     <div
       onClick={onEdit}

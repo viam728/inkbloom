@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { fetchOutline, saveOutline } from '@/services/outline-client';
+import { fetchOutline, saveOutline, normalizeOutlineActs } from '@/services/outline-client';
 
 /** 章节大纲状态：未开始 → 写作中 → 已完成 */
 export type OutlineStatus = 'planned' | 'drafting' | 'done';
@@ -86,10 +86,10 @@ export const useOutlineStore = create<OutlineState>((set, get) => ({
       const acts = await fetchOutline(novelId);
       set((s) => ({ byNovel: { ...s.byNovel, [novelId]: acts } }));
     } catch {
-      // 后端不可用时回退本地缓存
+      // 后端不可用时回退本地缓存；localStorage 里的旧数据同样要规范化
       try {
         const raw = localStorage.getItem(`inkbloom-outline-${novelId}`);
-        const acts: OutlineAct[] = raw ? JSON.parse(raw) : [];
+        const acts = normalizeOutlineActs(raw ? JSON.parse(raw) : []);
         set((s) => ({ byNovel: { ...s.byNovel, [novelId]: acts } }));
       } catch {
         set((s) => ({ byNovel: { ...s.byNovel, [novelId]: [] } }));
