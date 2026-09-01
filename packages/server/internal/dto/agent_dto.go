@@ -1,9 +1,37 @@
 package dto
 
+import "encoding/json"
+
 // AgentChatMessage is one conversation message for the agent chat endpoint.
+// Content is a plain string for text, or an OpenAI multi-modal parts array
+// (text / image_url) when the author attaches an image or document.
 type AgentChatMessage struct {
 	Role    string `json:"role" binding:"required"`
-	Content string `json:"content"`
+	Content json.RawMessage `json:"content"`
+}
+
+// ContentString returns the message content as plain text when it is a string.
+func (m AgentChatMessage) ContentString() string {
+	var s string
+	if err := json.Unmarshal(m.Content, &s); err == nil {
+		return s
+	}
+	return ""
+}
+
+// ContentParts returns the message content as an OpenAI multi-modal parts array
+// when it is not a plain string. The result is ready for direct message-body
+// inclusion (forwarded verbatim to the LLM).
+func (m AgentChatMessage) ContentParts() []any {
+	var s string
+	if err := json.Unmarshal(m.Content, &s); err == nil {
+		return nil
+	}
+	var parts []any
+	if err := json.Unmarshal(m.Content, &parts); err == nil {
+		return parts
+	}
+	return nil
 }
 
 // AgentChatRequest is the request for POST /ai/agent/chat. It drives one full

@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { streamInline, streamRewrite } from '@/services/sse-client';
-import { agentChat } from '@/services/agent-chat-client';
+import { agentChat, buildUserContent } from '@/services/agent-chat-client';
 import { useNovelStore } from '@/stores/novel-store';
-import type { AIMessage, AgentCard, RewriteAction } from '@/types';
+import type { AIMessage, AgentCard, ChatAttachment, RewriteAction } from '@/types';
 
 interface RewriteResult {
   original: string;
@@ -26,7 +26,7 @@ interface AIStore {
   showDiffViewer: boolean;
   isRewriteStreaming: boolean;
 
-  sendMessage: (content: string) => Promise<void>;
+    sendMessage: (content: string, attachments?: ChatAttachment[]) => Promise<void>;
   clearMessages: () => void;
   setModel: (model: string) => void;
   stopStreaming: () => void;
@@ -73,7 +73,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
   showDiffViewer: false,
   isRewriteStreaming: false,
 
-  sendMessage: async (content: string) => {
+    sendMessage: async (content: string, attachments?: ChatAttachment[]) => {
     const { messages } = get();
 
     const userMsg: AIMessage = {
@@ -81,13 +81,18 @@ export const useAIStore = create<AIStore>((set, get) => ({
       role: 'user',
       content,
       timestamp: new Date(),
+            attachments: attachments && attachments.length > 0 ? attachments : undefined,
     };
 
     const updatedMessages = [...messages, userMsg];
     set({ messages: updatedMessages, isStreaming: true, streamingContent: '' });
 
-    // 历史只保留 user/assistant 纯文本（工具消息由后端 Agent 循环内部管理）。
-    const history = updatedMessages.map((m) => ({ role: m.role, content: m.content }));
+        // 历史只保留 user/assistant（工具消息由后端 Agent 循环内部管理）。
+        // 带附件的 user 消息转成 OpenAI 多模态 content（图片 vision + 文档文本）。
+        const history = updatedMessages.map((m) => ({
+            role: m.role,
+            content: buildUserContent(m.content, m.attachments),
+        }));
 
     try {
       // 走对话式创作 Agent：一次完整 Agent 循环，Agent 自主决定调用工具

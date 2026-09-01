@@ -30,9 +30,15 @@ func (h *AgentHandler) Chat(c *gin.Context) {
 		return
 	}
 
-	msgs := make([]map[string]string, 0, len(req.Messages))
+	msgs := make([]map[string]any, 0, len(req.Messages))
 	for _, m := range req.Messages {
-		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+		content := any(m.ContentString())
+		if content == "" {
+			if parts := m.ContentParts(); parts != nil {
+				content = parts
+			}
+		}
+		msgs = append(msgs, map[string]any{"role": m.Role, "content": content})
 	}
 
 	content, executed, err := h.agentSvc.Run(c.Request.Context(), GetUserID(c), req.NovelID, msgs)

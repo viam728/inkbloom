@@ -195,10 +195,13 @@ class AgentToolHTTP(BaseModel):
 class AgentMessageHTTP(BaseModel):
     """OpenAI-style message for the Agent loop: role/content plus optional
     tool_calls (assistant), tool_call_id (tool), and reasoning_content
-    (DeepSeek thinking mode must be echoed back verbatim)."""
+    (DeepSeek thinking mode must be echoed back verbatim).
+
+    content is a plain string for text, or a multi-modal parts list of
+    {type: text|image_url} when the author attaches an image/document."""
 
     role: str
-    content: str | None = None
+    content: str | list | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
     reasoning_content: str | None = None

@@ -3,9 +3,52 @@ import { Send, Sparkles, Trash2, Mic, MicOff, Paperclip, Wand2, X } from 'lucide
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { toast } from '@/components/common/Toast';
+import type { ChatAttachment } from '@/types';
 import MessageBubble from './MessageBubble';
 import ModelSelector from './ModelSelector';
 import { CHAT_SKILLS } from './chat-skills';
+
+/** 图片附件上限（base64 会膨胀约 1/3，10MB 图 ≈ 13MB body） */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** 文档附件上限（纯文本提取） */
+const MAX_TEXT_BYTES = 1 * 1024 * 1024;
+
+/** 读取文件为 dataURL（图片） */
+function readAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(new Error('读取文件失败'));
+        fr.readAsDataURL(file);
+    });
+}
+
+/** 把本地 File 解析为可发送的附件（图片走 vision，文档提取纯文本） */
+async function parseAttachment(file: File): Promise<ChatAttachment | null> {
+    const base = {
+        id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: file.name,
+    };
+    if (file.type.startsWith('image/')) {
+        if (file.size > MAX_IMAGE_BYTES) {
+            toast.show(`图片「${file.name}」超过 10MB 限制，已跳过`, 'error');
+            return null;
+        }
+        return { ...base, kind: 'image', dataUrl: await readAsDataURL(file) };
+    }
+    if (file.size > MAX_TEXT_BYTES) {
+        toast.show(`文档「${file.name}」超过 1MB 限制，已跳过`, 'error');
+        return null;
+    }
+    try {
+        const text = await file.text();
+        return { ...base, kind: 'text', text };
+    } catch {
+        toast.show(`文档「${file.name}」无法解析为文本`, 'error');
+        return null;
+    }
+}
 
 /** 空状态下的灵感建议词 */
 const SUGGESTIONS = [
@@ -28,7 +71,7 @@ const AIChatPanel: React.FC = () => {
 
   const [input, setInput] = useState('');
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
-  const [attachments, setAttachments] = useState<{ id: string; name: string }[]>([]);
+    const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [activeSkill, setActiveSkill] = useState<(typeof CHAT_SKILLS)[number] | null>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -130,14 +173,12 @@ const AIChatPanel: React.FC = () => {
     let payload = activeSkill
       ? `${activeSkill.prompt}${text ? ` ${text}` : ''}`
       : text;
-    // 附件随消息一并交给 Agent（由 AI 返回的信息处理，前端不做额外提示）
-    if (attachments.length > 0) {
-      payload += `\n\n[已挂载附件: ${attachments.map((a) => a.name).join(', ')}]`;
-    }
+        // 附件真实内容（图片 vision / 文档文本）随消息交由 Agent 多模态理解
+        const attached = attachments.length > 0 ? [...attachments] : undefined;
     setInput('');
     setActiveSkill(null);
     setAttachments([]);
-    sendMessage(payload);
+        void sendMessage(payload, attached);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -258,7 +299,11 @@ const AIChatPanel: React.FC = () => {
                     key={a.id}
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-600/15 border border-brand-500/30 text-brand-300 text-[11px]"
                   >
+                                        {a.kind === 'image' && a.dataUrl ? (
+                                            <img src={a.dataUrl} alt={a.name} className="w-4 h-4 rounded object-cover" />
+                                        ) : (
                     <Paperclip size={11} />
+                                        )}
                     <span className="max-w-[120px] truncate">{a.name}</span>
                     <button
                       onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
@@ -309,13 +354,12 @@ const AIChatPanel: React.FC = () => {
                 onChange={(e) => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
-                    setAttachments((prev) => [
-                      ...prev,
-                      ...Array.from(files).map((f) => ({
-                        id: `${f.name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                        name: f.name,
-                      })),
-                    ]);
+                                        void Promise.all(Array.from(files).map(parseAttachment)).then((parsed) => {
+                                            const valid = parsed.filter((a): a is ChatAttachment => a !== null);
+                                            if (valid.length > 0) {
+                                                setAttachments((prev) => [...prev, ...valid]);
+                                            }
+                                        });
                   }
                   e.target.value = '';
                 }}
@@ -340,8 +384,7 @@ const AIChatPanel: React.FC = () => {
                 <button
                   onClick={handleToggleSpeech}
                   title={listening ? '停止语音输入' : '语音输入'}
-                  className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] border transition-all ${
-                    listening
+                                    className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] border transition-all ${listening
                       ? 'bg-red-500/15 border-red-500/40 text-red-300 animate-pulse-soft'
                       : 'bg-white/4 border-white/8 text-neutral-500 hover:text-neutral-300 hover:border-white/15'
                   }`}

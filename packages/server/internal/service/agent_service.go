@@ -177,7 +177,7 @@ const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作�
 // final answer. Returns the final answer text and the executed tool summary.
 // novelID is the author's currently-selected work (0 when none): create/write
 // tools fall back to it so the Agent never drafts without a target work.
-func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, messages []map[string]string) (string, []map[string]any, error) {
+func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, messages []map[string]any) (string, []map[string]any, error) {
 	msgs := make([]map[string]any, 0, len(messages)+1)
 	sys := agentSystemPrompt
 	if novelID > 0 {

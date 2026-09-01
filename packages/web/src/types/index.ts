@@ -11,6 +11,7 @@ export type {
 export type {
   ChatMessage,
   AIMessage,
+    ChatAttachment,
   ChatChunkData,
   ChatRequestOptions,
   InlineRequest,

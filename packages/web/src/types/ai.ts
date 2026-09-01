@@ -14,6 +14,19 @@ export interface AIMessage {
   toolExecutions?: { tool: string; label: string }[];
   /** 消息卡片（Q2：渲染在 assistant 消息侧；带 card 的消息 content 可为引导文案） */
   card?: AgentCard;
+    /** 随消息挂载的附件（多模态理解：图片/文档） */
+    attachments?: ChatAttachment[];
+}
+
+/** 对话附件：图片走 vision（dataURL），文档提取纯文本 */
+export interface ChatAttachment {
+    id: string;
+    name: string;
+    kind: 'image' | 'text';
+    /** 图片 dataURL（data:image/...;base64,...） */
+    dataUrl?: string;
+    /** 文档提取的纯文本 */
+    text?: string;
 }
 
 /** ── 消息卡片机制（P0-1）──────────────────────────────────────────
