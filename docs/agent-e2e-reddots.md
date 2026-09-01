@@ -154,3 +154,17 @@
 - **R1 大纲去重（Agent 路径 ✅）**：`TestSyncOutlineDedupesOrdinalAndBareTitles` 单测绿 + 线上 Agent `save_outline` 落 **1 幕**（两措辞归并）。
 - **重要厘清**：R1 去重**仅**作用于 Agent 的 `syncOutline`（`mergeOutlineAct`）；公共 `PUT /api/v1/novels/:id/outline`（`NovelDocService.UpdateOutline`，novel_doc_service.go:126）只归一化、**不去重**。R1 红点本就限定 Agent 路径，故非缺陷；但建议把去重下沉到 `UpdateOutline` 让所有写方受益（低风险小改动，可选 hardening，不阻塞 Phase 3）。
 - **结论**：Phase 1（写前快照）+ Phase 2（R1/Q5/R2）线上行为全部坐实，可进入 Phase 3。
+
+## 十一、R1 去重下沉到公共写路径（commit `4f68afe`）
+
+- **动机**：§十 线上 e2e 厘清——R1 去重此前**只**存在于 Agent 的 `syncOutline`。前端大纲面板走 `PUT /api/v1/novels/:id/outline` → `NovelDocService.UpdateOutline`，只归一化不去重，同一份"两措辞"payload 会落 **2 幕**。
+- **改动**：`outline_normalize.go` 新增 `dedupOutlineActs`，在 `UpdateOutline` 写路径调用（payload 校验之后、落库之前）。按 `outlineTitleKey` 折叠重复幕，并**合并节点而非丢弃内容**。
+- **最小改动契约**：无折叠时**原样返回客户端字节**，普通保存路径保持 byte-identical——避免每次保存都重排客户端 JSON。
+- **回归测试**（`outline_sync_integration_test.go`）：
+  - `TestUpdateOutlineDedupesDuplicateActTitles`：PUT 两措辞 → 落 **1 幕**，且保留 **2 个节点**（证明是合并不是丢弃）。
+  - `TestDedupOutlineActsPreservesBytesWhenNothingFolds`：无重复 payload 字节不变。
+- **验收**：`go build ./...`、`go test ./internal/service/` 全绿（含既有的幂等、遗留行修复、R1 单测等 5 条大纲测试）。
+- **剩余边角（未修，非阻断）**：
+  1. "第一章 觉醒" 与 "第二章 觉醒" 去序数后同为"觉醒"会被**误合并**。正解是把"章/回"序数从 `outlineTitleKey` 剥离规则中拆出去（只剥幕/卷/部/篇），再给 `GetChapterByTitle` 用**独立的章序数 key**，以免破坏 Q5 的"第48章《余生长歌》→ 余生长歌"解析。
+  2. `write_chapter` 存在性检查在 `postAI` **之后**，传错 id 会先白跑一次 LLM 生成再报错（建议前移到生成前省 token）。
+  3. 测试缺口：`write_chapter` not-found 路径、`list_chapters` 工具未单测。
