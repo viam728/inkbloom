@@ -144,3 +144,13 @@
     2. `write_chapter` 的存在性检查在 `postAI` 生成**之后**，传错 id 会先白跑一次 LLM 生成再报错（建议前移以省 token）。
     3. 个别测试缺口：`write_chapter` not-found 路径、`list_chapters` 工具未单测。
 - **Phase 3（待启动）**：Q3 整本里程碑快照（`novel_versions` bundle：整本章节+大纲+记忆一键还原）。
+
+## 十、Phase 2 线上端到端实测（2026-09-01，部署后验证）
+
+- **环境**：Phase 2 build 已部署 `:8080` 单实例（NATS 单实例约束遵守）；`ai-service:8100`（deepseek-v4-flash）在线；用**临时 novel**（跑完 `DELETE` 清理，无污染）。
+- **Q5 章节定位（实时生效 ✅）**：Agent 调 `list_chapters` → `get_chapter_by_title{title:"觉醒"}`，随后 `write_chapter` 携带**正确 chapter_id**（解析自真实章节，未臆测编号）。
+- **R2 误造护栏（实时生效 ✅）**：仅写入已存在章节，章节列表只含真实 2 章，**无 phantom 章**；Agent 未调用 `create_chapter` 造新章。
+- **Phase 1 写前快照（实时生效 ✅）**：被写章节 `chapter_versions` 出现 `kind=auto`（agent-auto）快照。
+- **R1 大纲去重（Agent 路径 ✅）**：`TestSyncOutlineDedupesOrdinalAndBareTitles` 单测绿 + 线上 Agent `save_outline` 落 **1 幕**（两措辞归并）。
+- **重要厘清**：R1 去重**仅**作用于 Agent 的 `syncOutline`（`mergeOutlineAct`）；公共 `PUT /api/v1/novels/:id/outline`（`NovelDocService.UpdateOutline`，novel_doc_service.go:126）只归一化、**不去重**。R1 红点本就限定 Agent 路径，故非缺陷；但建议把去重下沉到 `UpdateOutline` 让所有写方受益（低风险小改动，可选 hardening，不阻塞 Phase 3）。
+- **结论**：Phase 1（写前快照）+ Phase 2（R1/Q5/R2）线上行为全部坐实，可进入 Phase 3。
