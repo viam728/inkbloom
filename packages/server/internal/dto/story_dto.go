@@ -47,9 +47,10 @@ type SetStageRequest struct {
 }
 
 // AdoptChapterRequest confirms a drafted chapter and writes it into the
-// novel's chapters table.
+// novel's chapters table. ChapterKey is optional: when empty the server
+// generates the next sequential key (ch-{n+1}).
 type AdoptChapterRequest struct {
-	ChapterKey string `json:"chapter_key" binding:"required"`
+	ChapterKey string `json:"chapter_key"`
 	Title      string `json:"title"`
 	Content    string `json:"content" binding:"required"`
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkbloom/server/internal/dto"
@@ -40,6 +41,13 @@ type StoryService struct {
 	aiServiceURL   string
 	httpClient     *http.Client
 	logger         *zap.Logger
+
+	// jobLocks serialises read-modify-write on a single job (adopt path).
+	// Lazy per-job mutexes guarded by jobLocksMu; single-instance only —
+	// multi-instance deployment would need a DB constraint or distributed
+	// lock (out of scope for the current phase).
+	jobLocksMu sync.Mutex
+	jobLocks   map[int64]*sync.Mutex
 }
 
 // NewStoryService creates a new StoryService.
@@ -63,6 +71,29 @@ func NewStoryService(
 		aiServiceURL: strings.TrimRight(aiServiceURL, "/"),
 		httpClient:   &http.Client{Timeout: 5 * time.Minute},
 		logger:       logger,
+		jobLocks:     make(map[int64]*sync.Mutex),
+	}
+}
+
+// lockJob acquires the per-job mutex, creating it lazily on first use.
+func (s *StoryService) lockJob(id int64) {
+	s.jobLocksMu.Lock()
+	mu, ok := s.jobLocks[id]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.jobLocks[id] = mu
+	}
+	s.jobLocksMu.Unlock()
+	mu.Lock()
+}
+
+// unlockJob releases the per-job mutex acquired by lockJob.
+func (s *StoryService) unlockJob(id int64) {
+	s.jobLocksMu.Lock()
+	mu := s.jobLocks[id]
+	s.jobLocksMu.Unlock()
+	if mu != nil {
+		mu.Unlock()
 	}
 }
 
@@ -214,10 +245,41 @@ func (s *StoryService) GenerateStage(ctx context.Context, userID, id int64, inst
 
 // AdoptChapter confirms a drafted chapter and writes it into the novel's
 // chapters table (real structure).
+//
+// Idempotent on chapter_key: replaying an already-adopted key (double click,
+// retry, old-panel replay) returns the current job unchanged instead of
+// creating a duplicate chapter. An empty key is generated server-side as
+// ch-{ChapterKeys+1}. Concurrent adopts of the same job are serialised by a
+// per-job mutex so the read-modify-write on StagePayload/ChapterKeys cannot
+// interleave.
 func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *dto.AdoptChapterRequest) (*dto.StoryJobResponse, error) {
+	s.lockJob(id)
+	defer s.unlockJob(id)
+
 	job, err := s.repo.GetByID(ctx, userID, id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Parse the adopted records up front (moved from the write path below so
+	// the idempotency check runs before any chapter is created).
+	adopted := parseAdopted(job.StagePayload)
+
+	// Key normalisation: an empty key becomes the next sequential one.
+	// Generation happens inside the per-job critical section and the
+	// generated key is immediately checked against existing records, so
+	// concurrent empty-key requests cannot collide.
+	key := req.ChapterKey
+	if key == "" {
+		key = fmt.Sprintf("ch-%d", job.ChapterKeys+1)
+	}
+
+	// Idempotency hit: the key was already adopted — no new chapter, no
+	// counter increment, HTTP 200 with the current job state.
+	for _, m := range adopted {
+		if m["chapter_key"] == key {
+			return s.toResponse(job), nil
+		}
 	}
 
 	ch, err := s.chapterSvc.CreateChapter(ctx, userID, &dto.CreateChapterRequest{
@@ -236,16 +298,8 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	}
 	var payload map[string]interface{}
 	_ = json.Unmarshal(job.StagePayload, &payload)
-	adopted := make([]map[string]interface{}, 0)
-	if a, ok := payload["adopted"].([]interface{}); ok {
-		for _, item := range a {
-			if m, ok := item.(map[string]interface{}); ok {
-				adopted = append(adopted, m)
-			}
-		}
-	}
 	adopted = append(adopted, map[string]interface{}{
-		"chapter_key": req.ChapterKey,
+		"chapter_key": key,
 		"chapter_id":  ch.ID,
 		"title":       req.Title,
 		"adopted_at":  time.Now().UTC(),
@@ -267,6 +321,27 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	job.StagePayload = mustJSON(payload)
 	s.repo.Update(ctx, job)
 	return s.toResponse(job), nil
+}
+
+// parseAdopted extracts the adopted-chapter records from a job's
+// StagePayload. Never fails: a malformed/empty payload yields an empty slice.
+func parseAdopted(raw []byte) []map[string]interface{} {
+	adopted := make([]map[string]interface{}, 0)
+	if len(raw) == 0 || string(raw) == "null" {
+		return adopted
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(raw, &payload) != nil {
+		return adopted
+	}
+	if a, ok := payload["adopted"].([]interface{}); ok {
+		for _, item := range a {
+			if m, ok := item.(map[string]interface{}); ok {
+				adopted = append(adopted, m)
+			}
+		}
+	}
+	return adopted
 }
 
 // runVerifyStage checks the latest adopted chapter(s) for consistency against

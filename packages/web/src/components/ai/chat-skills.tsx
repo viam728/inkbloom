@@ -18,6 +18,8 @@ export interface ChatSkill {
   icon: ReactNode;
   /** 发送给创作 Agent 的指令（Agent 会据此决定调用哪些工具） */
   prompt: string;
+  /** 带 card 标记的 skill：invokeSkill 走插卡分支，不再挂输入框 chip */
+  card?: 'draft_config';
 }
 
 export const CHAT_SKILLS: ChatSkill[] = [
@@ -27,6 +29,7 @@ export const CHAT_SKILLS: ChatSkill[] = [
     description: '一句话创意，Agent 自动建书→分章→成稿',
     icon: <Wand2 size={15} />,
     prompt: '请帮我开始创作一部新小说：先根据我下面要说的创意创建作品，规划章节，再逐章撰写正文。我的创意是：',
+    card: 'draft_config',
   },
   {
     id: 'continue',

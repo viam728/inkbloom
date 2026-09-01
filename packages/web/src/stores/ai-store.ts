@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { streamInline, streamRewrite } from '@/services/sse-client';
 import { agentChat } from '@/services/agent-chat-client';
 import { useNovelStore } from '@/stores/novel-store';
-import type { AIMessage, RewriteAction } from '@/types';
+import type { AIMessage, AgentCard, RewriteAction } from '@/types';
 
 interface RewriteResult {
   original: string;
@@ -50,6 +50,14 @@ interface AIStore {
   }) => Promise<void>;
   acceptRewrite: () => void;
   rejectRewrite: () => void;
+
+  // ── 消息卡片（P0-1）────────────────────────────────────────────────
+  /** 在消息流末尾插入一条 assistant 侧卡片消息，返回消息 id（供后续原地更新） */
+  pushCardMessage: (card: AgentCard) => string;
+  /** Q6 原地替换/更新：按消息 id 定位，用 updater 产出新 card（类型按 kind 收窄在调用侧保证） */
+  updateCardMessage: (messageId: string, updater: (card: AgentCard) => AgentCard) => void;
+  /** Q5/P1-2 预留位：卡片操作成功后回发轻量上下文。P0 为 no-op，P1 改为 sendMessage(text) */
+  notifyAgentContext: (text: string) => void;
 }
 
 export const useAIStore = create<AIStore>((set, get) => ({
@@ -200,7 +208,47 @@ export const useAIStore = create<AIStore>((set, get) => ({
   rejectRewrite: () => {
     set({ rewriteResult: null, showDiffViewer: false });
   },
+
+  // ── 消息卡片（P0-1）──────────────────────────────────────────────────
+  pushCardMessage: (card: AgentCard) => {
+    const id = crypto.randomUUID();
+    const msg: AIMessage = {
+      id,
+      role: 'assistant',
+      content: cardLeadText(card),
+      timestamp: new Date(),
+      card,
+    };
+    set((s) => ({ messages: [...s.messages, msg] }));
+    return id;
+  },
+
+  updateCardMessage: (messageId: string, updater: (card: AgentCard) => AgentCard) => {
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.card ? { ...m, card: updater(m.card) } : m,
+      ),
+    }));
+  },
+
+  notifyAgentContext: (_text: string) => {
+    // P0 no-op：卡片操作不回发对话上下文。P1-2 接入时改为 sendMessage(text)，
+    // 所有卡片操作点已统一调用本方法，届时只需改这一处。
+    return;
+  },
 }));
+
+/** 卡片消息的引导文案（渲染在卡片上方） */
+function cardLeadText(card: AgentCard): string {
+  switch (card.kind) {
+    case 'draft_config':
+      return '已为你打开「AI 起稿」配置卡片，填写作品名与一句话创意后点击「开始起稿」。';
+    case 'draft_result':
+      return card.status === 'running' ? '起稿任务已提交，正在生成…' : '起稿任务进展如下：';
+    default:
+      return '';
+  }
+}
 
 /** 工具名 → 中文标签（展示 Agent 做了什么） */
 function toolLabel(tool: string): string {

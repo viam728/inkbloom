@@ -16,6 +16,10 @@ export type {
   InlineRequest,
   RewriteRequest,
   RewriteAction,
+  AgentCard,
+  DraftConfigCard,
+  DraftResultCard,
+  DraftIssueSummary,
 } from './ai';
 export type {
   KnowledgeNode,

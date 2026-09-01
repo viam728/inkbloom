@@ -21,6 +21,7 @@ const AIChatPanel: React.FC = () => {
   const streamingContent = useAIStore((s) => s.streamingContent);
   const sendMessage = useAIStore((s) => s.sendMessage);
   const clearMessages = useAIStore((s) => s.clearMessages);
+  const pushCardMessage = useAIStore((s) => s.pushCardMessage);
   const fetchNovels = useNovelStore((s) => s.fetchNovels);
   const fetchChapters = useNovelStore((s) => s.fetchChapters);
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
@@ -57,9 +58,22 @@ const AIChatPanel: React.FC = () => {
     return () => document.removeEventListener('mousedown', onDown);
   }, [skillMenuOpen]);
 
-  // 触发一个 Skill：挂载为输入头部的标签 chip（可删除），发送时携带到 Agent
+  // 触发一个 Skill：带 card 标记的直接在消息流插入配置卡片（P0-2）；
+  // 其余挂载为输入头部的标签 chip（可删除），发送时携带到 Agent
   const invokeSkill = (skill: (typeof CHAT_SKILLS)[number]) => {
     setSkillMenuOpen(false);
+    if (skill.card === 'draft_config') {
+      pushCardMessage({
+        kind: 'draft_config',
+        status: 'editing',
+        novelId: currentNovelId ?? 0,
+        title: '',
+        logline: '',
+        // 滑动条默认值与旧面板一致：章节数 10 / 每章字数 2000
+        config: { chapter_count: 10, words_per_chapter: 2000, style: '', auto_settle: true },
+      });
+      return;
+    }
     setActiveSkill(skill);
   };
 
