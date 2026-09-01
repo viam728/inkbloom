@@ -85,6 +85,9 @@ export interface StoryJobConfig {
   words_per_chapter: number;
   style: string;
   auto_settle: boolean;
+  /** 创作意图（C9）：定受众/意图，决定叙事取向 */
+  intent?: string;
+  audience?: string;
 }
 
 export interface StoryJobsList {

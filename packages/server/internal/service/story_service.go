@@ -535,6 +535,13 @@ func (s *StoryService) formatConfig(raw []byte) string {
 	if st, ok := cfg["style"].(string); ok && st != "" {
 		parts = append(parts, fmt.Sprintf("文风：%s", st))
 	}
+	// C9 创作意图栏：受众与意图决定叙事取向（视角/语感/尺度）。
+	if au, ok := cfg["audience"].(string); ok && au != "" {
+		parts = append(parts, fmt.Sprintf("目标受众：%s", au))
+	}
+	if it, ok := cfg["intent"].(string); ok && it != "" {
+		parts = append(parts, fmt.Sprintf("创作意图：%s", it))
+	}
 	if len(parts) == 0 {
 		return ""
 	}

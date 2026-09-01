@@ -25,6 +25,8 @@ const DraftConfigCard: React.FC<DraftConfigCardProps> = ({ messageId, card }) =>
   const [chapterCount, setChapterCount] = useState(card.config.chapter_count);
   const [wordsPerChapter, setWordsPerChapter] = useState(card.config.words_per_chapter);
   const [style, setStyle] = useState(card.config.style);
+  const [intent, setIntent] = useState(card.config.intent ?? '');
+  const [audience, setAudience] = useState(card.config.audience ?? '');
   const [autoSettle, setAutoSettle] = useState(card.config.auto_settle);
   const [submitting, setSubmitting] = useState(false);
 
@@ -39,7 +41,7 @@ const DraftConfigCard: React.FC<DraftConfigCardProps> = ({ messageId, card }) =>
         novel_id: card.novelId,
         title: title.trim(),
         logline: logline.trim(),
-        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle },
+        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
       });
       // Q6 原地替换为结果卡（running 态），随后立刻驱动第一阶段生成
       updateCardMessage(messageId, (c) =>
@@ -94,6 +96,22 @@ const DraftConfigCard: React.FC<DraftConfigCardProps> = ({ messageId, card }) =>
         rows={2}
         disabled={submitting}
         className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-none disabled:opacity-50"
+      />
+
+      {/* 创作意图栏（C9）：定受众/意图，决定叙事取向与语感 */}
+      <input
+        value={audience}
+        onChange={(e) => setAudience(e.target.value)}
+        placeholder="目标受众（可选，如：15-25 岁网文读者 / 都市女性）"
+        disabled={submitting}
+        className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 disabled:opacity-50"
+      />
+      <input
+        value={intent}
+        onChange={(e) => setIntent(e.target.value)}
+        placeholder="创作意图（可选，如：爽文爽感优先 / 情感共鸣 / 悬疑反转）"
+        disabled={submitting}
+        className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 disabled:opacity-50"
       />
 
       {/* 生成设置（滑动条规格与旧面板一致） */}
