@@ -104,6 +104,64 @@ func (s *ChapterService) snapshotBeforeUpdate(ctx context.Context, userID int64,
 	}
 }
 
+// SnapshotForAgent captures the chapter's current content before an Agent
+// mutation is applied, so an Agent write is always recoverable through the
+// existing version-history infra (plan §七.3.1 "写前自动快照"). It reuses the
+// chapter_versions table and the VersionKindAuto kind, but with the label
+// "agent-auto" so the snapshot is attributable to the Agent guard.
+//
+// Best-effort by design: a failure here must never block or error the calling
+// Agent write, so every error is logged and swallowed. Unlike snapshotBeforeUpdate
+// it applies no throttle window — agent writes are each captured when the content
+// differs from the most recent snapshot.
+func (s *ChapterService) SnapshotForAgent(ctx context.Context, userID, chapterID int64) {
+	if s.versionRepo == nil || !s.versionCfg.Enabled {
+		return
+	}
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, chapterID)
+	if err != nil {
+		zap.L().Warn("agent snapshot: chapter lookup failed",
+			zap.Int64("chapter_id", chapterID), zap.Error(err))
+		return
+	}
+	if chapter == nil {
+		return
+	}
+	if chapter.Content == nil {
+		// Empty chapter: nothing meaningful to snapshot yet.
+		return
+	}
+
+	hash := contentHash(*chapter.Content)
+	latest, err := s.versionRepo.Latest(ctx, userID, chapter.ID)
+	if err != nil {
+		zap.L().Warn("agent snapshot: latest lookup failed",
+			zap.Int64("chapter_id", chapter.ID), zap.Error(err))
+		return
+	}
+	if latest != nil && latest.ContentHash == hash {
+		return // identical to the most recent snapshot — skip
+	}
+
+	v := &model.ChapterVersion{
+		UserID:      userID,
+		ChapterID:   chapter.ID,
+		NovelID:     chapter.NovelID,
+		Title:       chapter.Title,
+		Content:     chapter.Content,
+		ContentJSON: chapter.ContentJSON,
+		WordCount:   chapter.WordCount,
+		Kind:        model.VersionKindAuto,
+		Label:       "agent-auto",
+		ContentHash: hash,
+	}
+	if err := s.versionRepo.Create(ctx, v); err != nil {
+		zap.L().Warn("agent snapshot: create failed",
+			zap.Int64("chapter_id", chapter.ID), zap.Error(err))
+		return
+	}
+}
+
 // contentHash returns the leading 16 hex chars of sha256(content), used for
 // snapshot dedupe. 16 chars (64 bits) is ample here: collisions would only
 // cause a missed snapshot, never data loss.

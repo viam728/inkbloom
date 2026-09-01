@@ -381,6 +381,10 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 
 // writeChapter generates chapter body via the chapter agent scene and saves it.
 func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapterID int64, instruction string) string {
+	// Guard (plan §七.3.1 "写前自动快照"): capture current content before the
+	// Agent overwrites it, so the pre-write text is always recoverable.
+	// Best-effort — failures are swallowed inside SnapshotForAgent.
+	s.chapterSvc.SnapshotForAgent(ctx, userID, chapterID)
 	if instruction == "" {
 		instruction = "请完整撰写本章正文。"
 	}
@@ -511,6 +515,10 @@ func (s *AgentService) syncOutline(ctx context.Context, userID, novelID int64, r
 	if err != nil {
 		return 0, err
 	}
+	// Guard (plan §七.3.1 "写前自动快照"): capture current outline before the
+	// Agent merges/saves, so the pre-write outline is always recoverable.
+	// Best-effort — failures are swallowed inside SnapshotOutline.
+	s.docSvc.SnapshotOutline(ctx, userID, novelID)
 	if _, err := s.docSvc.UpdateOutline(ctx, userID, novelID, raw, nil); err != nil {
 		return 0, err
 	}

@@ -46,9 +46,10 @@ type RhythmPoint struct {
 
 // NovelDocService handles outline / memory / rhythm business logic.
 type NovelDocService struct {
-	novelRepo   repository.NovelRepository
-	docRepo     repository.NovelDocRepository
-	chapterRepo repository.ChapterRepository
+	novelRepo         repository.NovelRepository
+	docRepo           repository.NovelDocRepository
+	chapterRepo       repository.ChapterRepository
+	outlineVersionRepo repository.OutlineVersionRepository
 }
 
 // NewNovelDocService creates a new NovelDocService.
@@ -56,8 +57,48 @@ func NewNovelDocService(
 	nr repository.NovelRepository,
 	dr repository.NovelDocRepository,
 	cr repository.ChapterRepository,
+	ovr repository.OutlineVersionRepository,
 ) *NovelDocService {
-	return &NovelDocService{novelRepo: nr, docRepo: dr, chapterRepo: cr}
+	return &NovelDocService{novelRepo: nr, docRepo: dr, chapterRepo: cr, outlineVersionRepo: ovr}
+}
+
+// SnapshotOutline captures the novel's current outline (acts) before an Agent
+// mutation is applied, so an Agent write over the outline is always recoverable
+// through the version-history infra (plan §七.3.1 "写前自动快照"). The snapshot
+// is written to the outline_versions table and then pruned to a per-novel cap.
+//
+// Best-effort by design: every error is logged and swallowed, and the method
+// never returns an error that could block or fail the calling write. A missing
+// or empty outline is a no-op.
+func (s *NovelDocService) SnapshotOutline(ctx context.Context, userID, novelID int64) {
+	if s.outlineVersionRepo == nil {
+		return
+	}
+	current, err := s.GetOutline(ctx, userID, novelID)
+	if err != nil {
+		zap.L().Warn("agent outline snapshot: get outline failed",
+			zap.Int64("novel_id", novelID), zap.Error(err))
+		return
+	}
+	if current == nil || len(current.Acts) == 0 {
+		return
+	}
+	v := &model.OutlineVersion{
+		UserID: userID,
+		NovelID: novelID,
+		Acts:    datatypes.JSON(current.Acts),
+		Kind:    model.VersionKindAgentAuto,
+		Label:   "agent-auto",
+	}
+	if err := s.outlineVersionRepo.Create(ctx, v); err != nil {
+		zap.L().Warn("agent outline snapshot: create failed",
+			zap.Int64("novel_id", novelID), zap.Error(err))
+		return
+	}
+	if _, err := s.outlineVersionRepo.PruneAuto(ctx, userID, novelID, 50); err != nil {
+		zap.L().Warn("agent outline snapshot: prune failed",
+			zap.Int64("novel_id", novelID), zap.Error(err))
+	}
 }
 
 // GetOutline returns the outline document of a novel within the user's

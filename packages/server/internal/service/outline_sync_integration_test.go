@@ -34,12 +34,12 @@ func newTestOutlineAgent(t *testing.T) (*AgentService, *gorm.DB) {
 			_ = sqlDB.Close()
 		}
 	})
-	if err := db.AutoMigrate(&model.Novel{}, &model.NovelOutline{}); err != nil {
+	if err := db.AutoMigrate(&model.Novel{}, &model.NovelOutline{}, &model.OutlineVersion{}); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}
 	novelRepo := repository.NewNovelRepository(db)
 	docRepo := repository.NewNovelDocRepository(db)
-	docSvc := NewNovelDocService(novelRepo, docRepo, nil)
+	docSvc := NewNovelDocService(novelRepo, docRepo, nil, repository.NewOutlineVersionRepository(db))
 	agent := NewAgentService(nil, nil, docSvc, nil, "http://127.0.0.1:1", zap.NewNop())
 	return agent, db
 }

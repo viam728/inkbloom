@@ -241,6 +241,8 @@ func main() {
 	mediaRepo := repository.NewMediaRepository(db)
 	// E1 chapter version history (business plan v3, plan A01/A03).
 	chapterVersionRepo := repository.NewChapterVersionRepository(db)
+	// Agent 写前自动快照 — 大纲版本 (plan §七.3.1). AutoMigrate-only table.
+	outlineVersionRepo := repository.NewOutlineVersionRepository(db)
 	// Product analytics (business plan v3 appendix B, plan A40).
 	eventRepo := repository.NewEventRepository(db)
 	// E2 foreshadow tracking (business plan v3, plan A10/A12).
@@ -263,7 +265,7 @@ func main() {
 	volumeService := service.NewVolumeService(volumeRepo)
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
-	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo)
+	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo, outlineVersionRepo)
 	// Closed-loop Agent (plan P2-b): the agent context now also carries the
 	// knowledge graph and open foreshadow threads so generation stays
 	// consistent with established world-building.

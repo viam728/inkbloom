@@ -25,6 +25,9 @@ func automigrateModels() []interface{} {
 		&model.Chapter{},
 		// E1 chapter version history (business plan v3, construction plan A01).
 		&model.ChapterVersion{},
+		// Agent 写前自动快照 — 大纲版本 (plan §七.3.1). AutoMigrate-only so it
+		// is created for both cloud PG and local SQLite (contract C1).
+		&model.OutlineVersion{},
 		&model.Setting{},
 		&model.Character{},
 		&model.Task{},
