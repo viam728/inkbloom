@@ -131,3 +131,16 @@
   - **验证**：fresh-eyes 代码评审 APPROVED；`go build` / `go vet` / `go test ./internal/service/...` 全绿；新 build 已部署 `:8080` 单实例（NATS 单实例约束），登录 200，前端会话正常，`outline_versions` 自动迁移成功。
   - **novel 34 测试污染已清理**：outline 重置为空、删除 R2 垃圾章 ch75（原 18 章/2 记忆未动）。
 - **Phase 2（待启动）**：R1 大纲去重修复 + R2 误造护栏 + Q5 章节定位工具（`list_chapters`/`get_chapter_by_title`）+ Q3 整本里程碑快照（`novel_versions` bundle）。
+
+## 九、实施进度（Phase 2：R1 去重 + Q5 定位 + R2 护栏）
+
+- **2026-09-01**：Phase 2 落地（根因修复 R1/R2）。提交 `29d72ac`（feat(agent): Phase2 R1 大纲去重 + Q5 章节定位工具 + R2 误造护栏）。
+  - **R1 大纲去重**：`outlineTitleKey`（outline_normalize.go）增强——去除序数前缀（第一幕/第N章/第X卷…）+ 书名号《》与引号括号，使"第一幕《神陨之后》"与"神陨之后"归并为同一 key；**去序数后为空则回退到去括号标题**（避免裸序数"第二幕"/"第一章"塌成空串被误合并）。
+  - **Q5 章节定位工具**：新增 Agent 工具 `list_chapters(novel_id)` / `get_chapter_by_title(novel_id,title)`，复用 `outlineTitleKey` 归一化把"第N章《xxx》"解析成真实 chapter_id；`agentSystemPrompt` 增加规则"先用 list_chapters / get_chapter_by_title 解析出真实 chapter_id 再 write_chapter，不要凭空新建章节"。
+  - **R2 误造护栏**：`create_chapter` 同名检测（命中则返回已有 chapter_id + `warning:"已存在同名章节，未新建"`，不建重复章）；`write_chapter` 章节不存在时返回清晰报错"章节 ID X 不存在，请先用 list_chapters 查询并传入正确的 chapter_id，不要新建章节"。
+  - 验证：fresh-eyes 评审 **APPROVED**；`go build`/`go vet`/`go test` 全绿；R1 去重（`TestSyncOutlineDedupesOrdinalAndBareTitles`）与 Q5 解析（`TestGetChapterByTitleResolvesOrdinal`）均有真实断言 PASS。
+  - 已知边角（**非阻断**，后续可细化，已记入评审）：
+    1. "第一章 觉醒" 与 "第二章 觉醒" 去序数后同为"觉醒"会被**误合并**（序数 strip 的取舍代价，R1 修复优先于该边角）。
+    2. `write_chapter` 的存在性检查在 `postAI` 生成**之后**，传错 id 会先白跑一次 LLM 生成再报错（建议前移以省 token）。
+    3. 个别测试缺口：`write_chapter` not-found 路径、`list_chapters` 工具未单测。
+- **Phase 3（待启动）**：Q3 整本里程碑快照（`novel_versions` bundle：整本章节+大纲+记忆一键还原）。
