@@ -121,3 +121,13 @@
 - **Q3**：是否需要"整本里程碑快照"，还是仅靠逐章版本足够？
 - **Q4**：R1/R2 是否现在就修，还是并入版本管理一起做？
 - **Q5**：是否把 `list_chapters`/`get_chapter_by_title` 加入 Agent 工具集？
+
+## 八、实施进度（Phase 1：写前自动快照已落地）
+
+- **2026-09-01**：用户拍板"按推荐开始"。Phase 1 = Agent 写前自动快照（对应 Q1），已实施并部署。
+  - **章节**：`ChapterService.SnapshotForAgent`（复用 `chapter_versions`，标签 `agent-auto`，按 contentHash 去重、无 5 分钟节流、best-effort 不阻断写入）；`AgentService.writeChapter` 首行调用。
+  - **大纲**：新表 `outline_versions`（`model.OutlineVersion` + `OutlineVersionRepository`），经 AutoMigrate 双模式（PG+SQLite）建表；`NovelDocService.SnapshotOutline` 在 `syncOutline` 写前调用（best-effort，保留最新 50 条）。
+  - **提交**：`44e0444`（实现）+ `ec353385`（断言测试，证明章节/大纲两种快照均真实落库）。
+  - **验证**：fresh-eyes 代码评审 APPROVED；`go build` / `go vet` / `go test ./internal/service/...` 全绿；新 build 已部署 `:8080` 单实例（NATS 单实例约束），登录 200，前端会话正常，`outline_versions` 自动迁移成功。
+  - **novel 34 测试污染已清理**：outline 重置为空、删除 R2 垃圾章 ch75（原 18 章/2 记忆未动）。
+- **Phase 2（待启动）**：R1 大纲去重修复 + R2 误造护栏 + Q5 章节定位工具（`list_chapters`/`get_chapter_by_title`）+ Q3 整本里程碑快照（`novel_versions` bundle）。
