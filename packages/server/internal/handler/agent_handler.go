@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -57,7 +58,13 @@ func (h *AgentHandler) Chat(c *gin.Context) {
 			exec.Args = a
 		}
 		if r, ok := e["result"].(string); ok {
-			exec.Result = map[string]any{"raw": r}
+			// 解析 JSON 结果，供前端按字段渲染（如 write_chapter 的 before/after 字数）。
+			var parsed map[string]any
+			if json.Unmarshal([]byte(r), &parsed) == nil {
+				exec.Result = parsed
+			} else {
+				exec.Result = map[string]any{"raw": r}
+			}
 		}
 		executions = append(executions, exec)
 	}

@@ -206,7 +206,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
 
       const toolExecutions = (result.tool_executions ?? []).map((t) => ({
         tool: t.tool,
-        label: toolLabel(t.tool),
+        label: toolLabel(t.tool, t.result),
       }));
 
       const assistantMsg: AIMessage = {
@@ -410,15 +410,21 @@ function cardLeadText(card: AgentCard): string {
   }
 }
 
-/** 工具名 → 中文标签（展示 Agent 做了什么） */
-function toolLabel(tool: string): string {
+/** 工具名 → 中文标签（展示 Agent 做了什么）。write_chapter 附带字数变化摘要。 */
+function toolLabel(tool: string, result?: Record<string, unknown>): string {
   switch (tool) {
     case 'create_novel':
       return '创建作品';
     case 'create_chapter':
       return '新建章节';
-    case 'write_chapter':
+    case 'write_chapter': {
+      const before = result?.before_chars;
+      const after = result?.after_chars;
+      if (typeof before === 'number' && typeof after === 'number') {
+        return `撰写正文 · ${before}→${after} 字`;
+      }
       return '撰写正文';
+    }
     case 'list_novels':
       return '查看作品列表';
     default:

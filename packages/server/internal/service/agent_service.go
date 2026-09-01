@@ -525,7 +525,13 @@ func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapte
 	}); err != nil {
 		return `{"error":"保存章节失败"}`
 	}
-	b, _ := json.Marshal(map[string]any{"chapter_id": chapterID, "written": len([]rune(content))})
+	// B7 变更摘要：before/after 字数供前端在 AI 消息里展示改写范围。
+	b, _ := json.Marshal(map[string]any{
+		"chapter_id":   chapterID,
+		"written":      len([]rune(content)),
+		"before_chars": len([]rune(existingText)),
+		"after_chars":  len([]rune(content)),
+	})
 	return string(b)
 }
 
