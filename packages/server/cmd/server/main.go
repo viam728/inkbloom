@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -356,6 +357,10 @@ func main() {
 	readerHandler := handler.NewReaderHandler(publishService)
 	// E5 reader interactions (plan A28).
 	interactionService := service.NewInteractionService(repository.NewInteractionRepository(db), publishedReadRepo, userRepo, csChecker)
+	// D14：读者事件（采纳等）经 WS Hub 实时推送。
+	interactionService.WithNotifier(func(uid int64, kind string, payload map[string]any) {
+		wsHub.SendToUser(strconv.FormatInt(uid, 10), server.WSMessage{Type: "notification", Payload: map[string]any{"kind": kind, "data": payload}})
+	})
 	interactionHandler := handler.NewInteractionHandler(interactionService)
 	// Agent full-book creation pipeline (plan P1).
 	storyHandler := handler.NewStoryHandler(storyService)

@@ -32,7 +32,14 @@ type InteractionService struct {
 	readRepo        repository.PublishedReadRepository
 	userRepo        repository.UserRepository
 	cs              contentsafety.Checker
+	// notifier is an optional callback invoked after a reader-facing event
+	// (e.g. adoption) so the realtime WS layer can push to the reader (D14).
+	notifier AdoptNotifier
 }
+
+// AdoptNotifier is invoked with the target user and a kind/payload pair after
+// a reader-facing event. The WS layer adapts it into a notification frame.
+type AdoptNotifier func(userID int64, kind string, payload map[string]any)
 
 // NewInteractionService creates a new InteractionService.
 func NewInteractionService(
@@ -42,6 +49,12 @@ func NewInteractionService(
 	cs contentsafety.Checker,
 ) *InteractionService {
 	return &InteractionService{interactionRepo: ir, readRepo: rr, userRepo: ur, cs: cs}
+}
+
+// WithNotifier injects the realtime notification callback (D14).
+func (s *InteractionService) WithNotifier(n AdoptNotifier) *InteractionService {
+	s.notifier = n
+	return s
 }
 
 // List returns a chapter's visible interactions plus whether viewerUserID is
@@ -186,7 +199,14 @@ func (s *InteractionService) Adopt(ctx context.Context, authorUserID, interactio
 	if owner != authorUserID {
 		return ErrNotFound
 	}
-	return s.interactionRepo.UpdateStatus(ctx, interactionID, model.InteractionStatusAdopted)
+	if err := s.interactionRepo.UpdateStatus(ctx, interactionID, model.InteractionStatusAdopted); err != nil {
+		return err
+	}
+	// D14：采纳后实时通知读者（作者采纳了 TA 的建议）。
+	if s.notifier != nil {
+		s.notifier(it.UserID, "interaction_adopted", map[string]any{"interaction_id": interactionID})
+	}
+	return nil
 }
 
 // Hide soft-deletes an interaction. The commenter or the work's owner may hide.
