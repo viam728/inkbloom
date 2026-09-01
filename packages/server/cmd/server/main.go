@@ -243,6 +243,8 @@ func main() {
 	chapterVersionRepo := repository.NewChapterVersionRepository(db)
 	// Agent 写前自动快照 — 大纲版本 (plan §七.3.1). AutoMigrate-only table.
 	outlineVersionRepo := repository.NewOutlineVersionRepository(db)
+	// Q3 整本里程碑快照 (Agent safety work Q3). AutoMigrate-only table.
+	novelVersionRepo := repository.NewNovelVersionRepository(db)
 	// Product analytics (business plan v3 appendix B, plan A40).
 	eventRepo := repository.NewEventRepository(db)
 	// E2 foreshadow tracking (business plan v3, plan A10/A12).
@@ -266,6 +268,9 @@ func main() {
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
 	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo, outlineVersionRepo)
+	// Q3 整本里程碑快照 (Agent safety work Q3): whole-novel bundles with
+	// one-click restore (conservative / full).
+	novelVersionService := service.NewNovelVersionService(novelRepo, chapterRepo, docService, novelVersionRepo)
 	// Closed-loop Agent (plan P2-b): the agent context now also carries the
 	// knowledge graph and open foreshadow threads so generation stays
 	// consistent with established world-building.
@@ -300,6 +305,8 @@ func main() {
 	syncHandler := handler.NewSyncHandler(syncService, logger)
 	// E1 chapter version history (business plan v3, plan A05).
 	historyHandler := handler.NewHistoryHandler(historyService)
+	// Q3 whole-novel milestone snapshots (Agent safety work Q3).
+	novelVersionHandler := handler.NewNovelVersionHandler(novelVersionService)
 	// Product analytics (plan A40): nil tokens keeps every batch anonymous.
 	eventHandler := handler.NewEventHandler(eventService, tokenMgr)
 	// E2 foreshadow tracking (plan A12).
@@ -403,6 +410,7 @@ func main() {
 		Feedback:     feedbackHandler,
 		Public:       publicHandler,
 		History:      historyHandler,
+		NovelVersion: novelVersionHandler,
 		Events:       eventHandler,
 		Foreshadow:   foreshadowHandler,
 		Publish:       publishHandler,

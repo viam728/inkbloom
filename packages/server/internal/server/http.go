@@ -52,6 +52,9 @@ type Handlers struct {
 	// History serves the E1 chapter version history endpoints (business plan
 	// v3, plan A05). Optional.
 	History *handler.HistoryHandler
+	// NovelVersion serves the Q3 whole-novel milestone snapshots (Agent
+	// safety work Q3). Optional.
+	NovelVersion *handler.NovelVersionHandler
 	// Events ingests product-analytics batches (plan A40). Mounted on the
 	// anonymous group so unauthenticated readers are measurable too. Optional.
 	Events *handler.EventHandler
@@ -432,6 +435,16 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.POST("/chapters/:id/versions", h.History.CreateSnapshot)
 			api.POST("/chapters/:id/versions/:vid/restore", h.History.RestoreVersion)
 			api.GET("/chapters/:id/versions/:vid", h.History.GetVersion)
+		}
+
+		// Whole-novel milestone snapshots (Q3). The static `restore` segment
+		// is registered before the `:vid` wildcard per contract C5 —
+		// otherwise "/versions/restore" would match ":vid".
+		if h.NovelVersion != nil {
+			api.GET("/novels/:id/versions", h.NovelVersion.List)
+			api.POST("/novels/:id/versions", h.NovelVersion.Create)
+			api.POST("/novels/:id/versions/:vid/restore", h.NovelVersion.Restore)
+			api.GET("/novels/:id/versions/:vid", h.NovelVersion.Get)
 		}
 
 		// Volumes (nested under novel)

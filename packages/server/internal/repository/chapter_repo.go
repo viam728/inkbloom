@@ -22,6 +22,12 @@ type ChapterRepository interface {
 	GetByID(ctx context.Context, userID, id int64) (*model.Chapter, error)
 	ListByNovelID(ctx context.Context, userID, novelID int64) ([]model.Chapter, error)
 	Update(ctx context.Context, userID int64, chapter *model.Chapter) error
+	// UpsertWithID inserts a chapter under the explicit primary key it
+	// already carries, reviving a soft-deleted row that still holds that id.
+	// Needed by the Q3 whole-novel restore so a chapter deleted after the
+	// snapshot comes back with its original id — outline nodes reference
+	// chapters through chapter_id, so a fresh id would break the links.
+	UpsertWithID(ctx context.Context, userID int64, chapter *model.Chapter) error
 	Delete(ctx context.Context, userID, id int64) error
 	DeleteByNovelID(ctx context.Context, userID, novelID int64) error
 	GetMaxPosition(ctx context.Context, userID, novelID int64) (int, error)
@@ -77,6 +83,39 @@ func (r *chapterRepository) Update(ctx context.Context, userID int64, chapter *m
 		Model(chapter).
 		Where("user_id = ?", userID).
 		Save(chapter).Error
+}
+
+// UpsertWithID see the interface comment. Two-step by necessity: Delete only
+// sets deleted_at, so the row keeps occupying its primary key and a plain
+// INSERT would collide with it. Reviving the existing row is also the more
+// faithful restore — created_at and any other untouched column survive.
+func (r *chapterRepository) UpsertWithID(ctx context.Context, userID int64, chapter *model.Chapter) error {
+	chapter.UserID = userID
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Unscoped().
+			Model(&model.Chapter{}).
+			Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", chapter.ID, userID).
+			Updates(map[string]interface{}{
+				"novel_id":     chapter.NovelID,
+				"volume_id":    chapter.VolumeID,
+				"title":        chapter.Title,
+				"content":      chapter.Content,
+				"content_json": chapter.ContentJSON,
+				"summary":      chapter.Summary,
+				"status":       chapter.Status,
+				"word_count":   chapter.WordCount,
+				"position":     chapter.Position,
+				"deleted_at":   gorm.Expr("NULL"),
+				"updated_at":   time.Now(),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected > 0 {
+			return nil // revived the soft-deleted row
+		}
+		return tx.Create(chapter).Error
+	})
 }
 
 func (r *chapterRepository) Delete(ctx context.Context, userID, id int64) error {

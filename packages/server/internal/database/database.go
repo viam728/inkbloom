@@ -28,6 +28,9 @@ func automigrateModels() []interface{} {
 		// Agent 写前自动快照 — 大纲版本 (plan §七.3.1). AutoMigrate-only so it
 		// is created for both cloud PG and local SQLite (contract C1).
 		&model.OutlineVersion{},
+		// Q3 整本里程碑快照 (Agent safety work Q3): whole-novel bundles with
+		// one-click restore. AutoMigrate-only (contract C1).
+		&model.NovelVersion{},
 		&model.Setting{},
 		&model.Character{},
 		&model.Task{},
