@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock } from 'lucide-react';
+import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import {
   listMyPublishedWorks,
   publishWork,
   publishChapter,
 } from '@/services/reader-client';
+import { uploadImage } from '@/services/image-client';
 import type { PublishedWork } from '@/types/published';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
@@ -40,6 +41,8 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   const [title, setTitle] = useState('');
   const [synopsis, setSynopsis] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'unlisted' | 'private'>('public');
+  const [coverUrl, setCoverUrl] = useState('');
+  const [coverUploading, setCoverUploading] = useState(false);
 
   // 章节选择
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -86,6 +89,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
         title: title.trim(),
         synopsis: synopsis.trim(),
         visibility,
+        cover_url: coverUrl || undefined,
       });
       setPublished(w);
       setReadUrl(`${window.location.origin}/read/${w.slug}`);
@@ -176,6 +180,41 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                   placeholder="一句话吸引读者…"
                   className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/8 text-neutral-200 placeholder:text-neutral-600 outline-none focus:border-brand-500/50 resize-none"
                 />
+              </div>
+              <div>
+                <label className="block text-xs text-neutral-400 mb-1.5">封面</label>
+                <div className="flex items-center gap-2">
+                  {coverUrl ? (
+                    <img src={coverUrl} alt="封面" className="w-16 h-20 object-cover rounded-lg border border-white/10" />
+                  ) : (
+                    <div className="w-16 h-20 flex items-center justify-center rounded-lg bg-white/4 border border-dashed border-white/10 text-neutral-600">
+                      <ImagePlus size={16} />
+                    </div>
+                  )}
+                  <label className="cursor-pointer px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/8 text-xs text-neutral-300 hover:bg-white/10 transition-colors">
+                    {coverUploading ? <Loader2 size={12} className="inline mr-1 animate-spin" /> : <ImagePlus size={12} className="inline mr-1" />}
+                    {coverUploading ? '上传中…' : '上传封面'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!f || !currentNovel) return;
+                        setCoverUploading(true);
+                        try {
+                          const img = await uploadImage(f, { scope: 'novel', novelId: currentNovel.id });
+                          setCoverUrl(img.url);
+                        } catch (err) {
+                          toast.show(err instanceof Error ? err.message : '封面上传失败', 'error');
+                        } finally {
+                          setCoverUploading(false);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
               <div>
                 <label className="block text-xs text-neutral-400 mb-2">可见性</label>
