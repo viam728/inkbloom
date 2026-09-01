@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/inkbloom/server/internal/dto"
+	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/pkg/storage"
 )
 
@@ -171,8 +172,8 @@ func (h *PortraitHandler) uploadPortrait(c *gin.Context, dir, urlPrefix string) 
 		Code:    200,
 		Message: "ok",
 		Data: gin.H{
-			"url":       urlPrefix + "/" + name,
-			"thumb_url": urlPrefix + "/thumbs/" + name,
+			"url":       signedurl.SignURL(GetUserID(c), urlPrefix+"/"+name),
+			"thumb_url": signedurl.SignURL(GetUserID(c), urlPrefix+"/thumbs/"+name),
 			"width":     bounds.Dx(),
 			"height":    bounds.Dy(),
 			"size":      info.Size(),

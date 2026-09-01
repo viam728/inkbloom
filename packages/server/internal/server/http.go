@@ -11,6 +11,7 @@ import (
 	"github.com/inkbloom/server/internal/handler"
 	"github.com/inkbloom/server/internal/middleware"
 	"github.com/inkbloom/server/internal/pkg/authtoken"
+	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
@@ -133,6 +134,14 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 	assetRoot := http.Dir(fs.NovelAssetDir(0))
 	serveAssetFile := func(c *gin.Context) {
 		rel := c.Param("filepath")
+		// C11 (asset auth): a request may hold either a valid signed URL
+		// (uid/sig/exp query, for <img> tags that cannot send a header) or a
+		// valid Bearer access token (for API clients). Anything else is denied
+		// so private media/memo/draft assets are no longer world-readable.
+		if !assetRequestAllowed(c, h.Tokens, rel) {
+			c.String(http.StatusForbidden, "403 forbidden")
+			return
+		}
 		f, err := assetRoot.Open(strings.TrimPrefix(rel, "/"))
 		if err != nil {
 			c.String(http.StatusNotFound, "404 not found")
@@ -348,6 +357,17 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 	// Exempts /auth, /subscription, /payment prefixes internally.
 	api.Use(middleware.RequireWritable(h.Writable))
 	{
+		// Asset signing (C11): returns a signed URL for a stored asset path so
+		// the frontend can render <img> tags without an Authorization header.
+		api.GET("/assets/sign", func(c *gin.Context) {
+			path := c.Query("path")
+			if !strings.HasPrefix(path, "/assets/files/") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "path must start with /assets/files/"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"url": signedurl.SignURL(handler.GetUserID(c), path)})
+		})
+
 		// Subscription & payment (M3 billing, task #39)
 		if h.Subscription != nil {
 			api.GET("/subscription", h.Subscription.Get)
@@ -634,4 +654,24 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return s.server.Shutdown(ctx)
+}
+
+// assetRequestAllowed reports whether an asset request is authorized for
+// filepath (the /assets/files wildcard value, with its leading slash).
+// It accepts a valid signed URL (uid/sig/exp) or a valid Bearer access token,
+// so private media/memo/draft assets are no longer world-readable (C11).
+func assetRequestAllowed(c *gin.Context, tokens *authtoken.Manager, filepath string) bool {
+	uid, sig, exp := signedurl.ParseQuery(c.Request.URL.Query())
+	if sig != "" {
+		return signedurl.Verify(uid, "/assets/files"+filepath, sig, exp)
+	}
+	if tokens == nil {
+		return false
+	}
+	auth := c.GetHeader("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return false
+	}
+	_, err := tokens.Parse(strings.TrimPrefix(auth, "Bearer "))
+	return err == nil
 }

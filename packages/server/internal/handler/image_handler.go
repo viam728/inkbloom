@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/service"
 )
 
@@ -117,8 +118,8 @@ func (h *ImageHandler) Upload(c *gin.Context) {
 		Message: "ok",
 		Data: dto.ImageUploadResult{
 			ID:           asset.ID,
-			URL:          asset.FilePath,
-			ThumbURL:     asset.ThumbnailPath,
+			URL:          signedurl.SignURL(GetUserID(c), asset.FilePath),
+			ThumbURL:     signedurl.SignURL(GetUserID(c), asset.ThumbnailPath),
 			ContentHash:  asset.ContentHash,
 			DisplayName:  asset.DisplayName,
 			Width:        int(asset.Width),

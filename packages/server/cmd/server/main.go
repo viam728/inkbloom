@@ -22,6 +22,7 @@ import (
 	"github.com/inkbloom/server/internal/pkg/kvstore"
 	"github.com/inkbloom/server/internal/pkg/payment"
 	"github.com/inkbloom/server/internal/pkg/ratelimit"
+	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/pkg/sms"
 	"github.com/inkbloom/server/internal/pkg/storage"
 	"github.com/inkbloom/server/internal/repository"
@@ -144,6 +145,9 @@ func main() {
 	// Initialize account system (JWT manager, SMS provider, auth service)
 	ensureJWTSecret(cfg, sugar)
 	tokenMgr := authtoken.NewManager(cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
+	// Signed asset URLs share the JWT secret so the static /assets/files route
+	// can authenticate <img> requests without an Authorization header.
+	signedurl.SetSecret(cfg.JWT.Secret)
 	smsProvider := sms.NewDevProvider(logger)
 	userRepo := repository.NewUserRepository(db)
 	userSessionRepo := repository.NewUserSessionRepository(db)
