@@ -95,12 +95,13 @@ func (s *AgentService) toolSchema() []AgentTool {
 			},
 			"required": []string{"novel_id", "title"},
 		}),
-		ft("write_chapter", "为指定章节撰写正文并保存。调用前章节需已存在（先 create_chapter）。", map[string]any{
+		ft("write_chapter", "为指定章节撰写正文并保存。调用前章节需已存在（先 create_chapter）。mode 可选：replace（默认，整章重写）/ append（续写，追加到已有正文之后）/ merge（扩写，基于已有正文重写一版更完整的）。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"novel_id":    map[string]any{"type": "integer", "description": "小说 ID"},
 				"chapter_id":  map[string]any{"type": "integer", "description": "章节 ID"},
 				"instruction": map[string]any{"type": "string", "description": "本章要写什么（情节要求）"},
+				"mode":        map[string]any{"type": "string", "enum": []string{"replace", "append", "merge"}, "description": "写入模式：replace 整章重写（默认）/ append 续写追加 / merge 扩写重写"},
 			},
 			"required": []string{"novel_id", "chapter_id"},
 		}),
@@ -337,9 +338,9 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 		if lerr != nil {
 			s.logger.Warn("agent create_chapter dedupe lookup failed", zap.Error(lerr))
 		} else {
-			key := outlineTitleKey(title)
+			key := chapterTitleKey(title)
 			for _, e := range existingList {
-				if outlineTitleKey(e.Title) == key {
+				if chapterTitleKey(e.Title) == key {
 					return asJSON(map[string]any{
 						"chapter_id": e.ID,
 						"title":      e.Title,
@@ -362,10 +363,11 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 		nid := resolveNovelID()
 		cid, _ := args["chapter_id"].(float64)
 		instr, _ := args["instruction"].(string)
+		mode, _ := args["mode"].(string)
 		if nid <= 0 {
 			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
 		}
-		return s.writeChapter(ctx, userID, nid, int64(cid), instr)
+		return s.writeChapter(ctx, userID, nid, int64(cid), instr, mode)
 
 	case "save_memory":
 		nid := resolveNovelID()
@@ -450,14 +452,51 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 }
 
 // writeChapter generates chapter body via the chapter agent scene and saves it.
-func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapterID int64, instruction string) string {
+// mode selects replace (default, whole-chapter rewrite), append (continue and
+// append after existing text) or merge (expand/rewrite a fuller version on top
+// of the existing text).
+func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapterID int64, instruction, mode string) string {
+	// B4 guardrail: verify the chapter exists BEFORE spending an LLM call, and
+	// reuse the fetched content for append/merge below. A wrong chapter_id now
+	// fails fast instead of burning a generation and only then erroring.
+	existing, gerr := s.chapterSvc.GetChapter(ctx, userID, chapterID)
+	if gerr != nil {
+		if errors.Is(gerr, ErrNotFound) {
+			return fmt.Sprintf(`{"error":"章节 ID %d 不存在，请先用 list_chapters 查询并传入正确的 chapter_id，不要新建章节"}`, chapterID)
+		}
+		return `{"error":"查询章节失败"}`
+	}
+
 	// Guard (plan §七.3.1 "写前自动快照"): capture current content before the
 	// Agent overwrites it, so the pre-write text is always recoverable.
 	// Best-effort — failures are swallowed inside SnapshotForAgent.
 	s.chapterSvc.SnapshotForAgent(ctx, userID, chapterID)
-	if instruction == "" {
-		instruction = "请完整撰写本章正文。"
+
+	// B3 write mode: append/merge carry the existing text into the prompt so the
+	// model continues/expands instead of rewriting from scratch, and append
+	// concatenates the result onto the prior text rather than replacing it.
+	existingText := existing.Content
+	switch mode {
+	case "append":
+		if instruction == "" {
+			instruction = "请接着本章已有正文续写接下来的内容。"
+		}
+		if strings.TrimSpace(existingText) != "" {
+			instruction += "\n\n【续写要求】以下是本章已有正文，请在结尾之后接着续写，不要重复已有内容：\n" + existingText
+		}
+	case "merge":
+		if instruction == "" {
+			instruction = "请在本章已有正文基础上扩写，保留情节与设定，输出一版更完整的正文。"
+		}
+		if strings.TrimSpace(existingText) != "" {
+			instruction += "\n\n【扩写要求】以下是本章已有正文，请在此基础上扩写/润色成一版更完整的内容，保持情节一致：\n" + existingText
+		}
+	default: // replace
+		if instruction == "" {
+			instruction = "请完整撰写本章正文。"
+		}
 	}
+
 	payload, err := s.agentContext.BuildAgentContext(ctx, userID, novelID, "chapter", nil, nil, instruction)
 	if err != nil {
 		return `{"error":"构建上下文失败"}`
@@ -476,15 +515,10 @@ func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapte
 		return `{"error":"生成内容为空"}`
 	}
 	content := out.Content
-	// R2 guardrail (§七.3.5b): detect a missing chapter and return a clear,
-	// actionable error instead of the generic "保存章节失败", so the Agent is
-	// steered toward resolving the real chapter_id rather than creating junk.
-	if _, gerr := s.chapterSvc.GetChapter(ctx, userID, chapterID); gerr != nil {
-		if errors.Is(gerr, ErrNotFound) {
-			return fmt.Sprintf(`{"error":"章节 ID %d 不存在，请先用 list_chapters 查询并传入正确的 chapter_id，不要新建章节"}`, chapterID)
-		}
-		// Any other lookup error falls through to the update attempt, which
-		// surfaces its own error message.
+	// append concatenates the continuation onto the existing text; replace/merge
+	// store the (full) generated content verbatim.
+	if mode == "append" && strings.TrimSpace(existingText) != "" {
+		content = existingText + "\n\n" + content
 	}
 	if _, err := s.chapterSvc.UpdateChapter(ctx, userID, chapterID, &dto.UpdateChapterRequest{
 		Content: &content,

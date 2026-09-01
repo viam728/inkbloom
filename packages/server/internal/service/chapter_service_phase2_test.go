@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/inkbloom/server/internal/config"
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/pkg/kvstore"
 	"github.com/inkbloom/server/internal/repository"
+	"github.com/inkbloom/server/internal/service/cache"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -159,6 +162,39 @@ func TestAgentCreateChapterDedupe(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("expected 1 chapter after dedupe, got %d", len(list))
+	}
+}
+
+// TestAgentWriteChapterMissingChapterFailsFast is the regression for B4: a
+// write_chapter against a non-existent chapter_id must fail BEFORE any LLM
+// generation. With the test AI URL unreachable, reaching the LLM would produce
+// "生成失败"; the "不存在" message proves the existence check now runs first.
+func TestAgentWriteChapterMissingChapterFailsFast(t *testing.T) {
+	const userID, novelID = int64(1), int64(55)
+	dsn := "file:" + filepath.Join(t.TempDir(), "chapter.db") + "?cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if err := db.AutoMigrate(&model.Novel{}, &model.Chapter{}, &model.ChapterVersion{}); err != nil {
+		t.Fatalf("auto-migrate: %v", err)
+	}
+	seedNovel(t, db, userID, novelID)
+	cs := NewChapterService(repository.NewChapterRepository(db), repository.NewNovelRepository(db),
+		cache.NewCacheManager(kvstore.NewMemStore(), zap.NewNop()), nil, config.VersionHistoryConfig{})
+	agent := NewAgentService(nil, cs, nil, nil, "http://127.0.0.1:1", zap.NewNop())
+
+	res := agent.executeTool(context.Background(), userID, novelID, agentToolCall{
+		Name:      "write_chapter",
+		Arguments: `{"novel_id":55,"chapter_id":999999,"instruction":"写点什么"}`,
+	})
+	if !strings.Contains(res, "不存在") {
+		t.Fatalf("expected '不存在' fast-fail before LLM, got %s", res)
 	}
 }
 

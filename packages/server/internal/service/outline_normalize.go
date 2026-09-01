@@ -8,12 +8,21 @@ import (
 	"github.com/inkbloom/server/internal/pkg/idgen"
 )
 
-// outlineOrdinalRe matches a leading Chinese/Arabic ordinal prefix such as
-// "第一幕", "第48章", "第三卷" so that "第一幕《神陨之后》" and "神陨之后"
-// normalize to the same key (R1 outline dedup). It must anchor at ^ and run
-// immediately after 第 with no whitespace, so "第 1 幕" (with a space) is left
-// untouched and still matches its own kind.
-var outlineOrdinalRe = regexp.MustCompile(`^第[一二三四五六七八九十百千零0-9]+[幕章节卷部篇回]`)
+// outlineOrdinalRe matches a leading Chinese/Arabic ordinal prefix at the
+// MACRO level only — "第一幕", "第三卷", "第二部", "第一篇" — so that
+// "第一幕《神陨之后》" and "神陨之后" normalize to the same key (R1 outline
+// dedup). Chapter-level ordinals ("第N章/节/回") are deliberately NOT stripped
+// here: outline nodes such as "第一章 觉醒" and "第二章 觉醒" are distinct
+// chapters and must not collapse to the same key (B5). Chapter resolution uses
+// chapterOrdinalRe instead. The regex anchors at ^ and runs immediately after 第
+// with no whitespace, so "第 1 幕" (with a space) is left untouched.
+var outlineOrdinalRe = regexp.MustCompile(`^第[一二三四五六七八九十百千零0-9]+[幕卷部篇]`)
+
+// chapterOrdinalRe matches a leading ordinal at ANY granularity — 幕/卷/部/篇 as
+// well as 章/节/回 — for resolving a user's "第N章/某章" phrasing to a real
+// chapter title (get_chapter_by_title). Chapter titles legitimately repeat
+// across ordinals, so the chapter-lookup key is broader than outlineOrdinalRe.
+var chapterOrdinalRe = regexp.MustCompile(`^第[一二三四五六七八九十百千零0-9]+[幕章节卷部篇回]`)
 
 // outlineTitleStrip removes book-title / quoting marks so titles wrapped in
 // 《》「」（）""''() etc. compare equal to their bare form.
@@ -206,16 +215,28 @@ func mergeOutlineAct(existing []map[string]any, incoming map[string]any) bool {
 }
 
 // outlineTitleKey collapses whitespace and strips wrapping/quote marks
-// (《》「」（） etc.), then a leading ordinal prefix ("第一幕" / "第48章" /
-// "第三卷"), so phrasings like "第一幕《神陨之后》" and "神陨之后" dedupe to the
-// SAME key (R1 outline dedup). The enhanced normalization is also safe for node
-// dedup, where titles rarely carry ordinals and bracket stripping is harmless.
+// (《》「」（） etc.), then a MACRO ordinal prefix ("第一幕" / "第三卷" / "第二部" /
+// "第一篇"), so phrasings like "第一幕《神陨之后》" and "神陨之后" dedupe to the
+// SAME key (R1 outline dedup). Chapter-level ordinals (第N章/节/回) are kept:
+// "第一章 觉醒" and "第二章 觉醒" produce distinct keys so distinct chapters are
+// never folded together (B5). Chapter-lookup normalization is chapterTitleKey.
 //
 // The ordinal is stripped ONLY when a non-empty remainder survives: a bare
-// ordinal such as "第二幕" or a single-node "第一章" keeps a distinct key
-// instead of collapsing to "" (which would otherwise merge with every other
-// bare-ordinal act/node and silently drop legitimate content).
+// ordinal such as "第二幕" keeps a distinct key instead of collapsing to "".
 func outlineTitleKey(v any) string {
+	return titleKey(v, outlineOrdinalRe)
+}
+
+// chapterTitleKey is outlineTitleKey but for chapter resolution: it strips a
+// leading ordinal at ANY granularity (幕/卷/部/篇 and 章/节/回) so a user's
+// "第48章《余生长歌》" resolves to a chapter titled "余生长歌". Used only by
+// get_chapter_by_title — never for outline/act dedup, where chapter ordinals
+// must be preserved.
+func chapterTitleKey(v any) string {
+	return titleKey(v, chapterOrdinalRe)
+}
+
+func titleKey(v any, ordinal *regexp.Regexp) string {
 	s, _ := v.(string)
 	s = strings.Join(strings.Fields(s), " ")
 	s = outlineTitleStrip.Replace(s)
@@ -223,7 +244,7 @@ func outlineTitleKey(v any) string {
 	if trimmed == "" {
 		return ""
 	}
-	ord := outlineOrdinalRe.ReplaceAllString(trimmed, "")
+	ord := ordinal.ReplaceAllString(trimmed, "")
 	ord = strings.TrimSpace(ord)
 	if ord == "" {
 		return trimmed

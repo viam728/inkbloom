@@ -310,8 +310,8 @@ func (s *ChapterService) ListChaptersByNovel(ctx context.Context, userID, novelI
 
 // GetChapterByTitle resolves a chapter by a (possibly ordinal-wrapped) title or
 // keyword within the user's scope, returning the BEST match. It normalizes both
-// the query and each chapter title with outlineTitleKey (which already strips a
-// leading "第N章" prefix and 《》 brackets), so "第48章《余生长歌》" resolves to a
+// the query and each chapter title with chapterTitleKey (which strips a leading
+// "第N章/第N幕" prefix and 《》 brackets), so "第48章《余生长歌》" resolves to a
 // chapter whose raw title is "余生长歌" (or contains it). Match priority:
 //  1. exact normalized title match wins;
 //  2. else a normalized substring/containment match wins;
@@ -323,7 +323,7 @@ func (s *ChapterService) GetChapterByTitle(ctx context.Context, userID, novelID 
 	if err != nil {
 		return nil, err
 	}
-	query := outlineTitleKey(title)
+	query := chapterTitleKey(title)
 	if query == "" {
 		return nil, nil
 	}
@@ -331,7 +331,7 @@ func (s *ChapterService) GetChapterByTitle(ctx context.Context, userID, novelID 
 	var partial *dto.ChapterResponse
 	for i := range chapters {
 		ch := toChapterResponse(&chapters[i])
-		norm := outlineTitleKey(ch.Title)
+		norm := chapterTitleKey(ch.Title)
 		if norm == "" {
 			continue
 		}

@@ -225,3 +225,50 @@ func TestActTitlesHelper(t *testing.T) {
 		t.Errorf("outlineActTitles = %v", got)
 	}
 }
+
+// TestTitleKeys_OutlineVsChapter pins the B5 split: outline dedup strips only
+// macro ordinals (幕/卷/部/篇) so distinct chapters "第一章 觉醒" and "第二章 觉醒"
+// never collapse; chapter resolution strips every ordinal so "第48章《余生长歌》"
+// still resolves to "余生长歌".
+func TestTitleKeys_OutlineVsChapter(t *testing.T) {
+	// Macro ordinals still normalize for outline dedup (R1).
+	if outlineTitleKey("第一幕《神陨之后》") != outlineTitleKey("神陨之后") {
+		t.Errorf("macro ordinal should still normalize: %q vs %q",
+			outlineTitleKey("第一幕《神陨之后》"), outlineTitleKey("神陨之后"))
+	}
+	// Chapter ordinals must NOT collapse (B5: distinct chapters).
+	if outlineTitleKey("第一章 觉醒") == outlineTitleKey("第二章 觉醒") {
+		t.Errorf("distinct chapter ordinals must not collapse: %q", outlineTitleKey("第一章 觉醒"))
+	}
+	// A bare chapter ordinal keeps a distinct, non-empty key.
+	if outlineTitleKey("第一章") == "" {
+		t.Error("bare chapter ordinal should keep a non-empty key")
+	}
+	// Chapter resolution strips every ordinal.
+	if chapterTitleKey("第48章《余生长歌》") != chapterTitleKey("余生长歌") {
+		t.Errorf("chapterTitleKey should strip 章 ordinal: %q vs %q",
+			chapterTitleKey("第48章《余生长歌》"), chapterTitleKey("余生长歌"))
+	}
+	// chapterTitleKey is broader: it also strips 幕/卷 ordinals.
+	if chapterTitleKey("第三幕《神陨之后》") != "神陨之后" {
+		t.Errorf("chapterTitleKey should strip 幕 ordinal, got %q", chapterTitleKey("第三幕《神陨之后》"))
+	}
+}
+
+// TestMergeOutlineAct_DoesNotMergeDistinctChapters asserts B5 at the merge
+// layer: acts titled "第一章 觉醒" and "第二章 觉醒" are distinct chapters and
+// must both survive instead of folding into one.
+func TestMergeOutlineAct_DoesNotMergeDistinctChapters(t *testing.T) {
+	existing := []map[string]any{}
+	for _, act := range []map[string]any{
+		{"title": "第一章 觉醒", "nodes": []map[string]any{{"title": "n1"}}},
+		{"title": "第二章 觉醒", "nodes": []map[string]any{{"title": "n2"}}},
+	} {
+		if !mergeOutlineAct(existing, act) {
+			existing = append(existing, act)
+		}
+	}
+	if len(existing) != 2 {
+		t.Fatalf("distinct chapter ordinals must not merge, got %d acts", len(existing))
+	}
+}
