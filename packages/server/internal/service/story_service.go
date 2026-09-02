@@ -119,7 +119,8 @@ func (s *StoryService) CreateJob(ctx context.Context, userID int64, req *dto.Cre
 		Logline:      req.Logline,
 		Stage:        model.StageIdea,
 		Status:       model.StoryJobPending,
-		TotalSteps:   5,
+		// 阶段总数：idea/outline/plan_chapters/draft_chapter/verify/finalize/done 共 7 个
+		TotalSteps:   7,
 		StagePayload: []byte("{}"),
 		Config:       defaultJobConfig(req.Config),
 	}

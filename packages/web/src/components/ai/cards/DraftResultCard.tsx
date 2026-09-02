@@ -49,6 +49,9 @@ const DraftResultCard: React.FC<DraftResultCardProps> = ({ messageId, card }) =>
   const terminal = card.status === 'abandoned';
   const actionsDisabled = busy !== null || terminal;
 
+  /** verify 阶段判定（供 applyJob 与渲染共用） */
+  const isVerifyJob = (job: StoryJob) => job.stage === 'verify';
+
   /** 用 generate/adopt 返回的 job 快照原地更新卡片（保留采纳记录等本地态） */
   const applyJob = (job: StoryJob) => {
     updateCardMessage(messageId, (c) => {
@@ -68,7 +71,6 @@ const DraftResultCard: React.FC<DraftResultCardProps> = ({ messageId, card }) =>
     });
   };
 
-  const isVerifyJob = (job: StoryJob) => job.stage === 'verify';
 
   /** 生成下一阶段 / 重新生成当前阶段（同一端点） */
   const handleGenerate = async (action: 'next' | 'regen' | 'retry') => {
@@ -278,7 +280,7 @@ const DraftResultCard: React.FC<DraftResultCardProps> = ({ messageId, card }) =>
               </button>
             )}
 
-            {card.status !== 'failed' && (
+            {!lastStage && card.status !== 'failed' && (
               <button
                 onClick={() => handleGenerate('regen')}
                 disabled={actionsDisabled}

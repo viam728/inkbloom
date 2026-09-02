@@ -40,6 +40,9 @@ const StoryWorkflowPanel: React.FC = () => {
   const [chapterCount, setChapterCount] = useState(10);
   const [wordsPerChapter, setWordsPerChapter] = useState(2000);
   const [style, setStyle] = useState('');
+  // 创作意图栏（C9）：定受众/意图，决定叙事取向与语感
+  const [audience, setAudience] = useState('');
+  const [intent, setIntent] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
   // 滑动选择器：拖动中的节点索引（预览高亮），松手时提交跳转
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
@@ -64,7 +67,7 @@ const StoryWorkflowPanel: React.FC = () => {
         novel_id: currentNovel.id,
         title: title.trim(),
         logline: logline.trim(),
-        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle },
+        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
       });
       setTitle('');
       setLogline('');
@@ -220,6 +223,18 @@ const StoryWorkflowPanel: React.FC = () => {
                 value={style}
                 onChange={(e) => setStyle(e.target.value)}
                 placeholder="文风（可选，如：冷峻武侠 / 轻松甜宠）"
+                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
+              />
+              <input
+                value={audience}
+                onChange={(e) => setAudience(e.target.value)}
+                placeholder="目标受众（可选，如：15-25 岁网文读者 / 都市女性）"
+                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
+              />
+              <input
+                value={intent}
+                onChange={(e) => setIntent(e.target.value)}
+                placeholder="创作意图（可选，如：爽文爽感优先 / 情感共鸣 / 悬疑反转）"
                 className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
               />
               <label className="flex items-center gap-2 mt-2 cursor-pointer">

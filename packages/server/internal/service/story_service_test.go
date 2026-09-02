@@ -69,7 +69,7 @@ func seedStoryJob(t *testing.T, db *gorm.DB, userID, novelID int64) *model.Story
 		Logline:      "少年负剑出山，搅动江湖风云",
 		Stage:        model.StageIdea,
 		Status:       model.StoryJobPending,
-		TotalSteps:   5,
+		TotalSteps:   7,
 		StagePayload: []byte("{}"),
 		Config:       []byte("{}"),
 	}
