@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { BookOpen, Plus, PenLine, Maximize2 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
+import { useUIStore } from '@/stores/ui-store';
 import type { Novel } from '@/types';
 import Modal from '@/components/common/Modal';
 import { useToast } from '@/components/common/Toast';
 import LibraryExpandedView from './LibraryExpandedView';
 
 const NovelList: React.FC = () => {
-  const { novels, currentNovel, loading, fetchNovels, createNovel, selectNovel } =
+  const { novels, currentNovel, loading, fetchNovels, createNovel, selectNovel, deselectNovel } =
     useNovelStore();
   const { showToast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
@@ -34,6 +35,18 @@ const NovelList: React.FC = () => {
     } finally {
       setCreating(false);
     }
+  };
+
+  // 新建小说页 → 调取全本创作窗口：清空当前选定，进入「需填书名」模式
+  const openStoryWorkflow = () => {
+    const t = newTitle.trim();
+    if (!t || creating) return;
+    setShowCreate(false);
+    setNewTitle('');
+    deselectNovel();
+    const ui = useUIStore.getState();
+    if (ui.rightCollapsed) ui.setRightWidth(ui.rightWidth || 320);
+    window.dispatchEvent(new Event('inkbloom:open-story-workflow'));
   };
 
   return (
@@ -152,6 +165,13 @@ const NovelList: React.FC = () => {
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:pointer-events-none text-white transition-all shadow-lg shadow-indigo-600/20"
             >
               {creating ? '创建中…' : '创建'}
+            </button>
+            <button
+              onClick={openStoryWorkflow}
+              disabled={!newTitle.trim() || creating}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-40 disabled:pointer-events-none text-white transition-all shadow-lg shadow-violet-600/20"
+            >
+              创建并开启全本创作
             </button>
           </div>
         </div>

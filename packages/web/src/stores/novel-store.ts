@@ -30,6 +30,8 @@ interface NovelStore {
   updateNovel: (id: number, data: UpdateNovelRequest) => Promise<void>;
   deleteNovel: (id: number) => Promise<void>;
   selectNovel: (novel: Novel) => Promise<void>;
+  /** 清空当前选定作品（新建小说入口进入「需填书名」的全本创作模式时使用） */
+  deselectNovel: () => void;
   fetchChapters: (novelId: number) => Promise<void>;
   createChapter: (data: CreateChapterRequest, insertAt?: number) => Promise<Chapter>;
   renameChapter: (id: number, title: string) => Promise<void>;
@@ -128,6 +130,15 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       // localStorage 不可用（隐私模式等）时静默忽略
     }
     await get().fetchChapters(novel.id);
+  },
+
+  deselectNovel: () => {
+    set({ currentNovel: null, currentChapter: null });
+    try {
+      localStorage.removeItem('inkbloom:currentNovelId');
+    } catch {
+      // localStorage 不可用（隐私模式等）时静默忽略
+    }
   },
 
   fetchChapters: async (novelId) => {

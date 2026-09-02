@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, BookOpen } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
+import { suggestStoryTitle } from '@/services/ai-actions-client';
 import { toast } from '@/components/common/Toast';
 
 /**
@@ -15,6 +16,8 @@ import { toast } from '@/components/common/Toast';
  */
 const StoryWorkflowPanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
+  const createNovel = useNovelStore((s) => s.createNovel);
+  const selectNovel = useNovelStore((s) => s.selectNovel);
   const {
     jobs,
     activeJob,
@@ -44,6 +47,9 @@ const StoryWorkflowPanel: React.FC = () => {
   const [audience, setAudience] = useState('');
   const [intent, setIntent] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
+  // AI 填写书名：候选列表 + 生成中态
+  const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
+  const [aiFilling, setAiFilling] = useState(false);
   // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
@@ -56,26 +62,75 @@ const StoryWorkflowPanel: React.FC = () => {
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreate = async () => {
-    if (!currentNovel?.id) {
-      toast.show('请先打开一个作品', 'error');
+    const log = logline.trim();
+    if (!log) {
+      toast.show('请填写一句话创意', 'error');
       return;
     }
-    if (!title.trim() || !logline.trim()) {
-      toast.show('请填写作品名与一句话创意', 'error');
+    // 已选定作品：书名直接取本作，无需编辑
+    if (currentNovel?.id) {
+      try {
+        const job = await createJob({
+          novel_id: currentNovel.id,
+          title: currentNovel.title,
+          logline: log,
+          config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
+        });
+        setTitle('');
+        setLogline('');
+        setTitleSuggestions([]);
+        await openJob(job.id);
+      } catch (e) {
+        console.error('create job failed', e);
+        toast.show('创建失败，请重试', 'error');
+      }
+      return;
+    }
+    // 未选定作品（新建小说页入口）：书名需填写，提交时先建作品再开启全本创作
+    const t = title.trim();
+    if (!t) {
+      toast.show('请填写作品名，或点击「AI填写」自动起名', 'error');
       return;
     }
     try {
+      const novel = await createNovel({ title: t });
+      if (novel?.id) await selectNovel(novel);
       const job = await createJob({
-        novel_id: currentNovel.id,
-        title: title.trim(),
-        logline: logline.trim(),
+        novel_id: novel.id,
+        title: t,
+        logline: log,
         config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
       });
       setTitle('');
       setLogline('');
+      setTitleSuggestions([]);
       await openJob(job.id);
     } catch (e) {
-      console.error('create job failed', e);
+      console.error('create novel+job failed', e);
+      toast.show('创建失败，请重试', 'error');
+    }
+  };
+
+  // AI 填写书名：以一句话创意为种子，调用 AI 生成候选书名（DEV 降级为本地启发式）
+  const handleAIFill = async () => {
+    if (!logline.trim()) {
+      toast.show('请先填写一句话创意，AI 才能据此起名', 'error');
+      return;
+    }
+    setAiFilling(true);
+    try {
+      const titles = await suggestStoryTitle(logline.trim(), 5);
+      if (titles.length) {
+        setTitle(titles[0]);
+        setTitleSuggestions(titles.slice(0, 5));
+      } else {
+        toast.show('AI 未返回书名，可手动填写', 'error');
+      }
+    } catch (e) {
+      console.error('ai fill title failed', e);
+      toast.show('AI 起名失败，请稍后重试', 'error');
+    } finally {
+      setAiFilling(false);
     }
   };
 
@@ -188,12 +243,53 @@ const StoryWorkflowPanel: React.FC = () => {
           {/* 创建表单 */}
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
             <p className="text-xs text-neutral-400 mb-2">输入一句话创意，AI 自动跑完全本创作流水线</p>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="作品名（如：剑试天下）"
-              className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
-            />
+            {currentNovel ? (
+              // 已选定作品：书名直接取本作，无需编辑
+              <div className="flex items-center gap-2 mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg">
+                <BookOpen size={14} className="text-brand-300 shrink-0" />
+                <span className="text-neutral-400">作品：</span>
+                <span className="text-neutral-100 font-medium truncate">{currentNovel.title}</span>
+              </div>
+            ) : (
+              // 新建小说入口：书名需填写，支持 AI 自动起名
+              <div className="mb-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={title}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      setTitleSuggestions([]);
+                    }}
+                    placeholder="作品名（如：剑试天下）"
+                    className="flex-1 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAIFill}
+                    disabled={aiFilling}
+                    title="AI 根据创意自动起名"
+                    className="shrink-0 flex items-center gap-1 px-2.5 py-2 text-xs rounded-lg bg-violet-500/15 text-violet-200 border border-violet-500/30 hover:bg-violet-500/25 disabled:opacity-50 transition-colors"
+                  >
+                    {aiFilling ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    AI填写
+                  </button>
+                </div>
+                {titleSuggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {titleSuggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setTitle(s)}
+                        className="px-2 py-1 text-[11px] rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <textarea
               value={logline}
               onChange={(e) => setLogline(e.target.value)}
@@ -268,10 +364,13 @@ const StoryWorkflowPanel: React.FC = () => {
                 为「{currentNovel.title}」创建创作任务
               </button>
             ) : (
-              <div className="text-center py-3 px-2 rounded-lg bg-white/3 border border-dashed border-white/10">
-                <p className="text-xs text-neutral-400 mb-1">起稿需要先选定一部作品</p>
-                <p className="text-[11px] text-neutral-600">请在左侧「作品」列表中选择或新建一部作品，再回来起稿</p>
-              </div>
+              <button
+                onClick={handleCreate}
+                className="w-full py-2 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium transition-all"
+              >
+                <Wand2 size={14} className="inline mr-1.5" />
+                创建作品并开启全本创作
+              </button>
             )}
           </div>
 

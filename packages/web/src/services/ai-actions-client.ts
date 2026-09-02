@@ -212,3 +212,49 @@ function mockInspiration(category: InspirationCategory): Promise<string[]> {
   const shuffled = [...bank].sort(() => Math.random() - 0.5);
   return Promise.resolve(shuffled.slice(0, 3));
 }
+
+// ── AI 填写书名（全本创作窗口） ───────────────────────────────────────────
+// 预留端点 POST /ai/story-title（与 candidates / inspiration 同约定）：
+//   req:  { idea: string; count?: number }
+//   resp: { titles: string[] }
+// 后端未实现时，开发环境（import.meta.env.DEV）自动降级为本地启发式 mock，
+// 保证「AI填写」按钮在本地始终可演示；接入真实 LLM 后返回 AI 生成的书名。
+export async function suggestStoryTitle(idea: string, count = 5): Promise<string[]> {
+  try {
+    const data = (await apiClient.post('/ai/story-title', { idea, count })) as unknown as {
+      titles?: string[];
+    };
+    if (data?.titles?.length) return data.titles.slice(0, count);
+    throw new Error('empty titles');
+  } catch (e) {
+    if (!DEV_MOCK) throw e;
+    return mockStoryTitles(idea, count);
+  }
+}
+
+// 本地启发式书名：从创意中抽取中文关键词，套用常见网文命名模式生成候选。
+function mockStoryTitles(idea: string, count: number): string[] {
+  const clean = (idea || '').replace(/\s+/g, ' ').trim();
+  const keywords = (clean.match(/[一-龥]{2,4}/g) || []).slice(0, 3);
+  const base = keywords.length ? keywords : ['江湖', '少年', '长安'];
+  const patterns: ((k: string) => string)[] = [
+    (k) => `${k}录`,
+    (k) => `重生之${k}`,
+    (k) => `${k}之上`,
+    (k) => `我在${k}的那些年`,
+    (k) => `${k}纪元`,
+    (k) => `诡秘·${k}`,
+    (k) => `${k}风华`,
+    (k) => `万古${k}`,
+  ];
+  const out: string[] = [];
+  for (const p of patterns) {
+    for (const k of base) {
+      const t = p(k);
+      if (!out.includes(t)) out.push(t);
+      if (out.length >= count) break;
+    }
+    if (out.length >= count) break;
+  }
+  return out.slice(0, count);
+}
