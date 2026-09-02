@@ -198,3 +198,64 @@ def adapt_content_prompt(content: str, platform: str) -> tuple[str, str]:
         f"原文：\n{content}"
     )
     return system, user
+
+
+# ── 7. 作品概览 AI 生成（书名 / 简介 / 创意 / 文风 / 受众 / 意图） ──────────
+
+# 概览字段的中文标签与生成要求
+_STORY_OVERVIEW_FIELDS = {
+    "title": "书名：简洁有力、有记忆点，2-12 个字",
+    "description": "简介：2-4 句话概括故事内核与看点，80-200 字，有钩子",
+    "logline": "一句话创意：用一句话点出核心设定或冲突，20-50 字",
+    "style": "文风：2-8 个字概括语言风格（如：冷峻武侠 / 轻松甜宠 / 悬疑暗黑）",
+    "audience": "目标受众：描述核心读者画像，如：15-25 岁网文读者 / 都市女性",
+    "intent": "创作意图：说明作者想达成的叙事效果，如：爽文爽感优先 / 情感共鸣 / 悬疑反转",
+}
+
+
+def story_overview_prompt(
+    existing: dict,
+    fields: list[str],
+    variant: int,
+) -> str:
+    """Build the user prompt for story-overview generation.
+
+    ``existing`` carries the current overview (all known fields) so the AI
+    generates each requested field *consistent* with the whole picture (req 6:
+    single-field generation still sees the entire overview context). ``variant``
+    is a random integer injected to diversify outputs across calls (req 5:
+    randomness). The prompt explicitly asks for both 热门度 (popularity) and
+    创新性 (innovation).
+    """
+    want = [f for f in fields if f in _STORY_OVERVIEW_FIELDS] or list(_STORY_OVERVIEW_FIELDS.keys())
+    lines = "\n".join(f"- {_STORY_OVERVIEW_FIELDS[f]}" for f in want)
+
+    ctx_parts = []
+    for key, label in (
+        ("title", "现有书名"),
+        ("description", "现有简介"),
+        ("logline", "现有创意"),
+        ("style", "现有文风"),
+        ("audience", "现有受众"),
+        ("intent", "现有意图"),
+    ):
+        val = (existing or {}).get(key)
+        if val:
+            ctx_parts.append(f"{label}：{val}")
+    ctx = "\n".join(ctx_parts) if ctx_parts else "（暂无现有内容）"
+
+    return (
+        "你是一位精通网文与泛娱乐内容创作的策划。请基于「作品概览」的已有信息，"
+        "为指定字段生成高质量内容。\n\n"
+        f"已有概览信息：\n{ctx}\n\n"
+        "需要生成的字段（必须全部生成，缺一不可）：\n"
+        f"{lines}\n\n"
+        "硬性要求：\n"
+        "1. 输出一个 JSON 对象，键名严格为上述字段英文名（title/description/logline/style/audience/intent），"
+        "值为对应字符串；不要输出任何解释、前后缀或 markdown 代码块。\n"
+        "2. 各字段内容必须与「已有概览信息」保持世界观、基调、受众一致，互为补充而非矛盾。\n"
+        "3. 兼具【热门度】与【创新性】：既贴合当下同类爆款的吸睛规律（标题抓人、简介有钩子），"
+        "又要有独到的设定或角度，避免套用烂大街的模板。\n"
+        "4. 本次随机变体编号：" + str(variant) + "（请据此在合理范围内调整措辞与切入点，使每次生成都不一样）。\n"
+        "只输出 JSON 对象本身。"
+    )

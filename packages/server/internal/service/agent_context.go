@@ -13,6 +13,10 @@ import (
 // excerpts (titles included) embedded into the agent context.
 const precedingChapterBudget = 4000
 
+// descriptionContextBudget bounds the novel description (runes) embedded into
+// the agent context, defensively truncating legacy over-long data.
+const descriptionContextBudget = 800
+
 // ── Minimal input parsing shapes (aligned with the frontend contract) ────
 
 // agentOutlineNode is the minimal outline-node shape needed for context
@@ -60,6 +64,7 @@ type AgentGeneratePayload struct {
 // AgentContextData carries the assembled novel context.
 type AgentContextData struct {
 	NovelTitle        string                `json:"novel_title"`
+	NovelDescription  string                `json:"novel_description"`
 	OutlineActs       []AgentOutlineActOut  `json:"outline_acts"`
 	PrecedingChapters []AgentChapterExcerpt `json:"preceding_chapters"`
 	MemoryItems       []AgentMemoryItemOut  `json:"memory_items"`
@@ -164,6 +169,11 @@ func (s *AgentContextService) BuildAgentContext(
 		return nil, ErrNotFound
 	}
 
+	desc := ""
+	if novel.Description != nil {
+		desc = truncateRunes(*novel.Description, descriptionContextBudget)
+	}
+
 	acts := s.loadOutlineActs(ctx, userID, novelID)
 	items := s.loadMemoryItems(ctx, userID, novelID)
 
@@ -194,6 +204,7 @@ func (s *AgentContextService) BuildAgentContext(
 		Instruction: instruction,
 		Context: AgentContextData{
 			NovelTitle:        novel.Title,
+			NovelDescription:  desc,
 			OutlineActs:       buildOutlineActsOut(acts),
 			PrecedingChapters: buildPrecedingChapters(chapters, cutoffChapterID),
 			MemoryItems:       buildMemoryItemsOut(filterVisibleItems(items, doneNodes)),

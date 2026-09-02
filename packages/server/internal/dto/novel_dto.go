@@ -7,6 +7,9 @@ type CreateNovelRequest struct {
 	Title       string `json:"title" binding:"required,max=255"`
 	Genre       string `json:"genre,omitempty"`
 	Description string `json:"description,omitempty"`
+	Style       string `json:"style,omitempty"`
+	Audience    string `json:"audience,omitempty"`
+	Intent      string `json:"intent,omitempty"`
 	CoverImage  string `json:"cover_image,omitempty"`
 }
 
@@ -15,6 +18,9 @@ type UpdateNovelRequest struct {
 	Title       *string `json:"title,omitempty"`
 	Genre       *string `json:"genre,omitempty"`
 	Description *string `json:"description,omitempty"`
+	Style       *string `json:"style,omitempty"`
+	Audience    *string `json:"audience,omitempty"`
+	Intent      *string `json:"intent,omitempty"`
 	CoverImage  *string `json:"cover_image,omitempty"`
 	Status      *string `json:"status,omitempty"`
 }
@@ -25,6 +31,9 @@ type NovelResponse struct {
 	Title       string    `json:"title"`
 	Genre       string    `json:"genre"`
 	Description string    `json:"description"`
+	Style       string    `json:"style"`
+	Audience    string    `json:"audience"`
+	Intent      string    `json:"intent"`
 	CoverImage  string    `json:"cover_image"`
 	WordCount   int       `json:"word_count"`
 	Status      string    `json:"status"`

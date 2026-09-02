@@ -5,8 +5,79 @@ import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { useUIStore } from '@/stores/ui-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
-import { suggestStoryTitle, suggestStoryDescription, suggestStoryLogline } from '@/services/ai-actions-client';
+import { generateStoryOverview } from '@/services/ai-actions-client';
+import type { StoryOverviewContext, StoryOverviewField } from '@/services/ai-actions-client';
+import type { CreateNovelRequest, UpdateNovelRequest } from '@/types';
 import { toast } from '@/components/common/Toast';
+
+/** 概览字段中文名（覆盖警告与提示文案用） */
+const OVERVIEW_FIELD_LABELS: Record<StoryOverviewField, string> = {
+  title: '书名',
+  description: '简介',
+  logline: '创意',
+  style: '文风',
+  audience: '受众',
+  intent: '意图',
+};
+
+/** 概览字段行：标签 + 受控输入（编辑态可写）+ AIGC 生成按钮 */
+const OverviewFieldRow: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  editable: boolean;
+  aiEnabled: boolean;
+  filling: boolean;
+  busy: boolean;
+  onAIFill: () => void;
+  textarea?: boolean;
+  rows?: number;
+  placeholder?: string;
+}> = ({ label, value, onChange, editable, aiEnabled, filling, busy, onAIFill, textarea, rows, placeholder }) => {
+  const inputCls = `w-full text-sm rounded-lg transition-colors ${
+    editable
+      ? 'px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500'
+      : 'px-2.5 py-2 bg-white/[0.02] border border-white/6 text-neutral-300 cursor-default'
+  }`;
+  return (
+    <div className="mb-3">
+      <label className="block text-[11px] text-neutral-400 mb-1">{label}</label>
+      <div className="relative">
+        {textarea ? (
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            readOnly={!editable}
+            rows={rows ?? 3}
+            placeholder={editable ? placeholder : undefined}
+            className={`${inputCls} ${rows === 2 ? 'resize-none' : 'resize-y'}`}
+          />
+        ) : (
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            readOnly={!editable}
+            placeholder={editable ? placeholder : undefined}
+            className={inputCls}
+          />
+        )}
+        {aiEnabled && (
+          <button
+            type="button"
+            onClick={onAIFill}
+            disabled={filling || busy}
+            title={`AI 生成${label}${value.trim() ? '（将覆盖现有内容）' : ''}`}
+            className={`absolute right-2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors ${
+              textarea ? 'top-2' : 'top-1/2 -translate-y-1/2'
+            }`}
+          >
+            {filling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 /**
  * Agent 全本创作工作流面板。
@@ -41,45 +112,47 @@ const StoryWorkflowPanel: React.FC = () => {
   const [title, setTitle] = useState('');
   const [logline, setLogline] = useState('');
   const [expandedContent, setExpandedContent] = useState(false);
-  // 生成设置（缺陷4：动态滑条，AI 按设置填充系统）
+  // 生成设置（动态滑条 + 沉淀开关）；文风/受众/意图已上移为概览字段统一管理
   const [chapterCount, setChapterCount] = useState(10);
   const [wordsPerChapter, setWordsPerChapter] = useState(2000);
   const [style, setStyle] = useState('');
-  // 创作意图栏（C9）：定受众/意图，决定叙事取向与语感
   const [audience, setAudience] = useState('');
   const [intent, setIntent] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
-  // AI 填写书名：候选列表 + 生成中态
-  const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
-  const [aiFilling, setAiFilling] = useState(false);
-  // AI 生成简介：候选列表 + 生成中态
-  const [descSuggestions, setDescSuggestions] = useState<string[]>([]);
-  const [descFilling, setDescFilling] = useState(false);
-  // AI 生成创意：候选列表 + 生成中态
-  const [loglineSuggestions, setLoglineSuggestions] = useState<string[]>([]);
-  const [loglineFilling, setLoglineFilling] = useState(false);
-  // 编辑开关：关闭时输入框只读；AIGC 模式开启时强制禁用编辑
+  // AIGC：正在生成的概览字段（null = 空闲）
+  const [fillingField, setFillingField] = useState<StoryOverviewField | null>(null);
+  // 编辑开关：关闭时输入框只读；AIGC 开启时逐字段出现 AI 生成按钮（两者相互独立）
   const [editMode, setEditMode] = useState(false);
   const [aiMode, setAiMode] = useState(false);
+  // 进入编辑时的字段快照：「取消」据此回滚（需求0）
+  const [editSnapshot, setEditSnapshot] = useState<StoryOverviewContext | null>(null);
   // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  // 简介（迁自概览页）：创建/编辑作品信息用，随当前作品预填
+  // 简介：随当前作品预填；作品简介在别处更新后回填本面板
   const [description, setDescription] = useState('');
   useEffect(() => {
     setDescription(currentNovel?.description ?? '');
   }, [currentNovel?.id, currentNovel?.description]);
-  // 选中作品时书名随当前作品预填（可手动更改）；切换作品时重置编辑/AIGC 态与候选列表
+  // 切换作品：书名/文风/受众/意图随当前作品预填；重置编辑/AIGC/创意态
   useEffect(() => {
-    if (currentNovel?.id) setTitle(currentNovel.title);
-    else setTitle('');
+    if (currentNovel) {
+      setTitle(currentNovel.title);
+      setStyle(currentNovel.style ?? '');
+      setAudience(currentNovel.audience ?? '');
+      setIntent(currentNovel.intent ?? '');
+    } else {
+      setTitle('');
+      setStyle('');
+      setAudience('');
+      setIntent('');
+    }
+    setLogline('');
     setEditMode(!currentNovel);
     setAiMode(false);
-    setTitleSuggestions([]);
-    setDescSuggestions([]);
-    setLoglineSuggestions([]);
+    setEditSnapshot(null);
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 加载当前作品的任务
@@ -87,26 +160,79 @@ const StoryWorkflowPanel: React.FC = () => {
     if (currentNovel?.id) loadJobs(currentNovel.id);
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // —— 概览字段读写助手 ——
+  const getOverviewField = (field: StoryOverviewField): string => {
+    switch (field) {
+      case 'title': return title;
+      case 'description': return description;
+      case 'logline': return logline;
+      case 'style': return style;
+      case 'audience': return audience;
+      case 'intent': return intent;
+    }
+  };
+
+  const setOverviewField = (field: StoryOverviewField, value: string) => {
+    if (field === 'title') setTitle(value);
+    else if (field === 'description') setDescription(value);
+    else if (field === 'logline') setLogline(value);
+    else if (field === 'style') setStyle(value);
+    else if (field === 'audience') setAudience(value);
+    else setIntent(value);
+  };
+
+  // 把单个概览字段写入作品（仅 title/description/style/audience/intent 入库；创意只属于任务）
+  const persistOverviewField = async (field: StoryOverviewField, value: string) => {
+    if (!currentNovel?.id || field === 'logline') return;
+    const patch: UpdateNovelRequest = {};
+    if (field === 'title') patch.title = value;
+    else if (field === 'description') patch.description = value;
+    else if (field === 'style') patch.style = value;
+    else if (field === 'audience') patch.audience = value;
+    else patch.intent = value;
+    await updateNovel(currentNovel.id, patch);
+  };
+
+  // 比对本地字段与当前作品，构造概览脏字段补丁（含书名；保存后经 store 同步概览页/书列表）
+  const buildOverviewPatch = (): UpdateNovelRequest => {
+    const patch: UpdateNovelRequest = {};
+    if (!currentNovel) return patch;
+    const t = title.trim() || currentNovel.title;
+    if (t !== currentNovel.title) patch.title = t;
+    if (description.trim() !== (currentNovel.description ?? '')) patch.description = description.trim();
+    if (style.trim() !== (currentNovel.style ?? '')) patch.style = style.trim();
+    if (audience.trim() !== (currentNovel.audience ?? '')) patch.audience = audience.trim();
+    if (intent.trim() !== (currentNovel.intent ?? '')) patch.intent = intent.trim();
+    return patch;
+  };
+
   const handleCreate = async () => {
     const log = logline.trim();
     if (!log) {
       toast.show('请填写一句话创意', 'error');
       return;
     }
-    // 已选定作品：书名取编辑框（默认本作标题，可改），简介有改动则同步保存
+    const jobConfig = {
+      chapter_count: chapterCount,
+      words_per_chapter: wordsPerChapter,
+      style: style.trim(),
+      auto_settle: autoSettle,
+      intent: intent.trim(),
+      audience: audience.trim(),
+    };
+    // 已选定作品：先持久化概览脏字段（含书名），再开启全本创作
     if (currentNovel?.id) {
       try {
-        const t = title.trim() || currentNovel.title;
-        if ((description.trim() ?? '') !== (currentNovel.description ?? '')) {
-          await updateNovel(currentNovel.id, { description: description.trim() });
-        }
+        // 书名被清空时不提交空名：回填为当前书名
+        if (!title.trim()) setTitle(currentNovel.title);
+        const patch = buildOverviewPatch();
+        if (Object.keys(patch).length) await updateNovel(currentNovel.id, patch);
         const job = await createJob({
           novel_id: currentNovel.id,
-          title: t,
+          title: title.trim() || currentNovel.title,
           logline: log,
-          config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
+          config: jobConfig,
         });
-        setTitleSuggestions([]);
         await openJob(job.id);
       } catch (e) {
         console.error('create job failed', e);
@@ -114,22 +240,28 @@ const StoryWorkflowPanel: React.FC = () => {
       }
       return;
     }
-    // 未选定作品（新建小说入口）：书名需填写，提交时先建作品（含简介）再开启全本创作
+    // 未选定作品（新建小说入口）：书名需填写，提交时先建作品（含概览字段）再开启全本创作
     const t = title.trim();
     if (!t) {
-      toast.show('请填写作品名，或点击「AI填入」自动起名', 'error');
+      toast.show('请填写作品名，或开启 AIGC 让 AI 自动起名', 'error');
       return;
     }
     try {
-      const novel = await createNovel({ title: t, description: description.trim() });
+      const createReq: CreateNovelRequest = {
+        title: t,
+        description: description.trim(),
+        style: style.trim() || undefined,
+        audience: audience.trim() || undefined,
+        intent: intent.trim() || undefined,
+      };
+      const novel = await createNovel(createReq);
       if (novel?.id) await selectNovel(novel);
       const job = await createJob({
         novel_id: novel.id,
         title: t,
         logline: log,
-        config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
+        config: jobConfig,
       });
-      setTitleSuggestions([]);
       await openJob(job.id);
     } catch (e) {
       console.error('create novel+job failed', e);
@@ -137,97 +269,93 @@ const StoryWorkflowPanel: React.FC = () => {
     }
   };
 
-  // AI 填写书名：以一句话创意为种子，调用 AI 生成候选书名（DEV 降级为本地启发式）
-  const handleAIFill = async () => {
-    if (!logline.trim()) {
-      toast.show('请先填写一句话创意，AI 才能据此起名', 'error');
-      return;
+  // AI 生成单个概览字段（真实链路，无预设兜底，失败直接抛错提示）：
+  // 1) 目标字段已有内容时先弹覆盖警告（需求1）
+  // 2) 请求携带概览全部字段作为上下文，生成结果与已有概览保持一致（需求6）
+  // 3) 只读态下持久化字段立即入库并同步到概览页/书列表（需求3）；编辑态随「完成」统一保存
+  const handleAIFillField = async (field: StoryOverviewField) => {
+    if (getOverviewField(field).trim()) {
+      if (!window.confirm(`「${OVERVIEW_FIELD_LABELS[field]}」已有内容，AI 生成将覆盖现有内容，是否继续？`)) return;
     }
-    setAiFilling(true);
+    setFillingField(field);
     try {
-      const titles = await suggestStoryTitle(logline.trim(), 5);
-      if (titles.length) {
-        setTitle(titles[0]);
-        setTitleSuggestions(titles.slice(0, 5));
+      const ctx: StoryOverviewContext = {
+        title: title.trim(),
+        description: description.trim(),
+        logline: logline.trim(),
+        style: style.trim(),
+        audience: audience.trim(),
+        intent: intent.trim(),
+      };
+      const out = await generateStoryOverview(ctx, [field]);
+      const value = (out[field] ?? '').trim();
+      if (!value) throw new Error('AI 未返回有效内容');
+      setOverviewField(field, value);
+      if (currentNovel?.id && !editMode && field !== 'logline') {
+        await persistOverviewField(field, value);
+        toast.show(`已生成并保存${OVERVIEW_FIELD_LABELS[field]}`, 'success');
       } else {
-        toast.show('AI 未返回书名，可手动填写', 'error');
+        const hint = currentNovel && editMode && field !== 'logline' ? '，点「完成」保存' : '';
+        toast.show(`已生成${OVERVIEW_FIELD_LABELS[field]}${hint}`, 'success');
       }
     } catch (e) {
-      console.error('ai fill title failed', e);
-      toast.show('AI 起名失败，请稍后重试', 'error');
+      console.error('ai fill field failed', e);
+      toast.show('AI 生成失败，请稍后重试', 'error');
     } finally {
-      setAiFilling(false);
+      setFillingField(null);
     }
   };
 
-  // AI 生成简介：以创意/书名为种子，调用 AI 生成完整简介正文（DEV 降级为本地启发式）
-  const handleAIFillDescription = async () => {
-    const seed = logline.trim() || title.trim();
-    if (!seed) {
-      toast.show('请先填写创意或书名，AI 才能据此生成简介', 'error');
-      return;
-    }
-    setDescFilling(true);
-    try {
-      const descs = await suggestStoryDescription(seed, title.trim() || undefined, 3);
-      if (descs.length) {
-        setDescription(descs[0]);
-        setDescSuggestions(descs.slice(0, 3));
-        // 简介被 AI 改写后，提示用户可保存（选中作品时）
-        if (currentNovel && descs[0] !== (currentNovel.description ?? '')) {
-          toast.show('已生成简介，可点「保存简介」写入作品', 'success');
-        }
-      } else {
-        toast.show('AI 未返回简介，可手动填写', 'error');
-      }
-    } catch (e) {
-      console.error('ai fill description failed', e);
-      toast.show('AI 生成简介失败，请稍后重试', 'error');
-    } finally {
-      setDescFilling(false);
-    }
-  };
-
-  // AI 生成创意：以书名/简介为种子，调用 AI 生成一句话梗概
-  const handleAIFillLogline = async () => {
-    const seed = title.trim() || description.trim();
-    if (!seed) {
-      toast.show('请先填写书名或简介，AI 才能据此生成创意', 'error');
-      return;
-    }
-    setLoglineFilling(true);
-    try {
-      const lines = await suggestStoryLogline(title.trim(), description.trim(), 3);
-      if (lines.length) {
-        setLogline(lines[0]);
-        setLoglineSuggestions(lines.slice(0, 3));
-      } else {
-        toast.show('AI 未返回创意，可手动填写', 'error');
-      }
-    } catch (e) {
-      console.error('ai fill logline failed', e);
-      toast.show('AI 生成创意失败，请稍后重试', 'error');
-    } finally {
-      setLoglineFilling(false);
-    }
-  };
-
-  // AIGC 概览模式：开启时禁用编辑，表示作品概览由 AI 生成
+  // AIGC 总开关：开启后各概览字段旁出现 AI 生成按钮（与手动编辑相互独立）
   const handleToggleAiMode = () => {
     setAiMode((prev) => {
       const next = !prev;
-      if (next) {
-        setEditMode(false);
-        toast.show('已进入 AI 概览模式：作品概览由 AI 生成，手动编辑已禁用', 'info');
-      }
+      toast.show(next ? '已开启 AIGC：点击字段旁 ✦ 可让 AI 生成内容' : '已关闭 AIGC', 'info');
       return next;
     });
   };
 
-  // 编辑开关：AIGC 模式开启时置灰不可用
+  // 编辑开关：进入编辑先快照（供「取消」回滚）；「完成」保存脏字段并退出
   const handleToggleEditMode = () => {
-    if (aiMode) return;
-    setEditMode((prev) => !prev);
+    if (editMode) {
+      void handleSaveEdit();
+    } else {
+      setEditSnapshot({ title, description, logline, style, audience, intent });
+      setEditMode(true);
+    }
+  };
+
+  // 完成：持久化概览脏字段（含书名，经 store 同步概览页/书列表）
+  const handleSaveEdit = async () => {
+    setEditMode(false);
+    setEditSnapshot(null);
+    if (!currentNovel?.id) return;
+    // 书名被清空时不提交空名：回填为当前书名
+    if (!title.trim()) setTitle(currentNovel.title);
+    const patch = buildOverviewPatch();
+    if (!Object.keys(patch).length) return;
+    try {
+      await updateNovel(currentNovel.id, patch);
+      toast.show('作品概览已保存', 'success');
+    } catch (e) {
+      console.error('save overview failed', e);
+      toast.show('保存失败，请重试', 'error');
+    }
+  };
+
+  // 取消编辑：回滚到进入编辑时的字段快照并退出编辑（需求0）
+  const handleCancelEdit = () => {
+    if (editSnapshot) {
+      setTitle(editSnapshot.title);
+      setDescription(editSnapshot.description);
+      setLogline(editSnapshot.logline);
+      setStyle(editSnapshot.style);
+      setAudience(editSnapshot.audience);
+      setIntent(editSnapshot.intent);
+    }
+    setEditMode(false);
+    setEditSnapshot(null);
+    toast.show('已取消编辑', 'info');
   };
 
   const handleGenerate = async () => {
@@ -328,20 +456,18 @@ const StoryWorkflowPanel: React.FC = () => {
 
       <div className="relative w-full max-w-2xl max-h-full overflow-y-auto px-8 py-10 animate-fade-in">
         <div className="flex items-center justify-between mb-6">
+          {/* 左侧：标题 + AIGC 总开关（需求0：AIGC 移至左侧） */}
           <div className="flex items-center gap-2">
             <span className="w-8 h-8 rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-md shadow-violet-500/20">
               <Wand2 size={16} className="text-white" />
             </span>
             <span className="text-base font-semibold text-neutral-100">AI 起稿 · 全本创作</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* 左侧 AIGC 概览模式开关 */}
             {!activeJob && (
               <button
                 type="button"
                 onClick={handleToggleAiMode}
-                title={aiMode ? 'AI 概览模式已开启，作品概览由 AI 生成' : '开启 AI 概览模式'}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                title={aiMode ? 'AIGC 已开启：点击字段旁 ✦ 让 AI 生成内容' : '开启 AIGC，逐字段 AI 生成'}
+                className={`ml-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                   aiMode
                     ? 'bg-violet-500/20 text-violet-200 border-violet-500/40 shadow-[0_0_12px_rgba(139,92,246,0.22)]'
                     : 'bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300'
@@ -351,19 +477,28 @@ const StoryWorkflowPanel: React.FC = () => {
                 AIGC
               </button>
             )}
-            {/* 右侧编辑开关 */}
-            {!activeJob && (
+          </div>
+          {/* 右侧：取消 / 编辑·完成（需求0：新增取消按钮以中止编辑） */}
+          <div className="flex items-center gap-2">
+            {!activeJob && currentNovel && editMode && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                title="放弃本次修改并退出编辑"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300 transition-all"
+              >
+                取消
+              </button>
+            )}
+            {!activeJob && currentNovel && (
               <button
                 type="button"
                 onClick={handleToggleEditMode}
-                disabled={aiMode}
-                title={aiMode ? 'AI 概览模式下不可编辑' : editMode ? '完成编辑' : '编辑作品概览'}
+                title={editMode ? '保存修改并完成编辑' : '编辑作品概览'}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                  aiMode
-                    ? 'bg-white/[0.03] text-neutral-600 border-white/[0.06] cursor-not-allowed'
-                    : editMode
-                      ? 'bg-violet-600 text-white border-violet-600 shadow-lg shadow-violet-600/20'
-                      : 'bg-white/8 text-neutral-300 border-white/10 hover:bg-white/15'
+                  editMode
+                    ? 'bg-violet-600 text-white border-violet-600 shadow-lg shadow-violet-600/20'
+                    : 'bg-white/8 text-neutral-300 border-white/10 hover:bg-white/15'
                 }`}
               >
                 {editMode ? <Check size={13} /> : <Pencil size={13} />}
@@ -388,148 +523,79 @@ const StoryWorkflowPanel: React.FC = () => {
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
             <p className="text-xs text-neutral-400 mb-3">输入一句话创意，AI 自动跑完全本创作流水线</p>
 
-            {/* 书名：编辑开关开启后可改，右侧 Sparkles 触发 AI 填写 */}
-            <div className="mb-3">
-              <label className="block text-[11px] text-neutral-400 mb-1">书名</label>
-              <div className="relative">
-                <input
-                  value={title}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                    setTitleSuggestions([]);
-                  }}
-                  readOnly={!editMode}
-                  disabled={aiMode}
-                  placeholder={editMode ? '书名（如：剑试天下）' : undefined}
-                  className={`w-full text-sm rounded-lg outline-none transition-colors ${
-                    editMode
-                      ? 'px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500'
-                      : 'px-2.5 py-2 bg-white/[0.02] border border-white/6 text-neutral-300 cursor-default'
-                  }`}
-                />
-                {editMode && (
-                  <button
-                    type="button"
-                    onClick={handleAIFill}
-                    disabled={aiFilling}
-                    title="AI 根据创意自动起名"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors"
-                  >
-                    {aiFilling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  </button>
-                )}
-              </div>
-              {editMode && titleSuggestions.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {titleSuggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setTitle(s)}
-                      className="px-2 py-1 text-[11px] rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* 作品概览字段组：书名/简介/创意/文风/受众/意图 统一管理（需求2）；AIGC 开启时逐字段可生成 */}
+            <OverviewFieldRow
+              label="书名"
+              value={title}
+              onChange={setTitle}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'title'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('title')}
+              placeholder="书名（如：剑试天下）"
+            />
 
-            {/* 简介：编辑开关开启后可改，右侧 Sparkles 触发 AI 生成完整简介 */}
-            <div className="mb-3">
-              <label className="block text-[11px] text-neutral-400 mb-1">简介</label>
-              <div className="relative">
-                <textarea
-                  value={description}
-                  onChange={(e) => {
-                    setDescription(e.target.value);
-                    setDescSuggestions([]);
-                  }}
-                  readOnly={!editMode}
-                  disabled={aiMode}
-                  rows={3}
-                  placeholder={editMode ? '作品简介（可选），帮助 AI 更好地理解你的故事…' : undefined}
-                  className={`w-full text-sm rounded-lg resize-y transition-colors ${
-                    editMode
-                      ? 'px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500'
-                      : 'px-2.5 py-2 bg-white/[0.02] border border-white/6 text-neutral-300 cursor-default'
-                  }`}
-                />
-                {editMode && (
-                  <button
-                    type="button"
-                    onClick={handleAIFillDescription}
-                    disabled={descFilling}
-                    title="AI 根据创意/书名生成完整简介"
-                    className="absolute right-2 top-2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors"
-                  >
-                    {descFilling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  </button>
-                )}
-              </div>
-              {editMode && descSuggestions.length > 0 && (
-                <div className="flex flex-col gap-1.5 mt-1.5">
-                  {descSuggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setDescription(s)}
-                      className="text-left px-2.5 py-2 text-[11px] leading-relaxed rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <OverviewFieldRow
+              label="简介"
+              value={description}
+              onChange={setDescription}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'description'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('description')}
+              textarea
+              rows={3}
+              placeholder="作品简介（可选），帮助 AI 更好地理解你的故事…"
+            />
 
-            {/* 创意：编辑开关开启后可改，右侧 Sparkles 触发 AI 生成一句话梗概 */}
-            <div className="mb-3">
-              <label className="block text-[11px] text-neutral-400 mb-1">创意</label>
-              <div className="relative">
-                <textarea
-                  value={logline}
-                  onChange={(e) => {
-                    setLogline(e.target.value);
-                    setLoglineSuggestions([]);
-                  }}
-                  readOnly={!editMode}
-                  disabled={aiMode}
-                  rows={2}
-                  placeholder={editMode ? '一句话创意（如：少年负剑出山，搅动江湖风云）' : undefined}
-                  className={`w-full text-sm rounded-lg resize-none transition-colors ${
-                    editMode
-                      ? 'px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500'
-                      : 'px-2.5 py-2 bg-white/[0.02] border border-white/6 text-neutral-300 cursor-default'
-                  }`}
-                />
-                {editMode && (
-                  <button
-                    type="button"
-                    onClick={handleAIFillLogline}
-                    disabled={loglineFilling}
-                    title="AI 根据书名/简介生成一句话创意"
-                    className="absolute right-2 top-2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors"
-                  >
-                    {loglineFilling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  </button>
-                )}
-              </div>
-              {editMode && loglineSuggestions.length > 0 && (
-                <div className="flex flex-col gap-1.5 mt-1.5">
-                  {loglineSuggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setLogline(s)}
-                      className="text-left px-2.5 py-2 text-[11px] leading-relaxed rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <OverviewFieldRow
+              label="创意"
+              value={logline}
+              onChange={setLogline}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'logline'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('logline')}
+              textarea
+              rows={2}
+              placeholder="一句话创意（如：少年负剑出山，搅动江湖风云）"
+            />
+            <OverviewFieldRow
+              label="文风"
+              value={style}
+              onChange={setStyle}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'style'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('style')}
+              placeholder="文风（可选，如：冷峻武侠 / 轻松甜宠）"
+            />
+            <OverviewFieldRow
+              label="受众"
+              value={audience}
+              onChange={setAudience}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'audience'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('audience')}
+              placeholder="目标受众（可选，如：15-25 岁网文读者 / 都市女性）"
+            />
+            <OverviewFieldRow
+              label="意图"
+              value={intent}
+              onChange={setIntent}
+              editable={editMode}
+              aiEnabled={aiMode}
+              filling={fillingField === 'intent'}
+              busy={fillingField !== null}
+              onAIFill={() => handleAIFillField('intent')}
+              placeholder="创作意图（可选，如：爽文爽感优先 / 情感共鸣 / 悬疑反转）"
+            />
 
             {/* 生成设置（动态滑条） */}
             <div className="mb-2 p-2.5 rounded-lg bg-white/3 border border-white/6">
@@ -558,24 +624,6 @@ const StoryWorkflowPanel: React.FC = () => {
                 value={wordsPerChapter}
                 onChange={(e) => setWordsPerChapter(Number(e.target.value))}
                 className="w-full accent-violet-500"
-              />
-              <input
-                value={style}
-                onChange={(e) => setStyle(e.target.value)}
-                placeholder="文风（可选，如：冷峻武侠 / 轻松甜宠）"
-                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
-              />
-              <input
-                value={audience}
-                onChange={(e) => setAudience(e.target.value)}
-                placeholder="目标受众（可选，如：15-25 岁网文读者 / 都市女性）"
-                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
-              />
-              <input
-                value={intent}
-                onChange={(e) => setIntent(e.target.value)}
-                placeholder="创作意图（可选，如：爽文爽感优先 / 情感共鸣 / 悬疑反转）"
-                className="w-full mt-2 px-2.5 py-1.5 text-xs bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
               />
               <label className="flex items-center gap-2 mt-2 cursor-pointer">
                 <input

@@ -15,12 +15,18 @@ export interface CreateNovelRequest {
   title: string;
   genre?: string;
   description?: string;
+  style?: string;
+  audience?: string;
+  intent?: string;
 }
 
 export interface UpdateNovelRequest {
   title?: string;
   genre?: string;
   description?: string;
+  style?: string;
+  audience?: string;
+  intent?: string;
   status?: string;
 }
 

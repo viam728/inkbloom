@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/model"
@@ -14,6 +15,14 @@ import (
 
 // ErrNotFound is returned when a requested resource does not exist.
 var ErrNotFound = errors.New("resource not found")
+
+// DescriptionMaxRunes bounds the novel description length (runes), aligned
+// with the published synopsis limit.
+const DescriptionMaxRunes = 800
+
+// ErrDescriptionTooLong is returned when a description exceeds
+// DescriptionMaxRunes; the handler maps it to HTTP 422.
+var ErrDescriptionTooLong = errors.New("简介超过 800 字限制")
 
 // NovelService handles novel business logic.
 type NovelService struct {
@@ -45,6 +54,15 @@ func (s *NovelService) CreateNovel(ctx context.Context, userID int64, req *dto.C
 	}
 	if req.Description != "" {
 		novel.Description = &req.Description
+	}
+	if req.Style != "" {
+		novel.Style = &req.Style
+	}
+	if req.Audience != "" {
+		novel.Audience = &req.Audience
+	}
+	if req.Intent != "" {
+		novel.Intent = &req.Intent
 	}
 	if req.CoverImage != "" {
 		novel.CoverImage = &req.CoverImage
@@ -121,7 +139,39 @@ func (s *NovelService) UpdateNovel(ctx context.Context, userID, id int64, req *d
 		novel.Genre = req.Genre
 	}
 	if req.Description != nil {
-		novel.Description = req.Description
+		trimmed := strings.TrimSpace(*req.Description)
+		switch {
+		case trimmed == "":
+			novel.Description = nil
+		case len([]rune(trimmed)) > DescriptionMaxRunes:
+			return nil, ErrDescriptionTooLong
+		default:
+			novel.Description = &trimmed
+		}
+	}
+	if req.Style != nil {
+		v := strings.TrimSpace(*req.Style)
+		if v == "" {
+			novel.Style = nil
+		} else {
+			novel.Style = &v
+		}
+	}
+	if req.Audience != nil {
+		v := strings.TrimSpace(*req.Audience)
+		if v == "" {
+			novel.Audience = nil
+		} else {
+			novel.Audience = &v
+		}
+	}
+	if req.Intent != nil {
+		v := strings.TrimSpace(*req.Intent)
+		if v == "" {
+			novel.Intent = nil
+		} else {
+			novel.Intent = &v
+		}
 	}
 	if req.CoverImage != nil {
 		novel.CoverImage = req.CoverImage
@@ -182,6 +232,15 @@ func toNovelResponse(n *model.Novel) *dto.NovelResponse {
 	}
 	if n.Description != nil {
 		resp.Description = *n.Description
+	}
+	if n.Style != nil {
+		resp.Style = *n.Style
+	}
+	if n.Audience != nil {
+		resp.Audience = *n.Audience
+	}
+	if n.Intent != nil {
+		resp.Intent = *n.Intent
 	}
 	if n.CoverImage != nil {
 		resp.CoverImage = *n.CoverImage

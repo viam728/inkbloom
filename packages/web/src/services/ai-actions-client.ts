@@ -213,135 +213,44 @@ function mockInspiration(category: InspirationCategory): Promise<string[]> {
   return Promise.resolve(shuffled.slice(0, 3));
 }
 
-// ── AI 填写书名（全本创作窗口） ───────────────────────────────────────────
-// 预留端点 POST /ai/story-title（与 candidates / inspiration 同约定）：
-//   req:  { idea: string; count?: number }
-//   resp: { titles: string[] }
-// 后端未实现时，开发环境（import.meta.env.DEV）自动降级为本地启发式 mock，
-// 保证「AI填写」按钮在本地始终可演示；接入真实 LLM 后返回 AI 生成的书名。
-export async function suggestStoryTitle(idea: string, count = 5): Promise<string[]> {
-  try {
-    const data = (await apiClient.post('/ai/story-title', { idea, count })) as unknown as {
-      titles?: string[];
-    };
-    if (data?.titles?.length) return data.titles.slice(0, count);
-    throw new Error('empty titles');
-  } catch (e) {
-    if (!DEV_MOCK) throw e;
-    return mockStoryTitles(idea, count);
-  }
+// ── 作品概览 AI 生成（真实链路，无 mock 降级） ────────────────────────────
+// 端点 POST /ai/story-overview（Go 代理 → ai-service /api/ai/story-overview）：
+//   req:  概览全部字段（title/description/logline/style/audience/intent）+ fields 子集
+//   resp: { overview: Record<field, string>, usage, model }
+// 链路要求：
+//   1. 真实 LLM 生成——失败直接抛错由 UI toast，禁止任何预设选项冒充生成结果；
+//   2. 单字段生成也必须携带概览全部字段作为上下文（服务端据此保证一致性）；
+//   3. 服务端注入随机变体 + temperature 0.9，提示词硬性要求「热门度 + 创新性」。
+
+export interface StoryOverviewContext {
+  title: string;
+  description: string;
+  logline: string;
+  style: string;
+  audience: string;
+  intent: string;
 }
 
-// 本地启发式书名：从创意中抽取中文关键词，套用常见网文命名模式生成候选。
-function mockStoryTitles(idea: string, count: number): string[] {
-  const clean = (idea || '').replace(/\s+/g, ' ').trim();
-  const keywords = (clean.match(/[一-龥]{2,4}/g) || []).slice(0, 3);
-  const base = keywords.length ? keywords : ['江湖', '少年', '长安'];
-  const patterns: ((k: string) => string)[] = [
-    (k) => `${k}录`,
-    (k) => `重生之${k}`,
-    (k) => `${k}之上`,
-    (k) => `我在${k}的那些年`,
-    (k) => `${k}纪元`,
-    (k) => `诡秘·${k}`,
-    (k) => `${k}风华`,
-    (k) => `万古${k}`,
-  ];
-  const out: string[] = [];
-  for (const p of patterns) {
-    for (const k of base) {
-      const t = p(k);
-      if (!out.includes(t)) out.push(t);
-      if (out.length >= count) break;
+export type StoryOverviewField = keyof StoryOverviewContext;
+
+export async function generateStoryOverview(
+  ctx: StoryOverviewContext,
+  fields: StoryOverviewField[],
+): Promise<Partial<Record<StoryOverviewField, string>>> {
+  const data = (await apiClient.post('/ai/story-overview', { ...ctx, fields })) as unknown as {
+    overview?: Partial<Record<StoryOverviewField, string>>;
+  };
+  const overview = data?.overview;
+  const out: Partial<Record<StoryOverviewField, string>> = {};
+  if (overview && typeof overview === 'object') {
+    for (const f of fields) {
+      const v = overview[f];
+      if (typeof v === 'string' && v.trim()) out[f] = v.trim();
     }
-    if (out.length >= count) break;
   }
-  return out.slice(0, count);
+  if (Object.keys(out).length === 0) {
+    throw new Error('AI 未返回有效内容');
+  }
+  return out;
 }
 
-// ── AI 填写简介（全本创作窗口 / 简介编辑） ───────────────────────────────
-// 预留端点 POST /ai/story-description（与 story-title 同约定）：
-//   req:  { idea: string; title?: string; count?: number }
-//   resp: { descriptions: string[] }
-// 后端未实现时，开发环境（import.meta.env.DEV）自动降级为本地启发式 mock，
-// 保证「AI 生成简介」按钮在本地始终可演示；接入真实 LLM 后返回 AI 生成的简介正文。
-export async function suggestStoryDescription(
-  idea: string,
-  title = '',
-  count = 3,
-): Promise<string[]> {
-  try {
-    const data = (await apiClient.post('/ai/story-description', { idea, title, count })) as unknown as {
-      descriptions?: string[];
-    };
-    if (data?.descriptions?.length) return data.descriptions.slice(0, count);
-    throw new Error('empty descriptions');
-  } catch (e) {
-    if (!DEV_MOCK) throw e;
-    return mockStoryDescriptions(idea, title, count);
-  }
-}
-
-// 本地启发式简介：以创意/书名为种子，套用常见网文简介模板生成多句简介正文。
-function mockStoryDescriptions(idea: string, title = '', count = 3): string[] {
-  const clean = (idea || '').replace(/\s+/g, ' ').trim();
-  const kw = (clean.match(/[一-龥]{2,4}/g) || []).slice(0, 2);
-  const subject = title?.trim() || (kw.length ? kw.join('与') : '主角');
-  const templates: string[] = [
-    `${subject}本是一介寻常之人，命运的齿轮却在某个雨夜悄然转动——一封迟到的来信、一段被掩埋的往事，将他推入波谲云诡的漩涡。前路未明，唯一能依靠的，只有自己那颗不肯认命的心。`,
-    `故事始于${subject}的一次意外抉择。那一步迈出，便再难回头：旧日的诺言、新生的敌意、还有藏在温柔笑容背后的真相，交织成一张无处可逃的网。江湖很大，可容身之处，却越来越少。`,
-    `世道倾颓，${subject}在夹缝中挣扎求生。他原只想护住身边寥寥数人，却被迫卷入更大的棋局——皇权、门派、暗潮涌动的势力各怀心思。当棋子开始思考落子的理由，棋局便再不由执子人掌控。`,
-    `一念成佛，一念成魔。${subject}站在命运的岔路口，身后是回不去的安稳，眼前是看不清的迷雾。每一次选择都在改写结局，而真正的敌人，或许从来都不在明处。`,
-    `${subject}以为自己只是尘埃里的一粒微光，直到某天发现，那束光竟能照亮整片黑暗。逆旅之中，他学会了与孤独为伴，也终于懂得：所谓成长，不过是把哭声调成静音，再一步步走下去。`,
-  ];
-  const out: string[] = [];
-  for (const t of templates) {
-    if (!out.includes(t)) out.push(t);
-    if (out.length >= count) break;
-  }
-  return out.slice(0, count);
-}
-
-// ── AI 填写创意/一句话梗概（全本创作窗口） ─────────────────────────────────
-// 预留端点 POST /ai/story-logline（与 story-title 同约定）：
-//   req:  { title?: string; description?: string; count?: number }
-//   resp: { loglines: string[] }
-// 后端未实现时，开发环境自动降级为本地启发式 mock。
-export async function suggestStoryLogline(
-  title = '',
-  description = '',
-  count = 3,
-): Promise<string[]> {
-  try {
-    const data = (await apiClient.post('/ai/story-logline', { title, description, count })) as unknown as {
-      loglines?: string[];
-    };
-    if (data?.loglines?.length) return data.loglines.slice(0, count);
-    throw new Error('empty loglines');
-  } catch (e) {
-    if (!DEV_MOCK) throw e;
-    return mockStoryLoglines(title, description, count);
-  }
-}
-
-// 本地启发式创意：从书名/简介中提取主体，生成一句话梗概候选。
-function mockStoryLoglines(title = '', description = '', count = 3): string[] {
-  const t = title?.trim();
-  const d = description?.trim();
-  const seed = t || d || '一个关于成长与抉择的故事';
-  const kw = (seed.match(/[一-龥]{2,4}/g) || []).slice(0, 2);
-  const subject = kw.length ? kw.join('') : '主角';
-  const templates: string[] = [
-    `${subject}在命运的岔路口做出选择，从此踏上一条无法回头的路。`,
-    `当旧秩序崩塌，${subject}必须在乱世中找到属于自己的位置。`,
-    `${subject}本只想守护身边寥寥数人，却被卷入一场足以改写世界的棋局。`,
-    `一个关于${subject}的谜题，答案藏在过去与未来的交叠之处。`,
-    `${subject}在绝望中点燃微光，却没想到这束光会照亮整片黑暗。`,
-  ];
-  const out: string[] = [];
-  for (const tmpl of templates) {
-    if (!out.includes(tmpl)) out.push(tmpl);
-    if (out.length >= count) break;
-  }
-  return out.slice(0, count);
-}

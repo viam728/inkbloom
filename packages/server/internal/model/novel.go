@@ -14,6 +14,10 @@ type Novel struct {
 	Title       string         `gorm:"type:varchar(255);not null" json:"title"`
 	Genre       *string        `gorm:"type:varchar(100)" json:"genre,omitempty"`
 	Description *string        `gorm:"type:text" json:"description,omitempty"`
+	// 概览元信息：文风 / 目标受众 / 创作意图，随书名/简介一并纳入作品概览统一管理
+	Style    *string `gorm:"type:varchar(100)" json:"style,omitempty"`
+	Audience *string `gorm:"type:varchar(100)" json:"audience,omitempty"`
+	Intent   *string `gorm:"type:varchar(200)" json:"intent,omitempty"`
 	CoverImage  *string        `gorm:"type:varchar(500);column:cover_image" json:"cover_image,omitempty"`
 	WordCount   int            `gorm:"default:0;column:word_count" json:"word_count"`
 	Status      string         `gorm:"type:varchar(20);default:'draft'" json:"status"`

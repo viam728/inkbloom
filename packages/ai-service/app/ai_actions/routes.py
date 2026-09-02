@@ -1,6 +1,7 @@
 """HTTP routes for AI action endpoints (candidates / review / inspiration / ...)."""
 
 import logging
+import random
 import time
 
 from fastapi import APIRouter
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _SEVERITY_LEVELS = {"low", "medium", "high"}
 _PLATFORMS = {"wechat", "xiaohongshu", "weibo", "video"}
+_STORY_OVERVIEW_FIELDS = {"title", "description", "logline", "style", "audience", "intent"}
 
 
 # ── Request models ───────────────────────────────────────────────────────
@@ -74,6 +76,20 @@ class GenerateTitlesRequest(BaseModel):
 class AdaptContentRequest(BaseModel):
     content: str
     platform: str
+
+
+class StoryOverviewRequest(BaseModel):
+    """作品概览 AI 生成请求：existing 携带当前概览全部字段（作为上下文），
+    fields 指定需要生成的字段子集；不传 fields 则生成全部概览字段。"""
+
+    title: str | None = None
+    description: str | None = None
+    logline: str | None = None
+    style: str | None = None
+    audience: str | None = None
+    intent: str | None = None
+    fields: list[str] | None = None
+    model: str | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -352,6 +368,60 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
             logger.info(
                 "ai_adapt_content platform=%s took %.2fs",
                 request.platform,
+                time.perf_counter() - start,
+            )
+
+    @router.post("/api/ai/story-overview")
+    async def ai_story_overview(request: StoryOverviewRequest):
+        """Generate story overview fields (title/description/logline/style/audience/intent).
+
+        The whole existing overview is passed as context so single-field
+        generation stays consistent with the rest (req 6). A random variant is
+        injected for diversity (req 5: randomness). Output must balance
+        popularity and innovation (prompt-enforced).
+        """
+        start = time.perf_counter()
+        try:
+            existing = {
+                "title": request.title or "",
+                "description": request.description or "",
+                "logline": request.logline or "",
+                "style": request.style or "",
+                "audience": request.audience or "",
+                "intent": request.intent or "",
+            }
+            fields = [f for f in (request.fields or []) if f in _STORY_OVERVIEW_FIELDS] or list(
+                _STORY_OVERVIEW_FIELDS
+            )
+            user = prompts.story_overview_prompt(existing, fields, random.randint(1, 100000))
+            # deepseek-v4-flash 为推理模型：reasoning 可能耗尽 max_tokens 导致
+            # answer 的 content 为空（usage 正常但 raw=""）。给足输出余量，
+            # 并在 content 为空/调用出错时换一个随机变体重试一次。
+            content, err, usage, model_name = "", None, None, ""
+            for _ in range(2):
+                content, err, usage, model_name = await call_llm(
+                    llm, prompts.SYSTEM_JSON, user, temperature=0.9, max_tokens=4096, model=request.model
+                )
+                if not err and content.strip():
+                    break
+                user = prompts.story_overview_prompt(existing, fields, random.randint(1, 100000))
+            if err:
+                return {"error": err}
+            if not content.strip():
+                return {"error": "模型未返回内容（推理超出输出上限，请重试）"}
+            parsed = extract_json(content)
+            if not isinstance(parsed, dict):
+                return {"error": "invalid JSON from model", "raw": content}
+            result = {}
+            for f in fields:
+                val = parsed.get(f)
+                if isinstance(val, str) and val.strip():
+                    result[f] = val.strip()
+            return {"overview": result, "usage": usage, "model": model_name}
+        finally:
+            logger.info(
+                "ai_story_overview fields=%s took %.2fs",
+                request.fields,
                 time.perf_counter() - start,
             )
 

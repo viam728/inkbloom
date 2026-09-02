@@ -77,7 +77,9 @@ func NewAIHandler(
 			Timeout: 5 * time.Minute, // long timeout for streaming
 		},
 		jsonClient: &http.Client{
-			Timeout: aiTextTimeout,
+			// 硬顶兜底：实际超时由 proxyJSON 的 per-request context 控制
+			// （默认 60s；story-overview 120s）。此值须大于最长的 context 超时。
+			Timeout: 150 * time.Second,
 		},
 		logger:         logger,
 		contextBuilder: contextBuilder,
@@ -854,6 +856,32 @@ func (h *AIHandler) AdaptContent(c *gin.Context) {
 	}
 	h.logger.Info("adapt-content requested", zap.String("platform", req.Platform))
 	h.proxyBound(c, "/api/ai/adapt-content", req, true)
+}
+
+// StoryOverview handles POST /api/v1/ai/story-overview — AI generation of the
+// work-overview fields (title/description/logline/style/audience/intent).
+// The full existing overview rides along as context so single-field
+// generation stays consistent with the whole picture; a random variant is
+// injected upstream for diversity (popularity + innovation enforced in the
+// upstream prompt).
+func (h *AIHandler) StoryOverview(c *gin.Context) {
+	var req dto.StoryOverviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	h.logger.Info("story-overview requested", zap.Strings("fields", req.Fields))
+	// 推理模型（deepseek-v4-flash）reasoning 耗时长，空 content 时上游还会换变体
+	// 重试一次 —— 默认 60s aiTextTimeout 不够，此处放宽到 120s。
+	body, err := json.Marshal(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{
+			Code:    500,
+			Message: fmt.Sprintf("failed to marshal request: %v", err),
+		})
+		return
+	}
+	h.proxyJSON(c, "/api/ai/story-overview", body, 120*time.Second, true)
 }
 
 // PromptBuild handles POST /api/v1/prompt/build — build context-aware prompt messages.

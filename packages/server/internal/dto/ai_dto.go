@@ -34,6 +34,26 @@ type ImagePromptResponse struct {
 	NegativePrompt string `json:"negative_prompt"`
 }
 
+// StoryOverviewRequest is the request body for AI generation of story overview
+// fields (title / description / logline / style / audience / intent). The whole
+// existing overview is passed as context so single-field generation stays
+// consistent; Fields selects which subset to (re)generate.
+type StoryOverviewRequest struct {
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Logline     string   `json:"logline,omitempty"`
+	Style       string   `json:"style,omitempty"`
+	Audience    string   `json:"audience,omitempty"`
+	Intent      string   `json:"intent,omitempty"`
+	Fields      []string `json:"fields,omitempty"`
+	Model       string   `json:"model,omitempty"`
+}
+
+// StoryOverviewResponse is the response for story overview generation.
+type StoryOverviewResponse struct {
+	Overview map[string]string `json:"overview"`
+}
+
 // ChatChunkData represents a single SSE chunk sent to the client.
 type ChatChunkData struct {
 	Content      string `json:"content"`

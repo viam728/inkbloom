@@ -494,6 +494,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			aiGroup.POST("/ai/generate-titles", h.AI.GenerateTitles)
 			aiGroup.POST("/ai/adapt-content", h.AI.AdaptContent)
 			aiGroup.POST("/ai/agent/generate", h.AI.AgentGenerate)
+			aiGroup.POST("/ai/story-overview", h.AI.StoryOverview)
 			aiGroup.POST("/prompt/build", h.AI.PromptBuild)
 
 			// Conversational creation Agent (tool-calling loop).

@@ -139,6 +139,7 @@ def _common_context(context: AgentContext) -> str:
     parts = []
     if context.novel_title:
         parts.append(_ctx_block("作品", f"书名：《{context.novel_title}》"))
+    parts.append(_ctx_block("作品简介", context.novel_description))
     parts.append(_ctx_block("大纲结构", _format_outline(context)))
     parts.append(_ctx_block("本章目标", _format_target_node(context)))
     parts.append(_ctx_block("前文摘录", _format_chapters(context)))

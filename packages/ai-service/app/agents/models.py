@@ -43,6 +43,7 @@ class AgentContext(BaseModel):
     """All context the Go side assembles for an agent generation call."""
 
     novel_title: str = ""
+    novel_description: str = ""
     outline_acts: list[OutlineAct] = []
     preceding_chapters: list[ChapterExcerpt] = []
     memory_items: list[MemoryItemCtx] = []
