@@ -44,9 +44,11 @@ const StoryWorkflowPanel: React.FC = () => {
   const [audience, setAudience] = useState('');
   const [intent, setIntent] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
-  // 滑动选择器：拖动中的节点索引（预览高亮），松手时提交跳转
+  // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   // 加载当前作品的任务
   useEffect(() => {
@@ -96,32 +98,39 @@ const StoryWorkflowPanel: React.FC = () => {
     }
   };
 
-  // 滑动选择器：指针拖动时据轨道位置换算节点索引并预览高亮
+  // 滑动选择器：拖动时手柄连续跟随指针（dragRatio），仅用最近节点高亮标签。
+  // 用轨道内条的真实 rect 计算比例，消除 px-2 padding 造成的偏移。
   const handleTrackPointer = (e: React.PointerEvent) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const rect = track.getBoundingClientRect();
+    const bar = barRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const idx = Math.round(ratio * (STAGE_ORDER.length - 1));
-    setDragStageIdx(idx);
+    setDragRatio(ratio);
+    setDragStageIdx(Math.round(ratio * (STAGE_ORDER.length - 1)));
   };
 
   const handleDragEnd = async () => {
     if (dragStageIdx == null || !activeJob) {
       setDragStageIdx(null);
+      setDragRatio(null);
       return;
     }
     const target = STAGE_ORDER[dragStageIdx];
-    setDragStageIdx(null);
-    if (target !== activeJob.stage) {
-      try {
+    // 关键修复：松手后保持手柄停在拖放点（dragRatio 不立即清空），等
+    // jumpStage 的 POST 返回、stageIndex 更新后再统一清空。否则手柄会先
+    // 弹回旧阶段、等服务端确认再跳到新阶段 —— 这就是用户看到的「抖动」。
+    try {
+      if (target !== activeJob.stage) {
         // jumpStage already updates activeJob from the POST response, so no
         // follow-up GET is needed — that extra request was also what 429'd
         // (and got silently swallowed) under the old 1 req/s AI bucket.
         await jumpStage(activeJob.id, target);
-      } catch (e) {
-        console.error('jump stage failed', e);
       }
+    } catch (e) {
+      console.error('jump stage failed', e);
+    } finally {
+      setDragStageIdx(null);
+      setDragRatio(null);
     }
   };
 
@@ -299,7 +308,7 @@ const StoryWorkflowPanel: React.FC = () => {
               ref={trackRef}
               className="relative mb-3 px-2 pt-4 pb-1 select-none touch-none cursor-pointer"
               onPointerMove={(e) => {
-                if (dragStageIdx !== null) handleTrackPointer(e);
+                if (dragRatio !== null) handleTrackPointer(e);
               }}
               onPointerDown={(e) => {
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -309,20 +318,24 @@ const StoryWorkflowPanel: React.FC = () => {
               onPointerCancel={handleDragEnd}
             >
               {(() => {
+                const n = STAGE_ORDER.length - 1;
                 const activeIdx = dragStageIdx ?? stageIndex;
-                const pct = (activeIdx / (STAGE_ORDER.length - 1)) * 100;
+                // 拖动中手柄连续跟随指针；否则吸附到当前阶段节点
+                const pct = (dragRatio !== null ? dragRatio : activeIdx / n) * 100;
+                const dragging = dragRatio !== null;
+                const moveCls = dragging ? '' : 'transition-[left,width] duration-200 ease-out';
                 return (
-                  <div className="absolute left-0 right-0 top-[7px] h-1 rounded-full">
+                  <div ref={barRef} className="absolute left-0 right-0 top-[7px] h-1 rounded-full">
                     {/* 轨道背景 */}
                     <div className="absolute inset-0 h-full rounded-full bg-white/10" />
                     {/* 已走过路径 */}
                     <div
-                      className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500"
+                      className={`absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 ${moveCls}`}
                       style={{ width: `${pct}%` }}
                     />
-                    {/* 滑块手柄（拖动时放大） */}
+                    {/* 滑块手柄（拖动时放大、连续跟随；松手后平滑吸附） */}
                     <div
-                      className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full shadow-lg transition-transform ${dragStageIdx !== null ? 'scale-110' : ''}`}
+                      className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full shadow-lg ${dragStageIdx !== null ? 'scale-110 ' : ''}${dragging ? 'transition-transform' : 'transition-[left,transform] duration-200 ease-out'}`}
                       style={{
                         left: `${pct}%`,
                         background: 'linear-gradient(135deg, #8b5cf6, #d946ef)',
