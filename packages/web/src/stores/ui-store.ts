@@ -40,6 +40,12 @@ interface UIState {
   leftTab: LeftTab;
   /** 右侧面板当前 Tab（全局可写，供命令面板/AIGC 等外部跳转） */
   activeRightTab: RightTab;
+  /**
+   * 中央编辑区视图（无打开章节时）：overview=作品概览，story=AI 起稿中央窗口。
+   * AI 起稿从右侧栏常驻改为中央正式窗口（合并创建+工作流），故用独立 centerTab 控制，
+   * 不持久化（刷新回到概览更符合直觉）。`inkbloom:open-story-workflow` 事件置为 'story'。
+   */
+  centerTab: 'overview' | 'story';
   /** 全局弹窗 */
   dashboardOpen: boolean;
   rhythmOpen: boolean;
@@ -75,6 +81,7 @@ interface UIState {
   setRole: (role: CreatorRole) => void;
   setLeftTab: (tab: LeftTab) => void;
   setActiveRightTab: (tab: RightTab) => void;
+  setCenterTab: (tab: 'overview' | 'story') => void;
   setDashboardOpen: (open: boolean) => void;
   setRhythmOpen: (open: boolean) => void;
   setInspirationOpen: (open: boolean) => void;
@@ -105,6 +112,7 @@ export const useUIStore = create<UIState>()(
       role: 'novelist',
       leftTab: 'library',
       activeRightTab: 'chat',
+      centerTab: 'overview',
       dashboardOpen: false,
       rhythmOpen: false,
       inspirationOpen: false,
@@ -151,6 +159,7 @@ export const useUIStore = create<UIState>()(
         }),
       setLeftTab: (tab) => set({ leftTab: tab }),
       setActiveRightTab: (tab) => set({ activeRightTab: tab }),
+      setCenterTab: (tab) => set({ centerTab: tab }),
       setDashboardOpen: (open) => set({ dashboardOpen: open }),
       setRhythmOpen: (open) => set({ rhythmOpen: open }),
       setInspirationOpen: (open) => set({ inspirationOpen: open }),

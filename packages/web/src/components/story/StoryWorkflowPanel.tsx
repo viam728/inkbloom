@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, BookOpen } from 'lucide-react';
+import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, PenLine } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
+import { useUIStore } from '@/stores/ui-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
 import { suggestStoryTitle } from '@/services/ai-actions-client';
@@ -18,6 +19,7 @@ const StoryWorkflowPanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const createNovel = useNovelStore((s) => s.createNovel);
   const selectNovel = useNovelStore((s) => s.selectNovel);
+  const updateNovel = useNovelStore((s) => s.updateNovel);
   const {
     jobs,
     activeJob,
@@ -55,6 +57,15 @@ const StoryWorkflowPanel: React.FC = () => {
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  // 简介（迁自概览页）：创建/编辑作品信息用，随当前作品预填
+  const [description, setDescription] = useState('');
+  useEffect(() => {
+    setDescription(currentNovel?.description ?? '');
+  }, [currentNovel?.id, currentNovel?.description]);
+  // 选中作品时书名随当前作品预填（可手动更改）
+  useEffect(() => {
+    if (currentNovel?.id) setTitle(currentNovel.title);
+  }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 加载当前作品的任务
   useEffect(() => {
@@ -67,17 +78,19 @@ const StoryWorkflowPanel: React.FC = () => {
       toast.show('请填写一句话创意', 'error');
       return;
     }
-    // 已选定作品：书名直接取本作，无需编辑
+    // 已选定作品：书名取编辑框（默认本作标题，可改），简介有改动则同步保存
     if (currentNovel?.id) {
       try {
+        const t = title.trim() || currentNovel.title;
+        if ((description.trim() ?? '') !== (currentNovel.description ?? '')) {
+          await updateNovel(currentNovel.id, { description: description.trim() });
+        }
         const job = await createJob({
           novel_id: currentNovel.id,
-          title: currentNovel.title,
+          title: t,
           logline: log,
           config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
         });
-        setTitle('');
-        setLogline('');
         setTitleSuggestions([]);
         await openJob(job.id);
       } catch (e) {
@@ -86,14 +99,14 @@ const StoryWorkflowPanel: React.FC = () => {
       }
       return;
     }
-    // 未选定作品（新建小说页入口）：书名需填写，提交时先建作品再开启全本创作
+    // 未选定作品（新建小说入口）：书名需填写，提交时先建作品（含简介）再开启全本创作
     const t = title.trim();
     if (!t) {
-      toast.show('请填写作品名，或点击「AI填写」自动起名', 'error');
+      toast.show('请填写作品名，或点击「AI填入」自动起名', 'error');
       return;
     }
     try {
-      const novel = await createNovel({ title: t });
+      const novel = await createNovel({ title: t, description: description.trim() });
       if (novel?.id) await selectNovel(novel);
       const job = await createJob({
         novel_id: novel.id,
@@ -101,8 +114,6 @@ const StoryWorkflowPanel: React.FC = () => {
         logline: log,
         config: { chapter_count: chapterCount, words_per_chapter: wordsPerChapter, style, auto_settle: autoSettle, intent: intent.trim(), audience: audience.trim() },
       });
-      setTitle('');
-      setLogline('');
       setTitleSuggestions([]);
       await openJob(job.id);
     } catch (e) {
@@ -131,6 +142,17 @@ const StoryWorkflowPanel: React.FC = () => {
       toast.show('AI 起名失败，请稍后重试', 'error');
     } finally {
       setAiFilling(false);
+    }
+  };
+
+  // 简介保存（编辑入口已迁至此处，替代原概览页的编辑）
+  const handleSaveDescription = async () => {
+    if (!currentNovel) return;
+    try {
+      await updateNovel(currentNovel.id, { description: description.trim() });
+      toast.show('简介已保存', 'success');
+    } catch {
+      toast.show('简介保存失败，请重试', 'error');
     }
   };
 
@@ -222,80 +244,106 @@ const StoryWorkflowPanel: React.FC = () => {
 
   const stageIndex = activeJob ? STAGE_ORDER.indexOf(activeJob.stage) : -1;
 
+  const backToOverview = () => useUIStore.getState().setCenterTab('overview');
+
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3 py-2 border-b border-white/6 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-md shadow-violet-500/20">
-            <Wand2 size={13} className="text-white" />
-          </span>
-          <span className="text-sm font-medium text-neutral-200">AI 起稿 · 全本创作</span>
+    <div className="flex-1 flex items-center justify-center bg-surface-0 relative overflow-hidden">
+      {/* 背景光晕 */}
+      <div className="absolute top-1/4 left-1/3 w-80 h-80 rounded-full bg-indigo-600/10 blur-[110px] pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/3 w-72 h-72 rounded-full bg-pink-600/8 blur-[100px] pointer-events-none" />
+
+      <div className="relative w-full max-w-2xl max-h-full overflow-y-auto px-8 py-10 animate-fade-in">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-md shadow-violet-500/20">
+              <Wand2 size={16} className="text-white" />
+            </span>
+            <span className="text-base font-semibold text-neutral-100">AI 起稿 · 全本创作</span>
+          </div>
+          {activeJob ? (
+            <button onClick={closeJob} className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors">
+              ← 返回任务列表
+            </button>
+          ) : (
+            <button onClick={backToOverview} className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors">
+              返回作品概览 →
+            </button>
+          )}
         </div>
-        {activeJob && (
-          <button onClick={closeJob} className="mt-1.5 text-xs text-neutral-500 hover:text-neutral-300">
-            ← 返回任务列表
-          </button>
-        )}
-      </div>
 
       {!activeJob ? (
-        <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div>
           {/* 创建表单 */}
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
-            <p className="text-xs text-neutral-400 mb-2">输入一句话创意，AI 自动跑完全本创作流水线</p>
-            {currentNovel ? (
-              // 已选定作品：书名直接取本作，无需编辑
-              <div className="flex items-center gap-2 mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg">
-                <BookOpen size={14} className="text-brand-300 shrink-0" />
-                <span className="text-neutral-400">作品：</span>
-                <span className="text-neutral-100 font-medium truncate">{currentNovel.title}</span>
+            <p className="text-xs text-neutral-400 mb-3">输入一句话创意，AI 自动跑完全本创作流水线</p>
+
+            {/* 书名（两端通用，可手动更改，支持 AI 笔填入） */}
+            <div className="mb-3">
+              <label className="block text-[11px] text-neutral-400 mb-1">书名</label>
+              <div className="flex items-center gap-2">
+                <input
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setTitleSuggestions([]);
+                  }}
+                  placeholder="书名（如：剑试天下）"
+                  className="flex-1 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleAIFill}
+                  disabled={aiFilling}
+                  title="AI 根据创意自动起名"
+                  className="shrink-0 flex items-center gap-1 px-2.5 py-2 text-xs rounded-lg bg-violet-500/15 text-violet-200 border border-violet-500/30 hover:bg-violet-500/25 disabled:opacity-50 transition-colors"
+                >
+                  {aiFilling ? <Loader2 size={13} className="animate-spin" /> : <PenLine size={13} />}
+                  AI填入
+                </button>
               </div>
-            ) : (
-              // 新建小说入口：书名需填写，支持 AI 自动起名
-              <div className="mb-2">
-                <div className="flex items-center gap-2">
-                  <input
-                    value={title}
-                    onChange={(e) => {
-                      setTitle(e.target.value);
-                      setTitleSuggestions([]);
-                    }}
-                    placeholder="作品名（如：剑试天下）"
-                    className="flex-1 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAIFill}
-                    disabled={aiFilling}
-                    title="AI 根据创意自动起名"
-                    className="shrink-0 flex items-center gap-1 px-2.5 py-2 text-xs rounded-lg bg-violet-500/15 text-violet-200 border border-violet-500/30 hover:bg-violet-500/25 disabled:opacity-50 transition-colors"
-                  >
-                    {aiFilling ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                    AI填写
-                  </button>
+              {titleSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {titleSuggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setTitle(s)}
+                      className="px-2 py-1 text-[11px] rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
                 </div>
-                {titleSuggestions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {titleSuggestions.map((s, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => setTitle(s)}
-                        className="px-2 py-1 text-[11px] rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+              )}
+            </div>
+
+            {/* 简介（编辑入口已迁至此处，替代原概览页的只读/编辑） */}
+            <div className="mb-3">
+              <label className="block text-[11px] text-neutral-400 mb-1">简介</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                placeholder="作品简介（可选），帮助 AI 更好地理解你的故事…"
+                className="w-full px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-y"
+              />
+              {currentNovel && description.trim() !== (currentNovel.description ?? '') && (
+                <button
+                  type="button"
+                  onClick={handleSaveDescription}
+                  className="mt-1.5 flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors"
+                >
+                  <Check size={13} /> 保存简介
+                </button>
+              )}
+            </div>
+
             <textarea
               value={logline}
               onChange={(e) => setLogline(e.target.value)}
-              placeholder="一句话创意（如：少年负剑出山，搅动江湖风云）"
+              placeholder="书名或创意（如：少年负剑出山，搅动江湖风云）"
               rows={2}
-              className="w-full mb-2 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-none"
+              className="w-full mb-3 px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-none"
             />
 
             {/* 生成设置（动态滑条） */}
@@ -361,7 +409,7 @@ const StoryWorkflowPanel: React.FC = () => {
                 className="w-full py-2 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium transition-all"
               >
                 <Wand2 size={14} className="inline mr-1.5" />
-                为「{currentNovel.title}」创建创作任务
+                为「{title.trim() || currentNovel.title}」创建创作任务
               </button>
             ) : (
               <button
@@ -391,7 +439,7 @@ const StoryWorkflowPanel: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div>
           {/* 阶段进度 */}
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
             <div className="flex items-center justify-between mb-2">
@@ -494,6 +542,7 @@ const StoryWorkflowPanel: React.FC = () => {
                     />
         </div>
       )}
+      </div>
     </div>
   );
 };

@@ -13,6 +13,7 @@ import { useStatsStore } from '@/stores/stats-store';
 import { useTabStore, countDraftWords } from '@/stores/tab-store';
 import TipTapEditor from './TipTapEditor';
 import NovelOverview from './NovelOverview';
+import StoryWorkflowPanel from '@/components/story/StoryWorkflowPanel';
 import Kbd from '@/components/common/Kbd';
 import ForeshadowHintBar from '@/components/knowledge/ForeshadowHintBar';
 
@@ -25,6 +26,7 @@ const EditorArea: React.FC = () => {
   const currentChapter = useNovelStore((s) => s.currentChapter);
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const focusMode = useUIStore((s) => s.focusMode);
+  const centerTab = useUIStore((s) => s.centerTab);
   const tabs = useTabStore((s) => s.tabs);
   const activeKey = useTabStore((s) => s.activeKey);
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
@@ -74,6 +76,13 @@ const EditorArea: React.FC = () => {
   useEffect(() => {
     useEditorStore.getState().mirrorTab(activeTab);
   }, [activeTab]);
+
+  // 中央起稿窗口：概览页「AI 起稿」按钮 / 作品列表入口派发此事件 → 切到中央 story 视图
+  useEffect(() => {
+    const openStory = () => useUIStore.getState().setCenterTab('story');
+    window.addEventListener('inkbloom:open-story-workflow', openStory);
+    return () => window.removeEventListener('inkbloom:open-story-workflow', openStory);
+  }, []);
 
   // 内容变化 → 回写 active tab 草稿并重置该 tab 的防抖计时
   const handleChange = useCallback((html: string) => {
@@ -203,8 +212,12 @@ const EditorArea: React.FC = () => {
     </div>
   ) : undefined;
 
-  // 欢迎页 / 作品概览页（无任何打开的 tab）
+  // 中央编辑区视图（无打开章节时）：story=AI 起稿中央窗口，overview=作品概览，均无则欢迎页
   if (!activeTab) {
+    // 中央起稿窗口（合并「创建作品 + AI 全本创作」，不再常驻右侧栏）
+    if (centerTab === 'story') {
+      return <StoryWorkflowPanel />;
+    }
     // 选中作品 → 显示作品概览；未选作品 → 欢迎页
     if (currentNovel) {
       return <NovelOverview />;
