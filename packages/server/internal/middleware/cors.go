@@ -7,11 +7,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// defaultDevOrigins keeps the Vite dev server working out of the box.
+// DefaultDevOrigins keeps the Vite dev server working out of the box.
 // Production deployments must set server.cors_origins (or
 // INKBLOOM_SERVER_CORS_ORIGINS, comma-separated) to their real domains —
-// tech plan v2 §4.2.
-var defaultDevOrigins = []string{
+// tech plan v2 §4.2. Exported so the WebSocket hub can reuse the exact same
+// fallback list (see internal/server/websocket.go) instead of duplicating it.
+var DefaultDevOrigins = []string{
 	"http://localhost:5173",
 	"http://localhost:3000",
 	"http://127.0.0.1:5173",
@@ -24,7 +25,7 @@ var defaultDevOrigins = []string{
 // no Access-Control-Allow-Origin header (deny-all by default).
 func CORS(allowedOrigins []string) gin.HandlerFunc {
 	if len(allowedOrigins) == 0 {
-		allowedOrigins = defaultDevOrigins
+		allowedOrigins = DefaultDevOrigins
 	}
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, o := range allowedOrigins {

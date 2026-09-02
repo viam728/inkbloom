@@ -217,9 +217,22 @@ func main() {
 	if cfg.IsLocal() {
 		wsHub.SetLocalAnon(true)
 	}
-	// WS Origin whitelist (v2 §5.3): reuse the CORS origin config so the
-	// browser-facing surface has one source of truth.
-	wsHub.SetAllowedOrigins(cfg.Server.CORSOrigins)
+	// WS Origin whitelist: reuse the SAME contract as the CORS middleware so
+	// the browser-facing surface has one source of truth. When no origins are
+	// configured, fall back to the built-in dev origins (Vite :3000/:5173 and
+	// the desktop shell :18080). Without this, the dev SPA is served from a
+	// different origin than the API (e.g. http://localhost:3000 proxied to
+	// :8080), the browser WS handshake 403s, and vite logs
+	// "ws proxy socket error: ECONNRESET" (the user-reported symptom). This
+	// path runs in BOTH cloud and local dev modes — gating on IsLocal() alone
+	// missed the (cloud-mode) docker-compose dev deployment. Production
+	// deployments configure server.cors_origins and that list becomes the
+	// strict whitelist instead.
+	wsOrigins := cfg.Server.CORSOrigins
+	if len(wsOrigins) == 0 {
+		wsOrigins = middleware.DefaultDevOrigins
+	}
+	wsHub.SetAllowedOrigins(wsOrigins)
 	wsHub.SetAuthenticator(func(token string) (int64, error) {
 		claims, err := tokenMgr.ParseTyped(token, authtoken.TypeAccess)
 		if err != nil {
