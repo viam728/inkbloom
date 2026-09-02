@@ -191,7 +191,10 @@ export function useCommandItems(query: string): PaletteItem[] {
       title: n.title,
       subtitle: `作品 · ${n.word_count ?? 0} 字`,
       keywords: 'novel 小说 作品',
-      action: () => selectNovel(n),
+      action: () => {
+        selectNovel(n);
+        useUIStore.getState().setCenterTab('overview');
+      },
     }));
 
     const chapterItems: PaletteItem[] = chapters.map((c) => ({

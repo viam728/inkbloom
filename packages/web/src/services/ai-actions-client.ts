@@ -258,3 +258,46 @@ function mockStoryTitles(idea: string, count: number): string[] {
   }
   return out.slice(0, count);
 }
+
+// ── AI 填写简介（全本创作窗口 / 简介编辑） ───────────────────────────────
+// 预留端点 POST /ai/story-description（与 story-title 同约定）：
+//   req:  { idea: string; title?: string; count?: number }
+//   resp: { descriptions: string[] }
+// 后端未实现时，开发环境（import.meta.env.DEV）自动降级为本地启发式 mock，
+// 保证「AI 生成简介」按钮在本地始终可演示；接入真实 LLM 后返回 AI 生成的简介正文。
+export async function suggestStoryDescription(
+  idea: string,
+  title = '',
+  count = 3,
+): Promise<string[]> {
+  try {
+    const data = (await apiClient.post('/ai/story-description', { idea, title, count })) as unknown as {
+      descriptions?: string[];
+    };
+    if (data?.descriptions?.length) return data.descriptions.slice(0, count);
+    throw new Error('empty descriptions');
+  } catch (e) {
+    if (!DEV_MOCK) throw e;
+    return mockStoryDescriptions(idea, title, count);
+  }
+}
+
+// 本地启发式简介：以创意/书名为种子，套用常见网文简介模板生成多句简介正文。
+function mockStoryDescriptions(idea: string, title = '', count = 3): string[] {
+  const clean = (idea || '').replace(/\s+/g, ' ').trim();
+  const kw = (clean.match(/[一-龥]{2,4}/g) || []).slice(0, 2);
+  const subject = title?.trim() || (kw.length ? kw.join('与') : '主角');
+  const templates: string[] = [
+    `${subject}本是一介寻常之人，命运的齿轮却在某个雨夜悄然转动——一封迟到的来信、一段被掩埋的往事，将他推入波谲云诡的漩涡。前路未明，唯一能依靠的，只有自己那颗不肯认命的心。`,
+    `故事始于${subject}的一次意外抉择。那一步迈出，便再难回头：旧日的诺言、新生的敌意、还有藏在温柔笑容背后的真相，交织成一张无处可逃的网。江湖很大，可容身之处，却越来越少。`,
+    `世道倾颓，${subject}在夹缝中挣扎求生。他原只想护住身边寥寥数人，却被迫卷入更大的棋局——皇权、门派、暗潮涌动的势力各怀心思。当棋子开始思考落子的理由，棋局便再不由执子人掌控。`,
+    `一念成佛，一念成魔。${subject}站在命运的岔路口，身后是回不去的安稳，眼前是看不清的迷雾。每一次选择都在改写结局，而真正的敌人，或许从来都不在明处。`,
+    `${subject}以为自己只是尘埃里的一粒微光，直到某天发现，那束光竟能照亮整片黑暗。逆旅之中，他学会了与孤独为伴，也终于懂得：所谓成长，不过是把哭声调成静音，再一步步走下去。`,
+  ];
+  const out: string[] = [];
+  for (const t of templates) {
+    if (!out.includes(t)) out.push(t);
+    if (out.length >= count) break;
+  }
+  return out.slice(0, count);
+}

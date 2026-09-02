@@ -30,6 +30,8 @@ const NovelList: React.FC = () => {
       setShowCreate(false);
       showToast(`作品「${title}」创建成功`, 'success');
       if (novel?.id) await selectNovel(novel);
+      // 切换书本后回到该书的简介页（缺陷4：同步切换到其他书本的简介页）
+      useUIStore.getState().setCenterTab('overview');
     } catch {
       showToast('创建失败，请重试', 'error');
     } finally {
@@ -102,7 +104,10 @@ const NovelList: React.FC = () => {
         return (
           <div
             key={novel.id}
-            onClick={() => selectNovel(novel)}
+            onClick={() => {
+              selectNovel(novel);
+              useUIStore.getState().setCenterTab('overview');
+            }}
             className={`group relative flex items-center gap-2.5 mx-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150 ${
               active
                 ? 'bg-gradient-to-r from-brand-600/20 to-brand-600/5 text-neutral-100'
@@ -186,6 +191,7 @@ const NovelList: React.FC = () => {
         onSelect={(novel) => {
           setExpandedOpen(false);
           selectNovel(novel);
+          useUIStore.getState().setCenterTab('overview');
         }}
       />
     </div>

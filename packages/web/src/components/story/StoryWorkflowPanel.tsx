@@ -5,7 +5,7 @@ import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { useUIStore } from '@/stores/ui-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
-import { suggestStoryTitle } from '@/services/ai-actions-client';
+import { suggestStoryTitle, suggestStoryDescription } from '@/services/ai-actions-client';
 import { toast } from '@/components/common/Toast';
 
 /**
@@ -52,6 +52,9 @@ const StoryWorkflowPanel: React.FC = () => {
   // AI 填写书名：候选列表 + 生成中态
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [aiFilling, setAiFilling] = useState(false);
+  // AI 生成简介：候选列表 + 生成中态
+  const [descSuggestions, setDescSuggestions] = useState<string[]>([]);
+  const [descFilling, setDescFilling] = useState(false);
   // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
@@ -142,6 +145,34 @@ const StoryWorkflowPanel: React.FC = () => {
       toast.show('AI 起名失败，请稍后重试', 'error');
     } finally {
       setAiFilling(false);
+    }
+  };
+
+  // AI 生成简介：以创意/书名为种子，调用 AI 生成完整简介正文（DEV 降级为本地启发式）
+  const handleAIFillDescription = async () => {
+    const seed = logline.trim() || title.trim();
+    if (!seed) {
+      toast.show('请先填写创意或书名，AI 才能据此生成简介', 'error');
+      return;
+    }
+    setDescFilling(true);
+    try {
+      const descs = await suggestStoryDescription(seed, title.trim() || undefined, 3);
+      if (descs.length) {
+        setDescription(descs[0]);
+        setDescSuggestions(descs.slice(0, 3));
+        // 简介被 AI 改写后，提示用户可保存（选中作品时）
+        if (currentNovel && descs[0] !== (currentNovel.description ?? '')) {
+          toast.show('已生成简介，可点「保存简介」写入作品', 'success');
+        }
+      } else {
+        toast.show('AI 未返回简介，可手动填写', 'error');
+      }
+    } catch (e) {
+      console.error('ai fill description failed', e);
+      toast.show('AI 生成简介失败，请稍后重试', 'error');
+    } finally {
+      setDescFilling(false);
     }
   };
 
@@ -319,14 +350,43 @@ const StoryWorkflowPanel: React.FC = () => {
 
             {/* 简介（编辑入口已迁至此处，替代原概览页的只读/编辑） */}
             <div className="mb-3">
-              <label className="block text-[11px] text-neutral-400 mb-1">简介</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] text-neutral-400">简介</label>
+                <button
+                  type="button"
+                  onClick={handleAIFillDescription}
+                  disabled={descFilling}
+                  title="AI 根据创意/书名生成完整简介"
+                  className="shrink-0 flex items-center gap-1 px-2 py-1 text-[11px] rounded-md bg-violet-500/15 text-violet-200 border border-violet-500/30 hover:bg-violet-500/25 disabled:opacity-50 transition-colors"
+                >
+                  {descFilling ? <Loader2 size={12} className="animate-spin" /> : <PenLine size={12} />}
+                  AI生成简介
+                </button>
+              </div>
               <textarea
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  setDescSuggestions([]);
+                }}
                 rows={3}
                 placeholder="作品简介（可选），帮助 AI 更好地理解你的故事…"
                 className="w-full px-2.5 py-2 text-sm bg-white/5 border border-white/8 rounded-lg outline-none focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500 resize-y"
               />
+              {descSuggestions.length > 0 && (
+                <div className="flex flex-col gap-1.5 mt-1.5">
+                  {descSuggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setDescription(s)}
+                      className="text-left px-2.5 py-2 text-[11px] leading-relaxed rounded-md bg-white/5 border border-white/10 text-neutral-300 hover:border-violet-500/40 hover:text-violet-200 transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
               {currentNovel && description.trim() !== (currentNovel.description ?? '') && (
                 <button
                   type="button"
