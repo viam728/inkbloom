@@ -14,147 +14,149 @@ import apiClient from './api-client';
  */
 
 export type StoryStage =
-  | 'idea'
-  | 'outline'
-  | 'plan_chapters'
-  | 'draft_chapter'
-  | 'verify'
-  | 'finalize'
-  | 'done';
+    | 'idea'
+    | 'outline'
+    | 'plan_chapters'
+    | 'draft_chapter'
+    | 'verify'
+    | 'finalize'
+    | 'done';
 
 export type StoryStatus = 'pending' | 'running' | 'paused' | 'done' | 'failed';
 
 export interface AdoptedChapter {
-  chapter_key?: string;
-  chapter_id?: number;
-  title?: string;
-  adopted_at?: string;
+    chapter_key?: string;
+    chapter_id?: number;
+    title?: string;
+    adopted_at?: string;
 }
 
 export interface ForeshadowCandidate {
-  description?: string;
-  anchor?: string;
-  expect_chapter?: number;
-  confidence?: number;
-  reason?: string;
+    description?: string;
+    anchor?: string;
+    expect_chapter?: number;
+    confidence?: number;
+    reason?: string;
 }
 
 export interface ConsistencyIssue {
-  description?: string;
-  entity?: string;
-  severity?: string;
-  [key: string]: unknown;
+    description?: string;
+    entity?: string;
+    severity?: string;
+    [key: string]: unknown;
 }
 
 export interface StoryStagePayload {
-  scene?: string;
-  content?: string;
-  generated?: string;
-  adopted?: AdoptedChapter[];
-  settled?: {
-    knowledge_nodes?: number;
-    foreshadow_candidates?: ForeshadowCandidate[];
-  };
-  issues?: ConsistencyIssue[];
-  issue_count?: number;
-  degraded?: boolean;
-  [key: string]: unknown;
+    scene?: string;
+    content?: string;
+    generated?: string;
+    adopted?: AdoptedChapter[];
+    settled?: {
+        knowledge_nodes?: number;
+        foreshadow_candidates?: ForeshadowCandidate[];
+    };
+    issues?: ConsistencyIssue[];
+    issue_count?: number;
+    degraded?: boolean;
+    [key: string]: unknown;
 }
 
 export interface StoryJob {
-  id: number;
-  novel_id: number;
-  title: string;
-  logline: string;
-  stage: StoryStage;
-  status: StoryStatus;
-  progress: number;
-  total_steps: number;
-  stage_payload: StoryStagePayload;
-  config: StoryJobConfig;
-  result: Record<string, unknown> | null;
-  last_error: string;
-  chapter_keys: number;
-  created_at: string;
-  updated_at: string;
+    id: number;
+    novel_id: number;
+    title: string;
+    logline: string;
+    stage: StoryStage;
+    status: StoryStatus;
+    progress: number;
+    total_steps: number;
+    stage_payload: StoryStagePayload;
+    /** 各阶段结果快照（按阶段 key 存储，切换阶段可回看/预览） */
+    stage_snapshots?: Partial<Record<StoryStage, StoryStagePayload>>;
+    config: StoryJobConfig;
+    result: Record<string, unknown> | null;
+    last_error: string;
+    chapter_keys: number;
+    created_at: string;
+    updated_at: string;
 }
 
 /** 生成设置（前端动态滑条映射） */
 export interface StoryJobConfig {
-  chapter_count: number;
-  words_per_chapter: number;
-  style: string;
-  auto_settle: boolean;
-  /** 创作意图（C9）：定受众/意图，决定叙事取向 */
-  intent?: string;
-  audience?: string;
+    chapter_count: number;
+    words_per_chapter: number;
+    style: string;
+    auto_settle: boolean;
+    /** 创作意图（C9）：定受众/意图，决定叙事取向 */
+    intent?: string;
+    audience?: string;
 }
 
 export interface StoryJobsList {
-  jobs: StoryJob[];
-  total: number;
-  page: number;
-  page_size: number;
+    jobs: StoryJob[];
+    total: number;
+    page: number;
+    page_size: number;
 }
 
 export interface CreateStoryJobRequest {
-  novel_id: number;
-  title: string;
-  logline: string;
-  config?: StoryJobConfig;
+    novel_id: number;
+    title: string;
+    logline: string;
+    config?: StoryJobConfig;
 }
 
 export async function createStoryJob(req: CreateStoryJobRequest): Promise<StoryJob> {
-  const data = (await apiClient.post('/story/jobs', req)) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.post('/story/jobs', req)) as unknown as StoryJob;
+    return data;
 }
 
 export async function listStoryJobs(opts: { novelId?: number; page?: number; pageSize?: number }): Promise<StoryJobsList> {
-  const params: Record<string, unknown> = {};
-  if (opts.novelId) params.novel_id = opts.novelId;
-  if (opts.page) params.page = opts.page;
-  if (opts.pageSize) params.page_size = opts.pageSize;
-  const data = (await apiClient.get('/story/jobs', { params })) as unknown as StoryJobsList;
-  return data;
+    const params: Record<string, unknown> = {};
+    if (opts.novelId) params.novel_id = opts.novelId;
+    if (opts.page) params.page = opts.page;
+    if (opts.pageSize) params.page_size = opts.pageSize;
+    const data = (await apiClient.get('/story/jobs', { params })) as unknown as StoryJobsList;
+    return data;
 }
 
 export async function getStoryJob(id: number): Promise<StoryJob> {
-  const data = (await apiClient.get(`/story/jobs/${id}`)) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.get(`/story/jobs/${id}`)) as unknown as StoryJob;
+    return data;
 }
 
 export async function deleteStoryJob(id: number): Promise<void> {
-  await apiClient.delete(`/story/jobs/${id}`);
+    await apiClient.delete(`/story/jobs/${id}`);
 }
 
 export async function generateStoryStage(id: number, instruction?: string): Promise<StoryJob> {
-  const data = (await apiClient.post(`/story/jobs/${id}/generate`, { instruction })) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.post(`/story/jobs/${id}/generate`, { instruction })) as unknown as StoryJob;
+    return data;
 }
 
 export async function adoptStoryChapter(id: number, req: { chapter_key: string; title: string; content: string }): Promise<StoryJob> {
-  const data = (await apiClient.post(`/story/jobs/${id}/chapters/adopt`, req)) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.post(`/story/jobs/${id}/chapters/adopt`, req)) as unknown as StoryJob;
+    return data;
 }
 
 export async function advanceStoryStage(id: number): Promise<StoryJob> {
-  const data = (await apiClient.post(`/story/jobs/${id}/advance`, {})) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.post(`/story/jobs/${id}/advance`, {})) as unknown as StoryJob;
+    return data;
 }
 
 /** 直接设置阶段（滑动选择器，任意顺序跳转） */
 export async function setStoryStage(id: number, stage: StoryStage): Promise<StoryJob> {
-  const data = (await apiClient.post(`/story/jobs/${id}/stage`, { stage })) as unknown as StoryJob;
-  return data;
+    const data = (await apiClient.post(`/story/jobs/${id}/stage`, { stage })) as unknown as StoryJob;
+    return data;
 }
 
 /** 阶段中文标签（供工作流面板渲染） */
 export const STORY_STAGE_LABELS: Record<StoryStage, string> = {
-  idea: '创意',
-  outline: '大纲',
-  plan_chapters: '分章',
-  draft_chapter: '成稿',
-  verify: '校验',
-  finalize: '定稿',
-  done: '完成',
+    idea: '创意',
+    outline: '大纲',
+    plan_chapters: '分章',
+    draft_chapter: '成稿',
+    verify: '校验',
+    finalize: '定稿',
+    done: '完成',
 };

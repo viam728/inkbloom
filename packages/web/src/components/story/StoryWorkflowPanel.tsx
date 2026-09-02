@@ -338,13 +338,12 @@ const StoryWorkflowPanel: React.FC = () => {
                   const current = idx === activeIdx;
                   const reached = idx <= activeIdx;
                   return (
-                    <button
+                    <div
                       key={st}
-                      onClick={() => jumpStage(activeJob.id, st)}
                       className={`flex-1 flex flex-col items-center gap-1 text-[9px] transition-colors ${current ? 'text-violet-300 font-medium' : reached ? 'text-neutral-400' : 'text-neutral-600'}`}
                     >
                       {STORY_STAGE_LABELS[st]}
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -370,14 +369,15 @@ const StoryWorkflowPanel: React.FC = () => {
           </div>
 
           {/* 阶段产物预览 */}
-          <StagePreview
-            job={activeJob}
-            expanded={expandedContent}
-            onToggleExpand={() => setExpandedContent(!expandedContent)}
-            onAdopt={handleAdopt}
-            adopting={adopting}
-            onRefresh={refreshActive}
-          />
+                    <StagePreview
+                        job={activeJob}
+                        expanded={expandedContent}
+                        onToggleExpand={() => setExpandedContent(!expandedContent)}
+                        onAdopt={handleAdopt}
+                        adopting={adopting}
+                        onRefresh={refreshActive}
+                        onAdvance={handleAdvance}
+                    />
         </div>
       )}
     </div>
@@ -417,11 +417,15 @@ const StagePreview: React.FC<{
   onAdopt: () => void;
   adopting: boolean;
   onRefresh: () => void;
-}> = ({ job, expanded, onToggleExpand, onAdopt, adopting, onRefresh }) => {
-  const content = (job.stage_payload?.content as string) || '';
+  onAdvance: () => void;
+}> = ({ job, expanded, onToggleExpand, onAdopt, adopting, onRefresh, onAdvance }) => {
+  // 预览以「当前查看阶段」的快照为准：切换回历史阶段时展示当时生成的结果，
+  // 而非总是当前 stage_payload（stage_payload 仅保留最新一次生成 + 采纳记录）。
+  const snap = job.stage_snapshots?.[job.stage] ?? job.stage_payload;
+  const content = (snap?.content as string) || '';
   const isVerify = job.stage === 'verify';
-  const issues = job.stage_payload?.issues || [];
-  const candidates = job.stage_payload?.settled?.foreshadow_candidates || [];
+  const issues = snap?.issues || [];
+  const candidates = snap?.settled?.foreshadow_candidates || [];
 
   // verify 阶段：展示一致性报告（无正文 content）
   if (isVerify) {
@@ -444,7 +448,7 @@ const StagePreview: React.FC<{
             ))}
           </div>
         )}
-        {job.stage_payload?.degraded && (
+        {snap?.degraded && (
           <p className="text-[11px] text-neutral-500 mt-2">（一致性检查不可用，已降级跳过）</p>
         )}
       </div>
@@ -470,10 +474,10 @@ const StagePreview: React.FC<{
     <div className="rounded-xl bg-white/4 border border-white/8 p-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-neutral-300">
-          {job.stage_payload?.scene === 'chapter' ? '本章正文' : '阶段产物'}
-          {job.stage_payload?.generated ? (
+          {snap?.scene === 'chapter' ? '本章正文' : '阶段产物'}
+          {snap?.generated ? (
             <span className="text-neutral-600 ml-2 text-[10px]">
-              {new Date(job.stage_payload.generated).toLocaleTimeString()}
+              {new Date(snap.generated).toLocaleTimeString()}
             </span>
           ) : null}
         </span>
@@ -518,6 +522,17 @@ const StagePreview: React.FC<{
         </button>
       )}
 
+      {/* 非成稿阶段：底部给出「采纳本阶段并继续」按钮（采纳=确认该阶段结果并推进） */}
+      {!isDraft && (
+        <button
+          onClick={onAdvance}
+          className="mt-3 w-full py-2 rounded-lg bg-violet-600/15 hover:bg-violet-600/25 text-violet-300 text-sm font-medium transition-all"
+        >
+          <ArrowRight size={14} className="inline mr-1" />
+          采纳本阶段并进入下一阶段
+        </button>
+      )}
+
       {/* 闭环沉淀结果：知识图谱 + 伏笔候选 */}
       {candidates.length > 0 && (
         <div className="mt-3 border-t border-white/6 pt-2">
@@ -531,7 +546,7 @@ const StagePreview: React.FC<{
           </div>
         </div>
       )}
-      {job.stage_payload?.settled?.knowledge_nodes ? (
+      {snap?.settled?.knowledge_nodes ? (
         <p className="mt-2 text-[11px] text-emerald-400/80">✓ 已提取实体入知识图谱</p>
       ) : null}
     </div>

@@ -17,21 +17,22 @@ type CreateStoryJobRequest struct {
 
 // StoryJobResponse is the persisted job state returned to the client.
 type StoryJobResponse struct {
-	ID          int64           `json:"id"`
-	NovelID     int64           `json:"novel_id"`
-	Title       string          `json:"title"`
-	Logline     string          `json:"logline"`
-	Stage       string          `json:"stage"`
-	Status      string          `json:"status"`
-	Progress    int             `json:"progress"`
-	TotalSteps  int             `json:"total_steps"`
-	StagePayload json.RawMessage `json:"stage_payload"`
-	Config      json.RawMessage `json:"config"`
-	Result      json.RawMessage `json:"result"`
-	LastError   string          `json:"last_error"`
-	ChapterKeys int             `json:"chapter_keys"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID             int64           `json:"id"`
+	NovelID        int64           `json:"novel_id"`
+	Title          string          `json:"title"`
+	Logline        string          `json:"logline"`
+	Stage          string          `json:"stage"`
+	Status         string          `json:"status"`
+	Progress       int             `json:"progress"`
+	TotalSteps     int             `json:"total_steps"`
+	StagePayload   json.RawMessage `json:"stage_payload"`
+	StageSnapshots json.RawMessage `json:"stage_snapshots"`
+	Config         json.RawMessage `json:"config"`
+	Result         json.RawMessage `json:"result"`
+	LastError      string          `json:"last_error"`
+	ChapterKeys    int             `json:"chapter_keys"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 // GenerateStageRequest advances the job to generate the current stage's
@@ -57,8 +58,8 @@ type AdoptChapterRequest struct {
 
 // ListStoryJobsResponse is the paginated listing.
 type ListStoryJobsResponse struct {
-	Jobs []StoryJobResponse `json:"jobs"`
-	Total int64             `json:"total"`
-	Page  int               `json:"page"`
-	PageSize int            `json:"page_size"`
+	Jobs     []StoryJobResponse `json:"jobs"`
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
 }

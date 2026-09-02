@@ -43,18 +43,22 @@ const (
 // chapters / novel_memory) after author confirmation. StagePayload keeps the
 // transient stage output for preview and resumable continuation.
 type StoryJob struct {
-	ID        int64          `gorm:"primaryKey" json:"id"`
-	UserID    int64          `gorm:"index;not null" json:"user_id"`
-	NovelID   int64          `gorm:"index;not null" json:"novel_id"`
-	Title     string         `gorm:"size:255" json:"title"`
-	Logline   string         `gorm:"type:text" json:"logline"`
-	Stage     string         `gorm:"size:64;not null;default:'idea'" json:"stage"`
-	Status    string         `gorm:"size:32;not null;default:'pending'" json:"status"`
-	Progress  int            `gorm:"not null;default:0" json:"progress"`
-	TotalSteps int           `gorm:"not null;default:0" json:"total_steps"`
+	ID         int64  `gorm:"primaryKey" json:"id"`
+	UserID     int64  `gorm:"index;not null" json:"user_id"`
+	NovelID    int64  `gorm:"index;not null" json:"novel_id"`
+	Title      string `gorm:"size:255" json:"title"`
+	Logline    string `gorm:"type:text" json:"logline"`
+	Stage      string `gorm:"size:64;not null;default:'idea'" json:"stage"`
+	Status     string `gorm:"size:32;not null;default:'pending'" json:"status"`
+	Progress   int    `gorm:"not null;default:0" json:"progress"`
+	TotalSteps int    `gorm:"not null;default:0" json:"total_steps"`
 	// StagePayload holds the current stage output (outline acts / chapter
 	// plan / drafted chapter preview / verify report) as JSONB.
 	StagePayload datatypes.JSON `gorm:"type:jsonb" json:"stage_payload"`
+	// StageSnapshots keeps each stage's output keyed by stage name, enabling
+	// free backward/forward navigation to re-preview prior results. StagePayload
+	// remains the current transient output + adopted records.
+	StageSnapshots datatypes.JSON `gorm:"type:jsonb" json:"stage_snapshots"`
 	// Config holds the author's generation settings (chapter count, target
 	// words per chapter, style, auto-settle toggle) as JSONB — the dynamic
 	// sliders the workflow panel drives (plan P2-c).
@@ -62,8 +66,8 @@ type StoryJob struct {
 	// Result holds the terminal summary once the job reaches done.
 	Result datatypes.JSON `gorm:"type:jsonb" json:"result"`
 	// LastError records the most recent stage failure reason.
-	LastError string `gorm:"type:text" json:"last_error"`
-	ChapterKeys int          `gorm:"not null;default:0" json:"chapter_keys"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	LastError   string    `gorm:"type:text" json:"last_error"`
+	ChapterKeys int       `gorm:"not null;default:0" json:"chapter_keys"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

@@ -30,17 +30,17 @@ var ErrStoryJobNotFound = repository.ErrStoryJobNotFound
 // novel_memory) only after the author confirms it via the adopt endpoints.
 // This keeps the AI output a preview until the author takes ownership.
 type StoryService struct {
-	repo           repository.StoryJobRepository
-	novelRepo      repository.NovelRepository
-	chapterRepo    repository.ChapterRepository
-	docSvc         *NovelDocService
-	chapterSvc     *ChapterService
-	agentContext   *AgentContextService
-	knowledgeSvc   *KnowledgeService   // optional: auto-extract into knowledge graph
-	foreshadowSvc  *ForeshadowService  // optional: auto-detect planted threads
-	aiServiceURL   string
-	httpClient     *http.Client
-	logger         *zap.Logger
+	repo          repository.StoryJobRepository
+	novelRepo     repository.NovelRepository
+	chapterRepo   repository.ChapterRepository
+	docSvc        *NovelDocService
+	chapterSvc    *ChapterService
+	agentContext  *AgentContextService
+	knowledgeSvc  *KnowledgeService  // optional: auto-extract into knowledge graph
+	foreshadowSvc *ForeshadowService // optional: auto-detect planted threads
+	aiServiceURL  string
+	httpClient    *http.Client
+	logger        *zap.Logger
 
 	// jobLocks serialises read-modify-write on a single job (adopt path).
 	// Lazy per-job mutexes guarded by jobLocksMu; single-instance only —
@@ -113,12 +113,12 @@ func (s *StoryService) CreateJob(ctx context.Context, userID int64, req *dto.Cre
 		return nil, err
 	}
 	job := &model.StoryJob{
-		UserID:       userID,
-		NovelID:      req.NovelID,
-		Title:        req.Title,
-		Logline:      req.Logline,
-		Stage:        model.StageIdea,
-		Status:       model.StoryJobPending,
+		UserID:  userID,
+		NovelID: req.NovelID,
+		Title:   req.Title,
+		Logline: req.Logline,
+		Stage:   model.StageIdea,
+		Status:  model.StoryJobPending,
 		// 阶段总数：idea/outline/plan_chapters/draft_chapter/verify/finalize/done 共 7 个
 		TotalSteps:   7,
 		StagePayload: []byte("{}"),
@@ -234,11 +234,28 @@ func (s *StoryService) GenerateStage(ctx context.Context, userID, id int64, inst
 		return s.toResponse(job), fmt.Errorf("AI stage failed: %s", out.Error)
 	}
 
-	job.StagePayload = mustJSON(map[string]interface{}{
+	generated := time.Now().UTC()
+	snap := map[string]interface{}{
 		"scene":     scene,
 		"content":   out.Content,
-		"generated": time.Now().UTC(),
-	})
+		"generated": generated,
+	}
+
+	// 把本阶段纯净结果写入 stage_snapshots（按阶段 key，切换可回看）
+	snaps := parseSnapshots(job.StageSnapshots)
+	snaps[job.Stage] = snap
+	job.StageSnapshots = mustJSON(snaps)
+
+	// StagePayload 保留当前结果 + 已采纳记录（生成不丢 adopted 幂等记录）
+	stagePayload := map[string]interface{}{
+		"scene":     scene,
+		"content":   out.Content,
+		"generated": generated,
+	}
+	if adopted := parseAdopted(job.StagePayload); len(adopted) > 0 {
+		stagePayload["adopted"] = adopted
+	}
+	job.StagePayload = mustJSON(stagePayload)
 	job.LastError = ""
 	s.repo.Update(ctx, job)
 	return s.toResponse(job), nil
@@ -314,7 +331,7 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	extracted, candidates := s.settleChapter(ctx, userID, job.NovelID, ch.ID, req.Content)
 	if extracted > 0 || len(candidates) > 0 {
 		payload["settled"] = map[string]interface{}{
-			"knowledge_nodes":      extracted,
+			"knowledge_nodes":       extracted,
 			"foreshadow_candidates": candidates,
 		}
 	}
@@ -343,6 +360,17 @@ func parseAdopted(raw []byte) []map[string]interface{} {
 		}
 	}
 	return adopted
+}
+
+// parseSnapshots decodes the per-stage result map. Never fails: a malformed or
+// empty snapshots value yields an empty map.
+func parseSnapshots(raw []byte) map[string]interface{} {
+	m := make(map[string]interface{})
+	if len(raw) == 0 || string(raw) == "null" {
+		return m
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m
 }
 
 // runVerifyStage checks the latest adopted chapter(s) for consistency against
@@ -380,13 +408,17 @@ func (s *StoryService) runVerifyStage(ctx context.Context, job *model.StoryJob) 
 		degraded = true
 	}
 
-	job.StagePayload = mustJSON(map[string]interface{}{
+	stageResult := map[string]interface{}{
 		"scene":       model.StageVerify,
 		"issues":      issues,
 		"issue_count": len(issues),
 		"degraded":    degraded,
 		"generated":   time.Now().UTC(),
-	})
+	}
+	snaps := parseSnapshots(job.StageSnapshots)
+	snaps[job.Stage] = stageResult
+	job.StageSnapshots = mustJSON(snaps)
+	job.StagePayload = mustJSON(stageResult)
 	job.LastError = ""
 	job.Status = model.StoryJobPending
 	s.repo.Update(ctx, job)
@@ -463,13 +495,13 @@ func (s *StoryService) SetStage(ctx context.Context, userID, id int64, target st
 		return nil, err
 	}
 	valid := map[string]bool{
-		model.StageIdea:          true,
-		model.StageOutline:       true,
-		model.StagePlanChapters:  true,
-		model.StageDraftChapter:  true,
-		model.StageVerify:        true,
-		model.StageFinalize:      true,
-		model.StageDone:          true,
+		model.StageIdea:         true,
+		model.StageOutline:      true,
+		model.StagePlanChapters: true,
+		model.StageDraftChapter: true,
+		model.StageVerify:       true,
+		model.StageFinalize:     true,
+		model.StageDone:         true,
 	}
 	if !valid[target] {
 		return nil, fmt.Errorf("invalid stage: %s", target)
@@ -609,21 +641,22 @@ func (s *StoryService) postAI(ctx context.Context, path string, payload interfac
 // toResponse maps a job to the response DTO.
 func (s *StoryService) toResponse(j *model.StoryJob) *dto.StoryJobResponse {
 	return &dto.StoryJobResponse{
-		ID:            j.ID,
-		NovelID:       j.NovelID,
-		Title:         j.Title,
-		Logline:       j.Logline,
-		Stage:         j.Stage,
-		Status:        j.Status,
-		Progress:      j.Progress,
-		TotalSteps:    j.TotalSteps,
-		StagePayload:  json.RawMessage(j.StagePayload),
-		Config:        json.RawMessage(j.Config),
-		Result:        json.RawMessage(j.Result),
-		LastError:     j.LastError,
-		ChapterKeys:   j.ChapterKeys,
-		CreatedAt:     j.CreatedAt,
-		UpdatedAt:     j.UpdatedAt,
+		ID:             j.ID,
+		NovelID:        j.NovelID,
+		Title:          j.Title,
+		Logline:        j.Logline,
+		Stage:          j.Stage,
+		Status:         j.Status,
+		Progress:       j.Progress,
+		TotalSteps:     j.TotalSteps,
+		StagePayload:   json.RawMessage(j.StagePayload),
+		StageSnapshots: json.RawMessage(j.StageSnapshots),
+		Config:         json.RawMessage(j.Config),
+		Result:         json.RawMessage(j.Result),
+		LastError:      j.LastError,
+		ChapterKeys:    j.ChapterKeys,
+		CreatedAt:      j.CreatedAt,
+		UpdatedAt:      j.UpdatedAt,
 	}
 }
 
