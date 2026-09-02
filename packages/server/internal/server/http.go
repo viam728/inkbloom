@@ -503,14 +503,26 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 
 			// Agent full-book creation pipeline (plan P1): story jobs.
 			if h.Story != nil {
-				aiGroup.POST("/story/jobs", h.Story.Create)
-				aiGroup.GET("/story/jobs", h.Story.List)
-				aiGroup.GET("/story/jobs/:id", h.Story.Get)
-				aiGroup.DELETE("/story/jobs/:id", h.Story.Delete)
-				aiGroup.POST("/story/jobs/:id/generate", h.Story.GenerateStage)
-				aiGroup.POST("/story/jobs/:id/chapters/adopt", h.Story.AdoptChapter)
-				aiGroup.POST("/story/jobs/:id/advance", h.Story.AdvanceStage)
-				aiGroup.POST("/story/jobs/:id/stage", h.Story.SetStage)
+				// Cheap state-management endpoints (create / list / get /
+				// delete / adopt / advance / stage) are plain DB ops. They
+				// ride the regular 20 req/s ScopeAPI quota, NOT the 1 req/s
+				// AI quota — otherwise rapid slider drags (POST /stage + the
+				// follow-up GET refresh in the same second) get 429'd and
+				// surface to the author as "切换阶段失败".
+				api.POST("/story/jobs", h.Story.Create)
+				api.GET("/story/jobs", h.Story.List)
+				api.GET("/story/jobs/:id", h.Story.Get)
+				api.DELETE("/story/jobs/:id", h.Story.Delete)
+				api.POST("/story/jobs/:id/chapters/adopt", h.Story.AdoptChapter)
+				api.POST("/story/jobs/:id/advance", h.Story.AdvanceStage)
+				api.POST("/story/jobs/:id/stage", h.Story.SetStage)
+				// The actual LLM generation call stays on the stricter 1 req/s
+				// AI quota (consistent with /aigc/generate above).
+				if h.RateLimiter != nil {
+					api.POST("/story/jobs/:id/generate", h.RateLimiter.Scope(middleware.ScopeAI), h.Story.GenerateStage)
+				} else {
+					api.POST("/story/jobs/:id/generate", h.Story.GenerateStage)
+				}
 			}
 		}
 

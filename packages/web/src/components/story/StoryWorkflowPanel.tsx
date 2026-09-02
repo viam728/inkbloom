@@ -115,8 +115,10 @@ const StoryWorkflowPanel: React.FC = () => {
     setDragStageIdx(null);
     if (target !== activeJob.stage) {
       try {
+        // jumpStage already updates activeJob from the POST response, so no
+        // follow-up GET is needed — that extra request was also what 429'd
+        // (and got silently swallowed) under the old 1 req/s AI bucket.
         await jumpStage(activeJob.id, target);
-        await refreshActive();
       } catch (e) {
         console.error('jump stage failed', e);
       }
