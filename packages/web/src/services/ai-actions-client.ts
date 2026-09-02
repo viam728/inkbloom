@@ -301,3 +301,47 @@ function mockStoryDescriptions(idea: string, title = '', count = 3): string[] {
   }
   return out.slice(0, count);
 }
+
+// ── AI 填写创意/一句话梗概（全本创作窗口） ─────────────────────────────────
+// 预留端点 POST /ai/story-logline（与 story-title 同约定）：
+//   req:  { title?: string; description?: string; count?: number }
+//   resp: { loglines: string[] }
+// 后端未实现时，开发环境自动降级为本地启发式 mock。
+export async function suggestStoryLogline(
+  title = '',
+  description = '',
+  count = 3,
+): Promise<string[]> {
+  try {
+    const data = (await apiClient.post('/ai/story-logline', { title, description, count })) as unknown as {
+      loglines?: string[];
+    };
+    if (data?.loglines?.length) return data.loglines.slice(0, count);
+    throw new Error('empty loglines');
+  } catch (e) {
+    if (!DEV_MOCK) throw e;
+    return mockStoryLoglines(title, description, count);
+  }
+}
+
+// 本地启发式创意：从书名/简介中提取主体，生成一句话梗概候选。
+function mockStoryLoglines(title = '', description = '', count = 3): string[] {
+  const t = title?.trim();
+  const d = description?.trim();
+  const seed = t || d || '一个关于成长与抉择的故事';
+  const kw = (seed.match(/[一-龥]{2,4}/g) || []).slice(0, 2);
+  const subject = kw.length ? kw.join('') : '主角';
+  const templates: string[] = [
+    `${subject}在命运的岔路口做出选择，从此踏上一条无法回头的路。`,
+    `当旧秩序崩塌，${subject}必须在乱世中找到属于自己的位置。`,
+    `${subject}本只想守护身边寥寥数人，却被卷入一场足以改写世界的棋局。`,
+    `一个关于${subject}的谜题，答案藏在过去与未来的交叠之处。`,
+    `${subject}在绝望中点燃微光，却没想到这束光会照亮整片黑暗。`,
+  ];
+  const out: string[] = [];
+  for (const tmpl of templates) {
+    if (!out.includes(tmpl)) out.push(tmpl);
+    if (out.length >= count) break;
+  }
+  return out.slice(0, count);
+}
