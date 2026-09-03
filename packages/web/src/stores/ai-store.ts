@@ -153,6 +153,11 @@ interface AIStore {
   notifyAgentContext: (text: string) => void;
 }
 
+function truncateErr(s: string): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > 160 ? `${t.slice(0, 160)}…` : t;
+}
+
 const initial = initialSessionState();
 
 // ── 模型选择（持久化 + 场景配置） ───────────────────────────────────────
@@ -281,10 +286,15 @@ export const useAIStore = create<AIStore>((set, get) => ({
         return;
       }
       console.error('agent chat failed', e);
+      // 透出后端具体错误（apiClient 解包 APIResponse.message），便于定位。
+      const detail =
+        (e as { response?: { data?: { message?: string } } })?.response?.data?.message || '';
       const assistantMsg: AIMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: '抱歉，Agent 执行出错，请重试。',
+        content: detail
+          ? `Agent 执行出错：${truncateErr(detail)}`
+          : '抱歉，Agent 执行出错，请重试。',
         timestamp: new Date(),
       };
       const nextMessages = [...get().messages, assistantMsg];

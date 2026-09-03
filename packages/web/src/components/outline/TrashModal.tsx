@@ -3,7 +3,11 @@ import { Check, RotateCcw, Trash2, X } from 'lucide-react';
 import Modal from '@/components/common/Modal';
 import { useToast } from '@/components/common/Toast';
 import { useTrashStore } from '@/stores/trash-store';
+import type { TrashItem } from '@/services/trash-client';
 import type { OutlineAct } from '@/stores/outline-store';
+
+/** 稳定引用的空数组：selector 返回新引用会导致 useSyncExternalStore 无限重渲染 */
+const EMPTY_ITEMS: TrashItem[] = [];
 
 interface TrashModalProps {
   open: boolean;
@@ -20,7 +24,7 @@ interface TrashModalProps {
  * 彻底删除为物理删除，不可恢复。
  */
 const TrashModal: React.FC<TrashModalProps> = ({ open, novelId, acts, onClose, onRestored }) => {
-  const items = useTrashStore((s) => s.byNovel[novelId] ?? []);
+  const items = useTrashStore((s) => s.byNovel[novelId]) ?? EMPTY_ITEMS;
   const loading = useTrashStore((s) => s.loading);
   const restoringId = useTrashStore((s) => s.restoringId);
   const restore = useTrashStore((s) => s.restore);
