@@ -180,7 +180,13 @@ const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作�
 // final answer. Returns the final answer text and the executed tool summary.
 // novelID is the author's currently-selected work (0 when none): create/write
 // tools fall back to it so the Agent never drafts without a target work.
-func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, messages []map[string]any) (string, []map[string]any, error) {
+// Run executes one full Agent loop: LLM decides tool calls, the Go service
+// executes them for the real user and feeds results back until a final answer
+// (or the step cap) is reached. model is the UI model selector's current
+// value — empty means ai-service's default model; it is forwarded verbatim on
+// every LLM call in the loop so mid-conversation switches take effect on the
+// very next step.
+func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, messages []map[string]any, model string) (string, []map[string]any, error) {
 	msgs := make([]map[string]any, 0, len(messages)+1)
 	sys := agentSystemPrompt
 	if novelID > 0 {
@@ -194,7 +200,7 @@ func (s *AgentService) Run(ctx context.Context, userID int64, novelID int64, mes
 	var executed []map[string]any
 	const maxSteps = 6
 	for step := 0; step < maxSteps; step++ {
-		resp, err := s.callLLM(ctx, msgs)
+		resp, err := s.callLLM(ctx, msgs, model)
 		if err != nil {
 			return "", executed, err
 		}
@@ -255,12 +261,17 @@ type llmResponse struct {
 	ToolCalls        []agentToolCall `json:"tool_calls"`
 }
 
-// callLLM performs one tool-calling LLM request.
-func (s *AgentService) callLLM(ctx context.Context, messages []map[string]any) (*llmResponse, error) {
-	body, _ := json.Marshal(map[string]any{
+// callLLM performs one tool-calling LLM request. model is forwarded verbatim
+// (empty = ai-service default) so the UI selector's choice reaches upstream.
+func (s *AgentService) callLLM(ctx context.Context, messages []map[string]any, model string) (*llmResponse, error) {
+	payload := map[string]any{
 		"messages": messages,
 		"tools":    s.toolSchema(),
-	})
+	}
+	if model != "" {
+		payload["model"] = model
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.aiServiceURL+"/api/agent/chat", bytes.NewReader(body))
 	if err != nil {
 		return nil, err

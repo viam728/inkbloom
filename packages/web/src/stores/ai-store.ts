@@ -157,7 +157,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
   currentSessionId: initial.currentSessionId,
   isStreaming: false,
   streamingContent: '',
-  currentModel: 'deepseek-v4-flash',
+  currentModel: 'glm-5.3-flash',
 
   inlineSuggestion: null,
   isInlineStreaming: false,
@@ -202,7 +202,8 @@ export const useAIStore = create<AIStore>((set, get) => ({
 
     try {
       const currentNovelId = useNovelStore.getState().currentNovel?.id ?? 0;
-      const result = await agentChat(history, currentNovelId, controller.signal);
+      // 模型选择器当前值一路透传：前端 → Go Agent → ai-service → 上游。
+      const result = await agentChat(history, currentNovelId, controller.signal, get().currentModel);
 
       const toolExecutions = (result.tool_executions ?? []).map((t) => ({
         tool: t.tool,

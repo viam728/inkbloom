@@ -49,15 +49,18 @@ export function buildUserContent(
     return parts.length > 0 ? parts : text;
 }
 
-/** 发送一条消息给创作 Agent，返回最终回复 + 执行过的工具列表。 */
+/** 发送一条消息给创作 Agent，返回最终回复 + 执行过的工具列表。
+ *  model：UI 模型选择器当前值；为空时后端用默认模型。 */
 export async function agentChat(
     messages: AgentChatMessage[],
   novelId?: number,
   signal?: AbortSignal,
+  model?: string,
 ): Promise<AgentChatResult> {
   const data = (await apiClient.post('/agent/chat', {
     messages,
     novel_id: novelId ?? 0,
+    model: model || undefined,
   }, { signal })) as unknown as AgentChatResult;
   return data;
 }

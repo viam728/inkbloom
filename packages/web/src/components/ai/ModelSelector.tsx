@@ -7,158 +7,105 @@ export interface ModelOption {
   label: string;
   desc: string;
   icon: React.ReactNode;
-  /** 厂商分组名：下拉列表中变化时插入分组标题 */
-  group?: string;
 }
 
+/**
+ * 可选模型列表。
+ * 智谱 GLM 段为 API key 实际可调用的模型（GET /models 实测返回），
+ * 走 open.bigmodel.cn OpenAI 兼容端点（ai-service 按 glm-* 前缀路由）。
+ */
 export const MODELS: ModelOption[] = [
+  // 智谱 GLM（默认段：glm-5.3-flash 最快最省，为项目默认模型）
   {
-    value: 'deepseek-v4-flash',
-    label: 'DeepSeek V4 Flash',
-    desc: '极速响应 · 默认模型',
+    value: 'glm-5.3-flash',
+    label: 'glm-5.3-flash',
+    desc: '默认 · 最快最省 · 轻量日常',
     icon: <Zap size={14} />,
-    group: 'DeepSeek / OpenAI',
   },
   {
-    value: 'deepseek-v4-pro',
-    label: 'DeepSeek V4 Pro',
-    desc: '旗舰能力 · 深度构思',
-    icon: <Sparkles size={14} />,
-    group: 'DeepSeek / OpenAI',
+    value: 'glm-5-turbo',
+    label: 'glm-5-turbo',
+    desc: '长任务 · 高性价比',
+    icon: <Zap size={14} />,
   },
   {
-    value: 'gpt-4o-mini',
-    label: 'GPT-4o Mini',
-    desc: '快速轻量 · 日常创作',
-    icon: <MessageSquareText size={14} />,
-    group: 'DeepSeek / OpenAI',
-  },
-  {
-    value: 'gpt-4o',
-    label: 'GPT-4o',
-    desc: '旗舰能力 · 深度构思',
+    value: 'glm-5',
+    label: 'glm-5',
+    desc: '上一代旗舰 · 均衡',
     icon: <Cpu size={14} />,
-    group: 'DeepSeek / OpenAI',
-  },
-  {
-    value: 'deepseek-chat',
-    label: 'DeepSeek Chat',
-    desc: '长文本 · 情节推演',
-    icon: <MessageSquareText size={14} />,
-    group: 'DeepSeek / OpenAI',
-  },
-  // 智谱 GLM（按 tokens 计费基础模型，走 open.bigmodel.cn OpenAI 兼容端点）
-  {
-    value: 'glm-4.5-air',
-    label: 'GLM-4.5 Air',
-    desc: '高性价比 · 轻量主力',
-    icon: <Bot size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.5-airx',
-    label: 'GLM-4.5 AirX',
-    desc: '极速响应 · 轻量强性能',
-    icon: <Zap size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.5-flash',
-    label: 'GLM-4.5 Flash',
-    desc: '免费 · 日常创作',
-    icon: <MessageSquareText size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.7-flash',
-    label: 'GLM-4.7 Flash',
-    desc: '免费 · 新一代轻量',
-    icon: <MessageSquareText size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.7-flashx',
-    label: 'GLM-4.7 FlashX',
-    desc: '极速 · 超低成本',
-    icon: <Zap size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.6',
-    label: 'GLM-4.6',
-    desc: '旗舰 · 200K 上下文',
-    icon: <Cpu size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4.7',
-    label: 'GLM-4.7',
-    desc: '旗舰 · 深度构思',
-    icon: <Sparkles size={14} />,
-    group: '智谱 GLM',
   },
   {
     value: 'glm-5.1',
-    label: 'GLM-5.1',
+    label: 'glm-5.1',
     desc: '旗舰 · 200K 长程任务',
     icon: <Sparkles size={14} />,
-    group: '智谱 GLM',
   },
   {
     value: 'glm-5.2',
-    label: 'GLM-5.2',
+    label: 'glm-5.2',
     desc: '旗舰 · 1M 上下文',
     icon: <Cpu size={14} />,
-    group: '智谱 GLM',
   },
   {
     value: 'glm-5.3',
-    label: 'GLM-5.3',
+    label: 'glm-5.3',
     desc: '最新旗舰 · 复杂工程',
     icon: <Sparkles size={14} />,
-    group: '智谱 GLM',
   },
   {
-    value: 'glm-4-plus',
-    label: 'GLM-4 Plus',
-    desc: '上一代旗舰 · 稳定',
+    value: 'glm-4.5-air',
+    label: 'glm-4.5-air',
+    desc: '轻量 · 128K 上下文',
+    icon: <Bot size={14} />,
+  },
+  {
+    value: 'glm-4.5',
+    label: 'glm-4.5',
+    desc: '初代 4.5 · 稳定',
+    icon: <MessageSquareText size={14} />,
+  },
+  {
+    value: 'glm-4.6',
+    label: 'glm-4.6',
+    desc: '200K · 编码强',
     icon: <Cpu size={14} />,
-    group: '智谱 GLM',
   },
   {
-    value: 'glm-4-air-250414',
-    label: 'GLM-4 Air',
-    desc: '轻量 · 长期支持版',
-    icon: <MessageSquareText size={14} />,
-    group: '智谱 GLM',
+    value: 'glm-4.7',
+    label: 'glm-4.7',
+    desc: '旗舰 · 深度构思',
+    icon: <Sparkles size={14} />,
   },
+  // DeepSeek / OpenAI（走默认 DeepSeek 兼容端点）
   {
-    value: 'glm-4-airx',
-    label: 'GLM-4 AirX',
-    desc: '极速 · 轻量',
+    value: 'deepseek-v4-flash',
+    label: 'deepseek-v4-flash',
+    desc: 'DeepSeek · 极速响应',
     icon: <Zap size={14} />,
-    group: '智谱 GLM',
   },
   {
-    value: 'glm-4-flash-250414',
-    label: 'GLM-4 Flash',
-    desc: '免费 · 基础速写',
+    value: 'deepseek-v4-pro',
+    label: 'deepseek-v4-pro',
+    desc: 'DeepSeek · 深度构思',
+    icon: <Sparkles size={14} />,
+  },
+  {
+    value: 'deepseek-chat',
+    label: 'deepseek-chat',
+    desc: 'DeepSeek · 长文本推演',
     icon: <MessageSquareText size={14} />,
-    group: '智谱 GLM',
   },
   {
-    value: 'glm-4-flashx-250414',
-    label: 'GLM-4 FlashX',
-    desc: '极速 · 超低成本',
-    icon: <Zap size={14} />,
-    group: '智谱 GLM',
-  },
-  {
-    value: 'glm-4-long',
-    label: 'GLM-4 Long',
-    desc: '1M 超长上下文 · 整本小说',
+    value: 'gpt-4o-mini',
+    label: 'gpt-4o-mini',
+    desc: 'OpenAI · 快速轻量',
     icon: <MessageSquareText size={14} />,
-    group: '智谱 GLM',
+  },
+  {
+    value: 'gpt-4o',
+    label: 'gpt-4o',
+    desc: 'OpenAI · 旗舰',
+    icon: <Cpu size={14} />,
   },
 ];
 
@@ -196,17 +143,11 @@ const ModelSelector: React.FC = () => {
           <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
             选择模型
           </p>
-          {MODELS.map((m, i) => {
+          {MODELS.map((m) => {
             const selected = m.value === currentModel;
-            const showGroupHeader = m.group && (i === 0 || MODELS[i - 1].group !== m.group);
             return (
-              <React.Fragment key={m.value}>
-                {showGroupHeader && (
-                  <p className="px-2.5 pt-2 pb-1 text-[10px] font-semibold text-neutral-600 border-t border-white/5 first:border-0">
-                    {m.group}
-                  </p>
-                )}
-                <button
+              <button
+                key={m.value}
                 onClick={() => {
                   setModel(m.value);
                   setOpen(false);
@@ -235,8 +176,7 @@ const ModelSelector: React.FC = () => {
                   <span className="block text-[10px] text-neutral-500 truncate">{m.desc}</span>
                 </span>
                 {selected && <Check size={13} className="shrink-0 text-brand-400" />}
-                </button>
-              </React.Fragment>
+              </button>
             );
           })}
         </div>

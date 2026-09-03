@@ -37,8 +37,10 @@ func (m AgentChatMessage) ContentParts() []any {
 // AgentChatRequest is the request for POST /ai/agent/chat. It drives one full
 // Agent loop (the Go service executes tool calls and returns the final answer).
 type AgentChatRequest struct {
-	Messages []AgentChatMessage `json:"messages" binding:"required"`
-	NovelID  int64              `json:"novel_id,omitempty"`
+     Messages []AgentChatMessage `json:"messages" binding:"required"`
+     NovelID  int64              `json:"novel_id,omitempty"`
+     // Model 是 UI 模型选择器的当前值；为空时 ai-service 用其默认模型。
+     Model string `json:"model,omitempty"`
 }
 
 // AgentToolExecution records one tool call the Agent performed (for the UI to
