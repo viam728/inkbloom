@@ -10,11 +10,10 @@ class Settings(BaseSettings):
     grpc_port: int = 50051
     http_port: int = 8100
 
-    # LLM (OpenAI-compatible; Zhipu GLM by default — glm-5.3-flash is the
-    # fastest/cheapest tier on the project key)
+    # LLM (OpenAI-compatible; Zhipu GLM by default — 开发阶段统一 glm-4.5-air)
     openai_api_key: str = ""
     openai_base_url: str = "https://api.deepseek.com"
-    default_model: str = "glm-5.3-flash"
+    default_model: str = "glm-4.5-air"
 
     # Zhipu GLM (OpenAI-compatible too; used when a requested model is glm-*)
     glm_api_key: str = ""

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { generateCandidates, type AIAction } from '@/services/ai-actions-client';
-import { useAIStore } from './ai-store';
+import { resolveSceneModel } from './ai-store';
 
 interface CandidatePos {
   left: number;
@@ -32,7 +32,7 @@ export const useCandidatesStore = create<CandidatesState>((set, get) => ({
   request: async (action, context, pos) => {
     set({ visible: true, loading: true, action, items: [], pos, error: null });
     try {
-      const model = useAIStore.getState().currentModel;
+      const model = resolveSceneModel('candidates');
       const items = await generateCandidates(action, context, model);
       // 防止请求期间被关闭
       if (!get().visible) return;

@@ -72,19 +72,23 @@ type ChatChunkData struct {
 
 // InlineRequest is the request body for the AI inline completion endpoint.
 type InlineRequest struct {
-	NovelID        int64  `json:"novel_id" binding:"required"`
-	ChapterID      int64  `json:"chapter_id" binding:"required"`
-	CursorPosition int    `json:"cursor_position"`
-	PrecedingText  string `json:"preceding_text"`
-	FollowingText  string `json:"following_text"`
+     NovelID        int64  `json:"novel_id" binding:"required"`
+     ChapterID      int64  `json:"chapter_id" binding:"required"`
+     CursorPosition int    `json:"cursor_position"`
+     PrecedingText  string `json:"preceding_text"`
+     FollowingText  string `json:"following_text"`
+     // Model 场景模型覆盖（编辑器续写）；空 = ai-service 默认模型。
+     Model string `json:"model,omitempty"`
 }
 
 // RewriteRequest is the request body for the AI rewrite endpoint.
 type RewriteRequest struct {
-	NovelID      int64  `json:"novel_id" binding:"required"`
-	ChapterID    int64  `json:"chapter_id" binding:"required"`
-	SelectedText string `json:"selected_text" binding:"required"`
-	Action       string `json:"action" binding:"required"` // polish, expand, condense, humanize
+     NovelID      int64  `json:"novel_id" binding:"required"`
+     ChapterID    int64  `json:"chapter_id" binding:"required"`
+     SelectedText string `json:"selected_text" binding:"required"`
+     Action       string `json:"action" binding:"required"` // polish, expand, condense, humanize
+     // Model 场景模型覆盖（改写润色）；空 = ai-service 默认模型。
+     Model string `json:"model,omitempty"`
 }
 
 // CandidatesRequest is the request body for POST /ai/candidates.
@@ -155,6 +159,8 @@ type ExpandOutlineRequest struct {
 	Summary       string   `json:"summary" binding:"required"`
 	MemoryContext []string `json:"memory_context,omitempty"`
 	TargetWords   int      `json:"target_words,omitempty"`
+	// Model 场景模型覆盖（大纲扩写成稿）；空 = ai-service 默认模型。
+	Model string `json:"model,omitempty"`
 }
 
 // ExpandOutlineResponse is the upstream response for POST /ai/expand-outline.

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ChevronUp, Cpu, Zap, Sparkles, MessageSquareText, Bot } from 'lucide-react';
+import { Check, ChevronUp, Cpu, Zap, Sparkles, MessageSquareText, Bot, SlidersHorizontal } from 'lucide-react';
 import { useAIStore } from '@/stores/ai-store';
+import SceneModelSettings from './SceneModelSettings';
 
 export interface ModelOption {
   value: string;
@@ -15,11 +16,17 @@ export interface ModelOption {
  * 走 open.bigmodel.cn OpenAI 兼容端点（ai-service 按 glm-* 前缀路由）。
  */
 export const MODELS: ModelOption[] = [
-  // 智谱 GLM（默认段：glm-5.3-flash 最快最省，为项目默认模型）
+  // 智谱 GLM（开发阶段统一默认 glm-4.5-air）
+  {
+    value: 'glm-4.5-air',
+    label: 'glm-4.5-air',
+    desc: '默认 · 开发统一 · 高性价比',
+    icon: <Bot size={14} />,
+  },
   {
     value: 'glm-5.3-flash',
     label: 'glm-5.3-flash',
-    desc: '默认 · 最快最省 · 轻量日常',
+    desc: '最快最省 · 轻量日常',
     icon: <Zap size={14} />,
   },
   {
@@ -51,12 +58,6 @@ export const MODELS: ModelOption[] = [
     label: 'glm-5.3',
     desc: '最新旗舰 · 复杂工程',
     icon: <Sparkles size={14} />,
-  },
-  {
-    value: 'glm-4.5-air',
-    label: 'glm-4.5-air',
-    desc: '轻量 · 128K 上下文',
-    icon: <Bot size={14} />,
   },
   {
     value: 'glm-4.5',
@@ -114,6 +115,7 @@ const ModelSelector: React.FC = () => {
   const currentModel = useAIStore((s) => s.currentModel);
   const setModel = useAIStore((s) => s.setModel);
   const [open, setOpen] = useState(false);
+  const [sceneOpen, setSceneOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const current = MODELS.find((m) => m.value === currentModel) ?? MODELS[0];
@@ -179,8 +181,24 @@ const ModelSelector: React.FC = () => {
               </button>
             );
           })}
+          {/* 场景模型配置入口 */}
+          <button
+            onClick={() => {
+              setOpen(false);
+              setSceneOpen(true);
+            }}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 mt-1 border-t border-white/8 rounded-b-lg text-left text-neutral-400 hover:text-neutral-200 hover:bg-white/6 transition-colors"
+          >
+            <span className="shrink-0 w-6 h-6 rounded-md flex items-center justify-center bg-white/6">
+              <SlidersHorizontal size={12} />
+            </span>
+            <span className="flex-1 text-xs">场景模型配置</span>
+          </button>
         </div>
       )}
+
+      {/* 场景模型配置弹窗 */}
+      <SceneModelSettings open={sceneOpen} onClose={() => setSceneOpen(false)} />
 
       {/* 收起态：简约胶囊按钮 */}
       <button

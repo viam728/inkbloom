@@ -24,6 +24,7 @@ import {
 import { expandOutlineToDraft } from '@/services/outline-client';
 import { trashNode } from '@/services/trash-client';
 import { useTrashStore } from '@/stores/trash-store';
+import { resolveSceneModel } from '@/stores/ai-store';
 import { useToast } from '@/components/common/Toast';
 import Modal from '@/components/common/Modal';
 import TipTapEditor from '@/components/editor/TipTapEditor';
@@ -215,7 +216,7 @@ const OutlinePanel: React.FC = () => {
         // summary 现为 HTML，发送前转为纯文本（契约不变）
         summary: htmlToPlainText(node.summary),
         memoryContext: refs,
-      });
+      }, resolveSceneModel('expand'));
       setDraftRefs(refs);
       setDraft(text);
     } catch {

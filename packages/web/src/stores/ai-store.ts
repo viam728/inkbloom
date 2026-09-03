@@ -93,6 +93,8 @@ interface AIStore {
   isStreaming: boolean;
   streamingContent: string;
   currentModel: string;
+  /** 场景级模型覆盖：key 为 AIScene，未设置（或 ''）跟随 currentModel */
+  sceneModels: Partial<Record<AIScene, string>>;
 
   // 会话历史（C8）
   sessions: AISession[];
@@ -110,6 +112,8 @@ interface AIStore {
     sendMessage: (content: string, attachments?: ChatAttachment[]) => Promise<void>;
   clearMessages: () => void;
   setModel: (model: string) => void;
+  /** 场景级模型配置：model 为空串表示清除覆盖（跟随全局选择） */
+  setSceneModel: (scene: AIScene, model: string) => void;
   stopStreaming: () => void;
   /** 停止当前正在进行的 Agent 请求（C8 停止中断） */
   cancelMessage: () => void;
@@ -151,13 +155,54 @@ interface AIStore {
 
 const initial = initialSessionState();
 
+// ── 模型选择（持久化 + 场景配置） ───────────────────────────────────────
+/** AI 使用场景：每个场景可单独覆盖模型，未覆盖时跟随全局 currentModel */
+export type AIScene = 'agent' | 'candidates' | 'inline' | 'rewrite' | 'expand';
+
+export const AI_SCENE_LABELS: Record<AIScene, string> = {
+  agent: '主聊天 / 创作 Agent',
+  candidates: '候选起稿（N 选 1）',
+  inline: '编辑器续写',
+  rewrite: '改写润色',
+  expand: '大纲扩写成稿',
+};
+
+/** 开发阶段统一默认模型 */
+export const DEFAULT_AI_MODEL = 'glm-4.5-air';
+
+const LS_MODEL = 'inkbloom-ai-model';
+const LS_SCENE_MODELS = 'inkbloom-ai-scene-models';
+
+function loadPersistedModel(): string {
+  try {
+    const v = localStorage.getItem(LS_MODEL);
+    if (v) return v;
+  } catch { /* ignore */ }
+  return DEFAULT_AI_MODEL;
+}
+
+function loadPersistedSceneModels(): Partial<Record<AIScene, string>> {
+  try {
+    const raw = localStorage.getItem(LS_SCENE_MODELS);
+    if (raw) return JSON.parse(raw) as Partial<Record<AIScene, string>>;
+  } catch { /* ignore */ }
+  return {};
+}
+
+/** 场景 → 实际调用模型：场景覆盖优先，未覆盖跟随全局选择 */
+export function resolveSceneModel(scene: AIScene): string {
+  const s = useAIStore.getState();
+  return s.sceneModels[scene] || s.currentModel;
+}
+
 export const useAIStore = create<AIStore>((set, get) => ({
   messages: initial.messages,
   sessions: initial.sessions,
   currentSessionId: initial.currentSessionId,
   isStreaming: false,
   streamingContent: '',
-  currentModel: 'glm-5.3-flash',
+  currentModel: loadPersistedModel(),
+  sceneModels: loadPersistedSceneModels(),
 
   inlineSuggestion: null,
   isInlineStreaming: false,
@@ -202,8 +247,8 @@ export const useAIStore = create<AIStore>((set, get) => ({
 
     try {
       const currentNovelId = useNovelStore.getState().currentNovel?.id ?? 0;
-      // 模型选择器当前值一路透传：前端 → Go Agent → ai-service → 上游。
-      const result = await agentChat(history, currentNovelId, controller.signal, get().currentModel);
+      // 模型选择一路透传：场景配置 → 前端 → Go Agent → ai-service → 上游。
+      const result = await agentChat(history, currentNovelId, controller.signal, resolveSceneModel('agent'));
 
       const toolExecutions = (result.tool_executions ?? []).map((t) => ({
         tool: t.tool,
@@ -300,7 +345,16 @@ export const useAIStore = create<AIStore>((set, get) => ({
   },
 
   setModel: (model: string) => {
+    try { localStorage.setItem(LS_MODEL, model); } catch { /* ignore */ }
     set({ currentModel: model });
+  },
+
+  setSceneModel: (scene: AIScene, model: string) => {
+    const next = { ...get().sceneModels };
+    if (model) next[scene] = model;
+    else delete next[scene];
+    try { localStorage.setItem(LS_SCENE_MODELS, JSON.stringify(next)); } catch { /* ignore */ }
+    set({ sceneModels: next });
   },
 
   stopStreaming: () => {
@@ -327,6 +381,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
         () => {
           set({ isInlineStreaming: false });
         },
+        resolveSceneModel('inline'),
       );
     } catch {
       set({ isInlineStreaming: false });

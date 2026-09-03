@@ -50,6 +50,7 @@ class ExpandOutlineRequest(BaseModel):
     summary: str
     memory_context: str | None = None
     target_words: int | None = Field(default=None, ge=1)
+    model: str | None = None
 
 
 class AnalyzeStoryRequest(BaseModel):
@@ -256,7 +257,8 @@ def create_router(llm: BaseLLMProvider) -> APIRouter:
                 else 4096
             )
             content, err, usage, model_name = await call_llm(
-                llm, system, user, temperature=0.8, max_tokens=max_tokens
+                llm, system, user, temperature=0.8, max_tokens=max_tokens,
+                model=request.model,
             )
             if err:
                 return {"draft": "", "error": err}

@@ -106,6 +106,7 @@ export async function streamInline(
   followingText: string,
   onChunk: (content: string) => void,
   onDone: () => void,
+  model?: string,
 ): Promise<void> {
   const response = await fetch('/api/v1/ai/inline', {
     method: 'POST',
@@ -116,6 +117,7 @@ export async function streamInline(
       cursor_position: cursorPosition,
       preceding_text: precedingText,
       following_text: followingText,
+      model: model || undefined,
     }),
   });
 
@@ -132,6 +134,7 @@ export async function streamRewrite(
   action: string,
   onChunk: (content: string) => void,
   onDone: () => void,
+  model?: string,
 ): Promise<void> {
   const response = await fetch('/api/v1/ai/rewrite', {
     method: 'POST',
@@ -141,6 +144,7 @@ export async function streamRewrite(
       chapter_id: chapterId,
       selected_text: selectedText,
       action,
+      model: model || undefined,
     }),
   });
 

@@ -688,7 +688,7 @@ func (h *AIHandler) Inline(c *gin.Context) {
 		map[string]interface{}{"role": "user", "content": userContent},
 	)
 
-	body, err := json.Marshal(map[string]interface{}{"messages": messages})
+	body, err := json.Marshal(map[string]interface{}{"messages": messages, "model": req.Model})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{
 			Code:    500,
@@ -747,7 +747,7 @@ func (h *AIHandler) Rewrite(c *gin.Context) {
 		map[string]interface{}{"role": "user", "content": req.SelectedText},
 	)
 
-	body, err := json.Marshal(map[string]interface{}{"messages": messages})
+	body, err := json.Marshal(map[string]interface{}{"messages": messages, "model": req.Model})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{
 			Code:    500,

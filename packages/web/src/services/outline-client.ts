@@ -111,13 +111,14 @@ export interface ExpandOutlineInput {
   targetWords?: number;
 }
 
-export async function expandOutlineToDraft(input: ExpandOutlineInput): Promise<string> {
+export async function expandOutlineToDraft(input: ExpandOutlineInput, model?: string): Promise<string> {
   try {
     const data = (await apiClient.post('/ai/expand-outline', {
       outline_title: input.outlineTitle,
       summary: input.summary,
       memory_context: input.memoryContext,
       target_words: input.targetWords,
+      model: model || undefined,
     })) as unknown as { draft?: string };
     if (data?.draft) return data.draft;
     throw new Error('empty draft');
