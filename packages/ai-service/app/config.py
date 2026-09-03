@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.deepseek.com"
     default_model: str = "deepseek-v4-flash"
 
+    # Zhipu GLM (OpenAI-compatible too; used when a requested model is glm-*)
+    glm_api_key: str = ""
+    glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+
     # Go service
     go_service_url: str = "http://localhost:8080"
 

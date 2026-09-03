@@ -10,17 +10,38 @@ from app.utils.token_counter import count_tokens as _count_tokens
 
 
 class OpenAIProvider(BaseLLMProvider):
-    """LLM provider using the OpenAI SDK, compatible with any OpenAI-style API."""
+    """LLM provider using the OpenAI SDK, compatible with any OpenAI-style API.
+
+    Routes by model name: `glm-*` models go to the Zhipu BigModel endpoint
+    (OpenAI-compatible) with the dedicated GLM credentials; everything else
+    uses the default endpoint. Falls back to the default client when no GLM
+    credentials are configured.
+    """
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
+        glm_api_key: str | None = None,
+        glm_base_url: str | None = None,
     ) -> None:
         self._client = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,
             base_url=base_url or settings.openai_base_url,
         )
+        self._glm_client: AsyncOpenAI | None = None
+        glm_key = glm_api_key or settings.glm_api_key
+        if glm_key:
+            self._glm_client = AsyncOpenAI(
+                api_key=glm_key,
+                base_url=glm_base_url or settings.glm_base_url,
+            )
+
+    def _client_for(self, model: str | None) -> AsyncOpenAI:
+        """Pick the endpoint client for a model id."""
+        if model and model.lower().startswith("glm") and self._glm_client is not None:
+            return self._glm_client
+        return self._client
 
     async def chat(
         self,
@@ -112,7 +133,7 @@ class OpenAIProvider(BaseLLMProvider):
         """
         model = model or settings.default_model
 
-        response = await self._client.chat.completions.create(
+        response = await self._client_for(model).chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
