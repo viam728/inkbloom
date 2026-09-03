@@ -78,6 +78,8 @@ export const MODELS: ModelOption[] = [
     icon: <Sparkles size={14} />,
   },
   // DeepSeek（走默认 DeepSeek 兼容端点；未配置 OpenAI key，故不提供 gpt-* 选项）
+  // 清单来源：2026-09-04 GET https://api.deepseek.com/models 实测。
+  // deepseek-chat（V3）与 deepseek-reasoner（R1）已于 2026-07-24 官方退役，不再提供。
   {
     value: 'deepseek-v4-flash',
     label: 'deepseek-v4-flash',
@@ -91,9 +93,9 @@ export const MODELS: ModelOption[] = [
     icon: <Sparkles size={14} />,
   },
   {
-    value: 'deepseek-chat',
-    label: 'deepseek-chat',
-    desc: 'DeepSeek · 长文本推演',
+    value: 'deepseek-v4-flash-vision-exp',
+    label: 'deepseek-v4-flash-vision-exp',
+    desc: 'DeepSeek · 视觉实验版',
     icon: <MessageSquareText size={14} />,
   },
 ];
@@ -139,6 +141,12 @@ const ModelSelector: React.FC = () => {
           <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
             选择模型
           </p>
+          {agentPinned && (
+            <p className="mx-1 mb-1 rounded-md bg-amber-500/10 border border-amber-500/25 px-2 py-1 text-[10px] text-amber-300 leading-relaxed">
+              对话场景已单独指定为 <span className="font-medium">{agentPinned}</span>
+              ，切换全局模型不影响对话；可在「场景模型配置」中改回跟随全局。
+            </p>
+          )}
           {MODELS.map((m) => {
             const selected = m.value === currentModel;
             return (
