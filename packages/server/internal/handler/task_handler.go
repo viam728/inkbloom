@@ -78,3 +78,35 @@ func (h *TaskAPIHandler) GetTask(c *gin.Context) {
 		Data:    task,
 	})
 }
+
+// CancelTask handles POST /api/v1/tasks/:id/cancel — user-initiated cancel of
+// a pending/running task. Foreign or terminal tasks look like missing ones.
+func (h *TaskAPIHandler) CancelTask(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{
+			Code:    400,
+			Message: "task id is required",
+		})
+		return
+	}
+	ok, err := h.engine.CancelTask(c.Request.Context(), GetUserID(c), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{
+			Code:    500,
+			Message: "failed to cancel task: " + err.Error(),
+		})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, dto.APIResponse{
+			Code:    404,
+			Message: "task not found or not cancellable",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{
+		Code:    200,
+		Message: "task cancelled",
+	})
+}

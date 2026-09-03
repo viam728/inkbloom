@@ -22,6 +22,10 @@ type TaskRepository interface {
 	ListByUser(ctx context.Context, userID int64, status string, limit int) ([]model.Task, error)
 	IncrementRetry(ctx context.Context, id string) error
 	GetByIdempotencyKey(ctx context.Context, key string) (*model.Task, error)
+	// Cancel marks a pending/running task as cancelled (user-initiated).
+	// Returns the affected row count: 0 means the task does not exist, is
+	// not owned by the user, or already reached a terminal state.
+	Cancel(ctx context.Context, userID int64, id string) (int64, error)
 }
 
 // taskRepository is the GORM-backed implementation of TaskRepository.
@@ -50,7 +54,11 @@ func (r *taskRepository) GetByID(ctx context.Context, id string) (*model.Task, e
 }
 
 func (r *taskRepository) UpdateStatus(ctx context.Context, id string, status string) error {
-	result := r.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", id).
+	// Guard: a cancelled task is terminal — engine workers must never flip it
+	// back to running/pending/success (the worker may have already picked the
+	// task from the channel before the user cancelled it).
+	result := r.db.WithContext(ctx).Model(&model.Task{}).
+		Where("id = ? AND status != 'cancelled'", id).
 		Updates(map[string]interface{}{
 			"status":       status,
 			"started_at":   gorm.Expr("CASE WHEN ? IN ('running') AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END", status),
@@ -60,9 +68,25 @@ func (r *taskRepository) UpdateStatus(ctx context.Context, id string, status str
 		return fmt.Errorf("update task status %s: %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("task %s not found", id)
+		return fmt.Errorf("task %s not found or cancelled", id)
 	}
 	return nil
+}
+
+// Cancel transitions a pending/running task to the terminal 'cancelled'
+// state. Scoped to the owner; no-op (0 rows) for finished tasks.
+func (r *taskRepository) Cancel(ctx context.Context, userID int64, id string) (int64, error) {
+	result := r.db.WithContext(ctx).Model(&model.Task{}).
+		Where("id = ? AND user_id = ? AND status IN ('pending','running')", id, userID).
+		Updates(map[string]interface{}{
+			"status":       "cancelled",
+			"error_msg":    "用户取消",
+			"completed_at": gorm.Expr("CURRENT_TIMESTAMP"),
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("cancel task %s: %w", id, result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 func (r *taskRepository) UpdateProgress(ctx context.Context, id string, progress int16) error {

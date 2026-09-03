@@ -15,7 +15,15 @@ export type CreatorRole = 'novelist' | 'media' | 'memo';
 export type LeftTab = 'library' | 'outline' | 'memory' | 'contents' | 'topics';
 
 /** 右侧面板 Tab（按角色展示不同子集） */
-export type RightTab = 'chat' | 'story' | 'review' | 'aigc' | 'title' | 'gallery' | 'tracker';
+export type RightTab =
+  | 'chat'
+  | 'story'
+  | 'review'
+  | 'aigc'
+  | 'title'
+  | 'gallery'
+  | 'tracker'
+  | 'tasks';
 
 interface UIState {
   leftWidth: number;

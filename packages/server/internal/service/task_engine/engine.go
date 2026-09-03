@@ -171,6 +171,37 @@ func (e *TaskEngine) Stop() {
 	e.logger.Info("task engine stopped")
 }
 
+// CancelTask marks a user's pending/running task as cancelled and broadcasts
+// the aigc.task.cancelled event (the NATS→WS bridge relays it as
+// "task:cancelled"). Returns false when the task was not cancellable (missing,
+// foreign-owned, or already terminal). Cooperative cancellation: a running
+// task finishes its in-flight step but its result is discarded by the
+// cancelled guards in processTask/handleFailure.
+func (e *TaskEngine) CancelTask(ctx context.Context, userID int64, taskID string) (bool, error) {
+	rows, err := e.repo.Cancel(ctx, userID, taskID)
+	if err != nil {
+		return false, err
+	}
+	if rows == 0 {
+		return false, nil
+	}
+	// Best-effort event; the frontend also refreshes via polling.
+	if task, getErr := e.repo.GetByID(ctx, taskID); getErr == nil {
+		if payload, marshalErr := json.Marshal(map[string]interface{}{
+			"task_id": task.ID,
+			"user_id": taskUserIDString(task.UserID),
+			"type":    task.Type,
+			"status":  "cancelled",
+		}); marshalErr == nil {
+			if pubErr := e.nats.Publish("aigc.task.cancelled", payload); pubErr != nil {
+				e.logger.Warn("failed to publish task.cancelled event", zap.Error(pubErr))
+			}
+		}
+	}
+	e.logger.Info("task cancelled", zap.String("task_id", taskID), zap.Int64("user_id", userID))
+	return true, nil
+}
+
 // Submit creates a task and an outbox entry within a single DB transaction.
 func (e *TaskEngine) Submit(ctx context.Context, task model.Task) error {
 	if task.ID == "" {
@@ -303,8 +334,10 @@ func (e *TaskEngine) handleFailure(ctx context.Context, task model.Task, err err
 		// Exponential backoff: 2^retryCount seconds
 		delay := time.Duration(math.Pow(2, float64(task.RetryCount))) * time.Second
 
-		// Reset status to pending for retry
-		e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		// Reset status to pending for retry (no-op if the user cancelled the
+		// running task mid-flight: the cancelled guard in the WHERE clause
+		// keeps the terminal state, and the retry below re-checks it).
+		e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND status != 'cancelled'", task.ID).Updates(map[string]interface{}{
 			"status":    "pending",
 			"error_msg": err.Error(),
 		})

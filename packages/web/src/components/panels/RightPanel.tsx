@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo } from 'react';
-import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images, Anchor } from 'lucide-react';
+import { MessageSquareText, Palette, MessageSquareQuote, Sparkles, Images, Anchor, ListTodo } from 'lucide-react';
 import AIChatPanel from '@/components/ai/AIChatPanel';
 import AIGCPanel from '@/components/aigc/AIGCPanel';
 import ReviewPanel from '@/components/review/ReviewPanel';
 import TitleFactoryPanel from '@/components/media/TitleFactoryPanel';
 import GalleryGrid from '@/components/gallery/GalleryGrid';
 import ForeshadowTracker from '@/components/knowledge/ForeshadowTracker';
+import TaskListPanel from '@/components/tasks/TaskListPanel';
 import { useUIStore, type RightTab } from '@/stores/ui-store';
 
 const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
@@ -14,6 +15,7 @@ const NOVELIST_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = 
   { id: 'tracker', label: '伏笔', icon: <Anchor size={14} /> },
   { id: 'aigc', label: '图片生成', icon: <Palette size={14} /> },
   { id: 'gallery', label: '图床', icon: <Images size={14} /> },
+  { id: 'tasks', label: '任务', icon: <ListTodo size={14} /> },
 ];
 
 // 自媒体创作者：标题工厂替代批注评审，侧重传播效率
@@ -22,6 +24,7 @@ const MEDIA_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'title', label: '标题工厂', icon: <Sparkles size={14} /> },
   { id: 'aigc', label: '配图生成', icon: <Palette size={14} /> },
   { id: 'gallery', label: '图床', icon: <Images size={14} /> },
+  { id: 'tasks', label: '任务', icon: <ListTodo size={14} /> },
 ];
 
 const RightPanel: React.FC = () => {
@@ -87,6 +90,7 @@ const RightPanel: React.FC = () => {
         {activeTab === 'gallery' && (
           <GalleryGrid mode="manage" compact visible={!rightCollapsed} />
         )}
+        {activeTab === 'tasks' && <TaskListPanel />}
       </div>
     </div>
   );

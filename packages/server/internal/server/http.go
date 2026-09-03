@@ -543,6 +543,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		if h.Task != nil {
 			api.GET("/tasks", h.Task.ListTasks)
 			api.GET("/tasks/:id", h.Task.GetTask)
+			api.POST("/tasks/:id/cancel", h.Task.CancelTask)
 		}
 
 		// AIGC image generation & assets (v2 §5.1: generate 走 AI 配额)
