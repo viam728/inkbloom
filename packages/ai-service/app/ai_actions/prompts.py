@@ -217,6 +217,7 @@ def story_overview_prompt(
     existing: dict,
     fields: list[str],
     variant: int,
+    clues: list[dict] | None = None,
 ) -> str:
     """Build the user prompt for story-overview generation.
 
@@ -225,7 +226,8 @@ def story_overview_prompt(
     single-field generation still sees the entire overview context). ``variant``
     is a random integer injected to diversify outputs across calls (req 5:
     randomness). The prompt explicitly asks for both 热门度 (popularity) and
-    创新性 (innovation).
+    创新性 (innovation). ``clues`` carries author-checked clue-library excerpts
+    (outline/memory/foreshadow) as hard constraints for ALL overview AIGC.
     """
     want = [f for f in fields if f in _STORY_OVERVIEW_FIELDS] or list(_STORY_OVERVIEW_FIELDS.keys())
     lines = "\n".join(f"- {_STORY_OVERVIEW_FIELDS[f]}" for f in want)
@@ -244,10 +246,27 @@ def story_overview_prompt(
             ctx_parts.append(f"{label}：{val}")
     ctx = "\n".join(ctx_parts) if ctx_parts else "（暂无现有内容）"
 
+    # 线索库摘录段：作者勾选了才注入，未勾选（或作品没有对应库）时不出现
+    clue_labels = {"outline": "大纲", "memory": "记忆", "foreshadow": "伏笔"}
+    clue_parts = []
+    for c in clues or []:
+        label = clue_labels.get(c.get("kind", ""), c.get("kind", ""))
+        text = " ".join(str(c.get("content", "")).split())
+        if label and text:
+            clue_parts.append(f"- {label}：{text[:1200]}")
+    clue_section = ""
+    if clue_parts:
+        clue_section = (
+            "作者勾选的参考线索（既有设定，生成时必须严格遵循并自然融入，不得与之矛盾）：\n"
+            + "\n".join(clue_parts)
+            + "\n\n"
+        )
+
     return (
         "你是一位精通网文与泛娱乐内容创作的策划。请基于「作品概览」的已有信息，"
         "为指定字段生成高质量内容。\n\n"
         f"已有概览信息：\n{ctx}\n\n"
+        f"{clue_section}"
         "需要生成的字段（必须全部生成，缺一不可）：\n"
         f"{lines}\n\n"
         "硬性要求：\n"

@@ -233,11 +233,24 @@ export interface StoryOverviewContext {
 
 export type StoryOverviewField = keyof StoryOverviewContext;
 
+/** 线索库种类：大纲 / 记忆 / 伏笔（勾选后对本模块所有 AIGC 生效） */
+export type StoryOverviewClueKind = 'outline' | 'memory' | 'foreshadow';
+
+export interface StoryOverviewClue {
+  kind: StoryOverviewClueKind;
+  content: string;
+}
+
 export async function generateStoryOverview(
   ctx: StoryOverviewContext,
   fields: StoryOverviewField[],
+  clues: StoryOverviewClue[] = [],
 ): Promise<Partial<Record<StoryOverviewField, string>>> {
-  const data = (await apiClient.post('/ai/story-overview', { ...ctx, fields })) as unknown as {
+  const data = (await apiClient.post('/ai/story-overview', {
+    ...ctx,
+    fields,
+    ...(clues.length ? { clues } : {}),
+  })) as unknown as {
     overview?: Partial<Record<StoryOverviewField, string>>;
   };
   const overview = data?.overview;

@@ -36,11 +36,12 @@ func (r *tokenUsageRepository) UpsertDaily(ctx context.Context, userID int64, da
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "date"}},
-		// 未限定列名指向既有行（Postgres/SQLite 通用）；EXCLUDED 指向新行。
+		// 自增列必须用表名限定：DO UPDATE SET 表达式里裸列名在 Postgres
+		// 中与 EXCLUDED 伪表歧义（SQLSTATE 42702）。SQLite 同样接受限定名。
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"text_units":  gorm.Expr("text_units + EXCLUDED.text_units"),
-			"image_count": gorm.Expr("image_count + EXCLUDED.image_count"),
-			"image_units": gorm.Expr("image_units + EXCLUDED.image_units"),
+			"text_units":  gorm.Expr("token_usage_daily.text_units + EXCLUDED.text_units"),
+			"image_count": gorm.Expr("token_usage_daily.image_count + EXCLUDED.image_count"),
+			"image_units": gorm.Expr("token_usage_daily.image_units + EXCLUDED.image_units"),
 			"updated_at":  gorm.Expr("CURRENT_TIMESTAMP"),
 		}),
 	}).Create(row).Error

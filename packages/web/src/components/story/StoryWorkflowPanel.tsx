@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, Pencil } from 'lucide-react';
+import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, BookText, Brain, Anchor } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { useUIStore } from '@/stores/ui-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
 import { generateStoryOverview } from '@/services/ai-actions-client';
-import type { StoryOverviewContext, StoryOverviewField } from '@/services/ai-actions-client';
+import type { StoryOverviewContext, StoryOverviewField, StoryOverviewClue, StoryOverviewClueKind } from '@/services/ai-actions-client';
+import { fetchOutline } from '@/services/outline-client';
+import { fetchMemory } from '@/services/memory-client';
+import { listForeshadows } from '@/services/foreshadow-client';
 import type { CreateNovelRequest, UpdateNovelRequest } from '@/types';
 import { toast } from '@/components/common/Toast';
 
@@ -20,60 +23,101 @@ const OVERVIEW_FIELD_LABELS: Record<StoryOverviewField, string> = {
   intent: '意图',
 };
 
-/** 概览字段行：标签 + 受控输入（编辑态可写）+ AIGC 生成按钮 */
+/**
+ * 概览草稿：本地暂存尚未入库的改动。
+ * 创意（logline）不入作品表，面板卸载即丢，必须靠它跨「切到概览页/任务页再回来」与刷新保留；
+ * 其余五字段入库成功后即清草稿，草稿只承载未入库改动，避免遮蔽他处（如概览页）的修改。
+ */
+type OverviewDraft = Partial<Pick<StoryOverviewContext, 'title' | 'description' | 'logline' | 'style' | 'audience' | 'intent'>>;
+const DRAFT_KEY = (scope: string) => `inkbloom:story-draft:${scope}`;
+const readDraft = (scope: string): OverviewDraft | null => {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY(scope));
+    return raw ? (JSON.parse(raw) as OverviewDraft) : null;
+  } catch {
+    return null;
+  }
+};
+const writeDraft = (scope: string, draft: OverviewDraft) => {
+  try {
+    localStorage.setItem(DRAFT_KEY(scope), JSON.stringify(draft));
+  } catch {
+    /* 配额不足 / 隐私模式：草稿丢失不影响主流程 */
+  }
+};
+const clearDraft = (scope: string) => {
+  try {
+    localStorage.removeItem(DRAFT_KEY(scope));
+  } catch {
+    /* ignore */
+  }
+};
+
+/** 线索勾选卡可选的线索库（勾选后对本模块所有 AIGC 生效；概览已填信息默认注入，不在此显示） */
+const CLUE_LIBRARIES: { kind: StoryOverviewClueKind; label: string; icon: typeof BookText }[] = [
+  { kind: 'outline', label: '大纲', icon: BookText },
+  { kind: 'memory', label: '记忆', icon: Brain },
+  { kind: 'foreshadow', label: '伏笔', icon: Anchor },
+];
+
+const EMPTY_CLUES: Record<StoryOverviewClueKind, string> = { outline: '', memory: '', foreshadow: '' };
+const EMPTY_CLUES_ON: Record<StoryOverviewClueKind, boolean> = { outline: false, memory: false, foreshadow: false };
+
+/** 概览字段行：标签 + 常驻可编辑的受控输入（右侧常驻 AI 单项生成按钮）+ 自适应文本域 */
 const OverviewFieldRow: React.FC<{
   label: string;
   value: string;
   onChange: (v: string) => void;
-  editable: boolean;
-  aiEnabled: boolean;
   filling: boolean;
   busy: boolean;
   onAIFill: () => void;
   textarea?: boolean;
   rows?: number;
   placeholder?: string;
-}> = ({ label, value, onChange, editable, aiEnabled, filling, busy, onAIFill, textarea, rows, placeholder }) => {
-  const inputCls = `w-full text-sm rounded-lg transition-colors ${
-    editable
-      ? 'px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500'
-      : 'px-2.5 py-2 bg-white/[0.02] border border-white/6 text-neutral-300 cursor-default'
-  }`;
+}> = ({ label, value, onChange, filling, busy, onAIFill, textarea, rows, placeholder }) => {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  // 自适应文本域：内容变化时按 scrollHeight 撑高（限制上限），输入多长都不出滚动条
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const minH = (rows ?? 3) * 20 + 16;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, minH), 220)}px`;
+  }, [value, rows]);
+  const inputCls =
+    'w-full text-sm rounded-lg transition-colors px-2.5 py-2 pr-10 bg-white/5 border border-white/8 focus:border-violet-500/50 text-neutral-200 placeholder-neutral-500';
   return (
     <div className="mb-3">
       <label className="block text-[11px] text-neutral-400 mb-1">{label}</label>
       <div className="relative">
         {textarea ? (
           <textarea
+            ref={taRef}
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            readOnly={!editable}
             rows={rows ?? 3}
-            placeholder={editable ? placeholder : undefined}
-            className={`${inputCls} ${rows === 2 ? 'resize-none' : 'resize-y'}`}
+            placeholder={placeholder}
+            className={`${inputCls} resize-none overflow-hidden`}
           />
         ) : (
           <input
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            readOnly={!editable}
-            placeholder={editable ? placeholder : undefined}
+            placeholder={placeholder}
             className={inputCls}
           />
         )}
-        {aiEnabled && (
-          <button
-            type="button"
-            onClick={onAIFill}
-            disabled={filling || busy}
-            title={`AI 生成${label}${value.trim() ? '（将覆盖现有内容）' : ''}`}
-            className={`absolute right-2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors ${
-              textarea ? 'top-2' : 'top-1/2 -translate-y-1/2'
-            }`}
-          >
-            {filling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onAIFill}
+          disabled={filling || busy}
+          title={`AI 生成${label}${value.trim() ? '（将覆盖现有内容）' : ''}`}
+          className={`absolute right-2 p-1.5 rounded-md text-violet-300 hover:bg-violet-500/15 border border-transparent hover:border-violet-500/30 disabled:opacity-50 transition-colors ${
+            textarea ? 'top-2' : 'top-1/2 -translate-y-1/2'
+          }`}
+        >
+          {filling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+        </button>
       </div>
     </div>
   );
@@ -119,40 +163,100 @@ const StoryWorkflowPanel: React.FC = () => {
   const [audience, setAudience] = useState('');
   const [intent, setIntent] = useState('');
   const [autoSettle, setAutoSettle] = useState(true);
-  // AIGC：正在生成的概览字段（null = 空闲）
+  // AIGC：正在生成的概览字段（null = 空闲）；fillingAll = 全概览一键生成中
   const [fillingField, setFillingField] = useState<StoryOverviewField | null>(null);
-  // 编辑开关：关闭时输入框只读；AIGC 开启时逐字段出现 AI 生成按钮（两者相互独立）
-  const [editMode, setEditMode] = useState(false);
-  const [aiMode, setAiMode] = useState(false);
-  // 进入编辑时的字段快照：「取消」据此回滚（需求0）
-  const [editSnapshot, setEditSnapshot] = useState<StoryOverviewContext | null>(null);
+  const [fillingAll, setFillingAll] = useState(false);
+  // 概览字段常驻可编辑：改动先落本地草稿，再防抖自动入库（无需编辑开关/完成按钮）
+  const savingRef = useRef(false);
+  // 线索勾选卡：各线索库的内容摘录（切换作品时拉取）与勾选态（对本模块所有 AIGC 生效）
+  const [clueData, setClueData] = useState<Record<StoryOverviewClueKind, string>>(EMPTY_CLUES);
+  const [cluesOn, setCluesOn] = useState<Record<StoryOverviewClueKind, boolean>>(EMPTY_CLUES_ON);
+  // 「取消」的回滚基线 = 服务端已存的 currentNovel 值（字段常驻可编辑，无独立编辑态）
   // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  // 简介：随当前作品预填；作品简介在别处更新后回填本面板
+  // 简介：随当前作品预填；作品简介在别处更新后回填本面板。
+  // 守卫：本面板自动保存期间不回填，否则会把用户正在输入的内容回卷成已入库值。
   const [description, setDescription] = useState('');
   useEffect(() => {
+    if (savingRef.current) return;
     setDescription(currentNovel?.description ?? '');
   }, [currentNovel?.id, currentNovel?.description]);
-  // 切换作品：书名/文风/受众/意图随当前作品预填；重置编辑/AIGC/创意态
+  // 切换作品：预填 = 服务端值，本地草稿（未入库改动 + 创意）优先覆盖
   useEffect(() => {
+    const draft = readDraft(currentNovel ? String(currentNovel.id) : 'new');
     if (currentNovel) {
-      setTitle(currentNovel.title);
-      setStyle(currentNovel.style ?? '');
-      setAudience(currentNovel.audience ?? '');
-      setIntent(currentNovel.intent ?? '');
+      setTitle(draft?.title ?? currentNovel.title);
+      setDescription(draft?.description ?? currentNovel.description ?? '');
+      setStyle(draft?.style ?? currentNovel.style ?? '');
+      setAudience(draft?.audience ?? currentNovel.audience ?? '');
+      setIntent(draft?.intent ?? currentNovel.intent ?? '');
     } else {
-      setTitle('');
-      setStyle('');
-      setAudience('');
-      setIntent('');
+      setTitle(draft?.title ?? '');
+      setDescription(draft?.description ?? '');
+      setStyle(draft?.style ?? '');
+      setAudience(draft?.audience ?? '');
+      setIntent(draft?.intent ?? '');
     }
-    setLogline('');
-    setEditMode(!currentNovel);
-    setAiMode(false);
-    setEditSnapshot(null);
+    // 创意不入作品表，只可能来自草稿 —— 这是「输入后切页/刷新仍保留」的关键
+    setLogline(draft?.logline ?? '');
+  }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 拉取当前作品的线索库（大纲/记忆/伏笔）内容摘录；库为空时对应项不可勾选。
+  // 概览已填信息默认注入思考上下文，不在勾选卡显示（后端始终携带全部概览字段）。
+  useEffect(() => {
+    const id = currentNovel?.id;
+    if (!id) {
+      setClueData(EMPTY_CLUES);
+      setCluesOn(EMPTY_CLUES_ON);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const stripTags = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const cap = (s: string) => (s.length > 1200 ? `${s.slice(0, 1200)}…` : s);
+      const [outlineR, memoryR, foresR] = await Promise.allSettled([
+        fetchOutline(id),
+        fetchMemory(id),
+        listForeshadows(id),
+      ]);
+      if (!alive) return;
+      const outline =
+        outlineR.status === 'fulfilled'
+          ? outlineR.value
+              .map((act) => {
+                const nodes = act.nodes
+                  .map((n) => `${n.title}${stripTags(n.summary) ? `（${stripTags(n.summary)}）` : ''}`)
+                  .filter(Boolean)
+                  .join('；');
+                return nodes ? `${act.title}：${nodes}` : act.title;
+              })
+              .filter(Boolean)
+              .join('；')
+          : '';
+      const memory =
+        memoryR.status === 'fulfilled'
+          ? memoryR.value.items
+              .filter((it) => it.ai_visible !== false && (it.name || it.content))
+              .map((it) => `${it.name ? `${it.name}：` : ''}${stripTags(it.content)}`)
+              .filter(Boolean)
+              .join('；')
+          : '';
+      const foreshadow =
+        foresR.status === 'fulfilled'
+          ? foresR.value
+              .filter((f) => f.status === 'planted' || f.status === 'reminded')
+              .map((f) => f.description)
+              .join('；')
+          : '';
+      setClueData({ outline: cap(outline), memory: cap(memory), foreshadow: cap(foreshadow) });
+      setCluesOn({ outline: false, memory: false, foreshadow: false });
+    })();
+    return () => {
+      alive = false;
+    };
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 加载当前作品的任务
@@ -179,18 +283,6 @@ const StoryWorkflowPanel: React.FC = () => {
     else if (field === 'style') setStyle(value);
     else if (field === 'audience') setAudience(value);
     else setIntent(value);
-  };
-
-  // 把单个概览字段写入作品（仅 title/description/style/audience/intent 入库；创意只属于任务）
-  const persistOverviewField = async (field: StoryOverviewField, value: string) => {
-    if (!currentNovel?.id || field === 'logline') return;
-    const patch: UpdateNovelRequest = {};
-    if (field === 'title') patch.title = value;
-    else if (field === 'description') patch.description = value;
-    else if (field === 'style') patch.style = value;
-    else if (field === 'audience') patch.audience = value;
-    else patch.intent = value;
-    await updateNovel(currentNovel.id, patch);
   };
 
   // 比对本地字段与当前作品，构造概览脏字段补丁（含书名；保存后经 store 同步概览页/书列表）
@@ -256,6 +348,9 @@ const StoryWorkflowPanel: React.FC = () => {
       };
       const novel = await createNovel(createReq);
       if (novel?.id) await selectNovel(novel);
+      // 创意（logline）不入作品表：把 'new' 草稿迁到新作品作用域，避免回到表单后创意被清空
+      if (log.trim()) writeDraft(String(novel.id), { logline: log.trim() });
+      clearDraft('new'); // 其余字段已随作品入库，无需保留
       const job = await createJob({
         novel_id: novel.id,
         title: t,
@@ -269,35 +364,89 @@ const StoryWorkflowPanel: React.FC = () => {
     }
   };
 
+  // 草稿落盘：只存「与服务端不一致的字段 + 创意」，完全一致时清掉草稿 ——
+  // 否则残留草稿会遮蔽他处（概览页/书列表改名）的修改。无作品（新建入口）时全部入草稿。
+  useEffect(() => {
+    const scope = currentNovel ? String(currentNovel.id) : 'new';
+    const timer = setTimeout(() => {
+      const draft: OverviewDraft = {};
+      if (!currentNovel) {
+        Object.assign(draft, { title, description, logline, style, audience, intent });
+      } else {
+        if (title.trim() && title.trim() !== currentNovel.title) draft.title = title;
+        if (description.trim() !== (currentNovel.description ?? '')) draft.description = description;
+        if (style.trim() !== (currentNovel.style ?? '')) draft.style = style;
+        if (audience.trim() !== (currentNovel.audience ?? '')) draft.audience = audience;
+        if (intent.trim() !== (currentNovel.intent ?? '')) draft.intent = intent;
+        if (logline.trim()) draft.logline = logline;
+      }
+      if (Object.keys(draft).length) writeDraft(scope, draft);
+      else clearDraft(scope);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [title, description, logline, style, audience, intent, currentNovel]);
+
+  // 自动入库：已选作品时概览脏字段（书名/简介/文风/受众/意图）防抖 800ms 写回服务端，
+  // 经 store 同步概览页与书列表（需求3）；成功后清草稿。创意不入作品表，只留本地草稿。
+  useEffect(() => {
+    if (!currentNovel?.id) return;
+    const patch = buildOverviewPatch();
+    if (!Object.keys(patch).length) return;
+    const id = currentNovel.id;
+    const timer = setTimeout(async () => {
+      savingRef.current = true;
+      try {
+        await updateNovel(id, patch);
+        // 只摘除已入库字段：草稿里可能还躺着未入库的创意，整把清掉会连它一起抹掉
+        const rest: OverviewDraft = {};
+        if (logline.trim()) rest.logline = logline;
+        if (Object.keys(rest).length) writeDraft(String(id), rest);
+        else clearDraft(String(id));
+      } catch (e) {
+        console.error('auto save overview failed', e);
+        toast.show('概览保存失败，请重试', 'error');
+      } finally {
+        setTimeout(() => {
+          savingRef.current = false;
+        }, 600);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [title, description, style, audience, intent, currentNovel]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 已勾选且非空的线索库 → 请求摘录（对本模块所有 AIGC 生效）
+  const buildClues = (): StoryOverviewClue[] =>
+    CLUE_LIBRARIES.filter(({ kind }) => cluesOn[kind] && clueData[kind]).map(({ kind }) => ({
+      kind,
+      content: clueData[kind],
+    }));
+
+  // 当前概览六字段上下文（已填信息默认全部注入思考，无需勾选）
+  const buildOverviewContext = (): StoryOverviewContext => ({
+    title: title.trim(),
+    description: description.trim(),
+    logline: logline.trim(),
+    style: style.trim(),
+    audience: audience.trim(),
+    intent: intent.trim(),
+  });
+
   // AI 生成单个概览字段（真实链路，无预设兜底，失败直接抛错提示）：
   // 1) 目标字段已有内容时先弹覆盖警告（需求1）
-  // 2) 请求携带概览全部字段作为上下文，生成结果与已有概览保持一致（需求6）
-  // 3) 只读态下持久化字段立即入库并同步到概览页/书列表（需求3）；编辑态随「完成」统一保存
+  // 2) 请求携带概览全部字段 + 勾选的线索库摘录，生成结果与已有概览/线索一致（需求6）
+  // 3) 编辑态下生成结果只落本地，随「完成」统一保存
   const handleAIFillField = async (field: StoryOverviewField) => {
     if (getOverviewField(field).trim()) {
       if (!window.confirm(`「${OVERVIEW_FIELD_LABELS[field]}」已有内容，AI 生成将覆盖现有内容，是否继续？`)) return;
     }
     setFillingField(field);
     try {
-      const ctx: StoryOverviewContext = {
-        title: title.trim(),
-        description: description.trim(),
-        logline: logline.trim(),
-        style: style.trim(),
-        audience: audience.trim(),
-        intent: intent.trim(),
-      };
-      const out = await generateStoryOverview(ctx, [field]);
+      const out = await generateStoryOverview(buildOverviewContext(), [field], buildClues());
       const value = (out[field] ?? '').trim();
       if (!value) throw new Error('AI 未返回有效内容');
       setOverviewField(field, value);
-      if (currentNovel?.id && !editMode && field !== 'logline') {
-        await persistOverviewField(field, value);
-        toast.show(`已生成并保存${OVERVIEW_FIELD_LABELS[field]}`, 'success');
-      } else {
-        const hint = currentNovel && editMode && field !== 'logline' ? '，点「完成」保存' : '';
-        toast.show(`已生成${OVERVIEW_FIELD_LABELS[field]}${hint}`, 'success');
-      }
+      // 已选作品时改动由自动保存入库（创意只留本地草稿），不再需要「完成」按钮
+      toast.show(`已生成${OVERVIEW_FIELD_LABELS[field]}`, 'success');
     } catch (e) {
       console.error('ai fill field failed', e);
       toast.show('AI 生成失败，请稍后重试', 'error');
@@ -306,56 +455,31 @@ const StoryWorkflowPanel: React.FC = () => {
     }
   };
 
-  // AIGC 总开关：开启后各概览字段旁出现 AI 生成按钮（与手动编辑相互独立）
-  const handleToggleAiMode = () => {
-    setAiMode((prev) => {
-      const next = !prev;
-      toast.show(next ? '已开启 AIGC：点击字段旁 ✦ 可让 AI 生成内容' : '已关闭 AIGC', 'info');
-      return next;
-    });
-  };
-
-  // 编辑开关：进入编辑先快照（供「取消」回滚）；「完成」保存脏字段并退出
-  const handleToggleEditMode = () => {
-    if (editMode) {
-      void handleSaveEdit();
-    } else {
-      setEditSnapshot({ title, description, logline, style, audience, intent });
-      setEditMode(true);
+  // AIGC 全概览自动生成（原开关改为动作按钮，位于线索勾选卡右侧）：
+  // 一次性接管全部六个字段；任何字段已有内容时先弹覆盖警告，确认后才生成。
+  // 只读态生成后立即入库（含书名，经 store 同步）；编辑态落本地随「完成」保存。
+  const handleAIGenerateAll = async () => {
+    const allFields: StoryOverviewField[] = ['title', 'description', 'logline', 'style', 'audience', 'intent'];
+    const filled = allFields.filter((f) => getOverviewField(f).trim());
+    if (filled.length) {
+      const names = filled.map((f) => `「${OVERVIEW_FIELD_LABELS[f]}」`).join('、');
+      if (!window.confirm(`AIGC 将自动接管全部概览填写，${names}已有内容将被覆盖，是否继续？`)) return;
     }
-  };
-
-  // 完成：持久化概览脏字段（含书名，经 store 同步概览页/书列表）
-  const handleSaveEdit = async () => {
-    setEditMode(false);
-    setEditSnapshot(null);
-    if (!currentNovel?.id) return;
-    // 书名被清空时不提交空名：回填为当前书名
-    if (!title.trim()) setTitle(currentNovel.title);
-    const patch = buildOverviewPatch();
-    if (!Object.keys(patch).length) return;
+    setFillingAll(true);
     try {
-      await updateNovel(currentNovel.id, patch);
-      toast.show('作品概览已保存', 'success');
+      const out = await generateStoryOverview(buildOverviewContext(), allFields, buildClues());
+      for (const f of allFields) {
+        const v = (out[f] ?? '').trim();
+        if (v) setOverviewField(f, v);
+      }
+      // 生成后六字段均已落到本地，由自动保存 effect 统一入库（无作品时只入草稿）
+      toast.show('已生成全部概览', 'success');
     } catch (e) {
-      console.error('save overview failed', e);
-      toast.show('保存失败，请重试', 'error');
+      console.error('ai generate all failed', e);
+      toast.show('AI 生成失败，请稍后重试', 'error');
+    } finally {
+      setFillingAll(false);
     }
-  };
-
-  // 取消编辑：回滚到进入编辑时的字段快照并退出编辑（需求0）
-  const handleCancelEdit = () => {
-    if (editSnapshot) {
-      setTitle(editSnapshot.title);
-      setDescription(editSnapshot.description);
-      setLogline(editSnapshot.logline);
-      setStyle(editSnapshot.style);
-      setAudience(editSnapshot.audience);
-      setIntent(editSnapshot.intent);
-    }
-    setEditMode(false);
-    setEditSnapshot(null);
-    toast.show('已取消编辑', 'info');
   };
 
   const handleGenerate = async () => {
@@ -456,55 +580,15 @@ const StoryWorkflowPanel: React.FC = () => {
 
       <div className="relative w-full max-w-2xl max-h-full overflow-y-auto px-8 py-10 animate-fade-in">
         <div className="flex items-center justify-between mb-6">
-          {/* 左侧：标题 + AIGC 总开关（需求0：AIGC 移至左侧） */}
+          {/* 左侧：标题（AIGC 已改为「全概览自动生成」动作按钮，置于线索勾选卡右侧） */}
           <div className="flex items-center gap-2">
             <span className="w-8 h-8 rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-md shadow-violet-500/20">
               <Wand2 size={16} className="text-white" />
             </span>
             <span className="text-base font-semibold text-neutral-100">AI 起稿 · 全本创作</span>
-            {!activeJob && (
-              <button
-                type="button"
-                onClick={handleToggleAiMode}
-                title={aiMode ? 'AIGC 已开启：点击字段旁 ✦ 让 AI 生成内容' : '开启 AIGC，逐字段 AI 生成'}
-                className={`ml-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                  aiMode
-                    ? 'bg-violet-500/20 text-violet-200 border-violet-500/40 shadow-[0_0_12px_rgba(139,92,246,0.22)]'
-                    : 'bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300'
-                }`}
-              >
-                <Sparkles size={14} className={aiMode ? 'text-violet-300' : 'text-neutral-500'} />
-                AIGC
-              </button>
-            )}
           </div>
-          {/* 右侧：取消 / 编辑·完成（需求0：新增取消按钮以中止编辑） */}
+          {/* 右侧：返回入口（自动保存下无需「取消」/「完成」开关——文本录入即保存） */}
           <div className="flex items-center gap-2">
-            {!activeJob && currentNovel && editMode && (
-              <button
-                type="button"
-                onClick={handleCancelEdit}
-                title="放弃本次修改并退出编辑"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300 transition-all"
-              >
-                取消
-              </button>
-            )}
-            {!activeJob && currentNovel && (
-              <button
-                type="button"
-                onClick={handleToggleEditMode}
-                title={editMode ? '保存修改并完成编辑' : '编辑作品概览'}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                  editMode
-                    ? 'bg-violet-600 text-white border-violet-600 shadow-lg shadow-violet-600/20'
-                    : 'bg-white/8 text-neutral-300 border-white/10 hover:bg-white/15'
-                }`}
-              >
-                {editMode ? <Check size={13} /> : <Pencil size={13} />}
-                {editMode ? '完成' : '编辑'}
-              </button>
-            )}
             {activeJob ? (
               <button onClick={closeJob} className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors ml-2">
                 ← 返回任务列表
@@ -523,15 +607,55 @@ const StoryWorkflowPanel: React.FC = () => {
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
             <p className="text-xs text-neutral-400 mb-3">输入一句话创意，AI 自动跑完全本创作流水线</p>
 
-            {/* 作品概览字段组：书名/简介/创意/文风/受众/意图 统一管理（需求2）；AIGC 开启时逐字段可生成 */}
+            {/* 线索勾选卡（书名上方）：勾选的线索库对本模块所有 AIGC 生效；
+                概览已填信息默认注入思考上下文，不显示勾选项。
+                勾选后图标原地打勾，不另起独立勾选框。AIGC 位于卡右侧，一键接管全部概览字段。 */}
+            <div className="mb-3 p-2.5 rounded-lg bg-white/3 border border-white/6 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-neutral-500 mr-0.5">线索库</span>
+                {CLUE_LIBRARIES.map(({ kind, label, icon: Icon }) => {
+                  const has = Boolean(clueData[kind]);
+                  const on = cluesOn[kind];
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      disabled={!has}
+                      onClick={() => setCluesOn((p) => ({ ...p, [kind]: !p[kind] }))}
+                      title={has ? (on ? `已勾选：所有 AIGC 生成将参考${label}线索` : `勾选后所有 AIGC 生成将参考${label}线索`) : `暂无${label}线索内容`}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-all ${
+                        on
+                          ? 'bg-violet-500/20 text-violet-200 border-violet-500/40 shadow-[0_0_10px_rgba(139,92,246,0.18)]'
+                          : has
+                            ? 'bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300'
+                            : 'bg-white/3 text-neutral-600 border-white/6 cursor-not-allowed opacity-60'
+                      }`}
+                    >
+                      {on ? <Check size={12} className="text-emerald-300" /> : <Icon size={12} />}
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={handleAIGenerateAll}
+                disabled={fillingAll || fillingField !== null}
+                title="AIGC 全概览自动生成：AI 接管全部概览字段填写（已填内容将被覆盖）"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border shrink-0 bg-violet-500/15 text-violet-200 border-violet-500/35 hover:bg-violet-500/25 shadow-[0_0_12px_rgba(139,92,246,0.18)] disabled:opacity-50 transition-all"
+              >
+                {fillingAll ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} className="text-violet-300" />}
+                AIGC 全概览
+              </button>
+            </div>
+
+            {/* 作品概览字段组：书名/简介/创意/文风/受众/意图 统一管理；编辑态下每项右侧常驻 ✦ 单项生成 */}
             <OverviewFieldRow
               label="书名"
               value={title}
               onChange={setTitle}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'title'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('title')}
               placeholder="书名（如：剑试天下）"
             />
@@ -540,10 +664,8 @@ const StoryWorkflowPanel: React.FC = () => {
               label="简介"
               value={description}
               onChange={setDescription}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'description'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('description')}
               textarea
               rows={3}
@@ -554,10 +676,8 @@ const StoryWorkflowPanel: React.FC = () => {
               label="创意"
               value={logline}
               onChange={setLogline}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'logline'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('logline')}
               textarea
               rows={2}
@@ -567,10 +687,8 @@ const StoryWorkflowPanel: React.FC = () => {
               label="文风"
               value={style}
               onChange={setStyle}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'style'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('style')}
               placeholder="文风（可选，如：冷峻武侠 / 轻松甜宠）"
             />
@@ -578,10 +696,8 @@ const StoryWorkflowPanel: React.FC = () => {
               label="受众"
               value={audience}
               onChange={setAudience}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'audience'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('audience')}
               placeholder="目标受众（可选，如：15-25 岁网文读者 / 都市女性）"
             />
@@ -589,11 +705,11 @@ const StoryWorkflowPanel: React.FC = () => {
               label="意图"
               value={intent}
               onChange={setIntent}
-              editable={editMode}
-              aiEnabled={aiMode}
               filling={fillingField === 'intent'}
-              busy={fillingField !== null}
+              busy={fillingField !== null || fillingAll}
               onAIFill={() => handleAIFillField('intent')}
+              textarea
+              rows={2}
               placeholder="创作意图（可选，如：爽文爽感优先 / 情感共鸣 / 悬疑反转）"
             />
 

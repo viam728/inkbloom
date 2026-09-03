@@ -34,19 +34,29 @@ type ImagePromptResponse struct {
 	NegativePrompt string `json:"negative_prompt"`
 }
 
+// StoryOverviewClue is one author-checked clue-library excerpt (outline /
+// memory / foreshadow) that must constrain all overview AIGC generation.
+type StoryOverviewClue struct {
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+}
+
 // StoryOverviewRequest is the request body for AI generation of story overview
 // fields (title / description / logline / style / audience / intent). The whole
 // existing overview is passed as context so single-field generation stays
-// consistent; Fields selects which subset to (re)generate.
+// consistent; Fields selects which subset to (re)generate. Clues carries the
+// author-checked clue-library excerpts and applies to every AIGC call in this
+// module (per-field and full-overview alike).
 type StoryOverviewRequest struct {
-	Title       string   `json:"title,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Logline     string   `json:"logline,omitempty"`
-	Style       string   `json:"style,omitempty"`
-	Audience    string   `json:"audience,omitempty"`
-	Intent      string   `json:"intent,omitempty"`
-	Fields      []string `json:"fields,omitempty"`
-	Model       string   `json:"model,omitempty"`
+	Title       string               `json:"title,omitempty"`
+	Description string               `json:"description,omitempty"`
+	Logline     string               `json:"logline,omitempty"`
+	Style       string               `json:"style,omitempty"`
+	Audience    string               `json:"audience,omitempty"`
+	Intent      string               `json:"intent,omitempty"`
+	Fields      []string             `json:"fields,omitempty"`
+	Clues       []StoryOverviewClue  `json:"clues,omitempty"`
+	Model       string               `json:"model,omitempty"`
 }
 
 // StoryOverviewResponse is the response for story overview generation.

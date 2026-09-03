@@ -871,8 +871,9 @@ func (h *AIHandler) StoryOverview(c *gin.Context) {
 		return
 	}
 	h.logger.Info("story-overview requested", zap.Strings("fields", req.Fields))
-	// 推理模型（deepseek-v4-flash）reasoning 耗时长，空 content 时上游还会换变体
-	// 重试一次 —— 默认 60s aiTextTimeout 不够，此处放宽到 120s。
+	// 推理模型（deepseek-v4-flash）reasoning 耗时长，且空 content / 空解析
+	// 结果时上游最多换变体重试 3 次 —— 默认 60s aiTextTimeout 不够。140s
+	// 仍低于 jsonClient 的 150s 硬顶兜底。
 	body, err := json.Marshal(req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{
@@ -881,7 +882,7 @@ func (h *AIHandler) StoryOverview(c *gin.Context) {
 		})
 		return
 	}
-	h.proxyJSON(c, "/api/ai/story-overview", body, 120*time.Second, true)
+	h.proxyJSON(c, "/api/ai/story-overview", body, 140*time.Second, true)
 }
 
 // PromptBuild handles POST /api/v1/prompt/build — build context-aware prompt messages.
