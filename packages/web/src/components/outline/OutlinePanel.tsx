@@ -8,11 +8,12 @@ import {
   ArrowUp,
   ArrowDown,
   Sparkles,
-  Link2,
+  FileText,
   ListOrdered,
   Maximize2,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
+import type { Chapter } from '@/types';
 import { useMemoryStore, sortMemoryItems } from '@/stores/memory-store';
 import {
   useOutlineStore,
@@ -100,6 +101,9 @@ const OutlinePanel: React.FC = () => {
   const [actTitleDraft, setActTitleDraft] = useState('');
   /** 节点编辑弹窗内局部专注态（受控，由 TipTapEditor 工具栏切换） */
   const [nodeEditorFocused, setNodeEditorFocused] = useState(false);
+
+  /** 未挂大纲的旧文章选择器：为无正文的要点挂载既有章节（整合旧文章数据到大纲正文） */
+  const [bodyPicker, setBodyPicker] = useState<{ actId: string; nodeId: string } | null>(null);
 
   // 扩写 → 初稿预览状态
   const [expandTarget, setExpandTarget] = useState<{
@@ -264,13 +268,68 @@ const OutlinePanel: React.FC = () => {
     }
   };
 
-  const handleJumpChapter = async (node: OutlineNode) => {
-    const chapter = chapters.find((c) => c.id === node.chapter_id);
-    if (chapter) {
+  /** 按大纲顺序为要点创建空白正文章节（原 handleOpenBody 的建章逻辑） */
+  const createBodyForNode = async (actId: string, node: OutlineNode) => {
+    if (!novelId) return;
+    const title = node.title?.trim() || '未命名章节';
+    try {
+      const insertAt = computeInsertAt(actId, node.id);
+      const chapter = await createChapter({ novel_id: novelId, title, content: '' }, insertAt);
+      updateNode(novelId, actId, node.id, {
+        chapter_id: chapter.id,
+        status: node.status === 'planned' ? 'drafting' : node.status,
+      });
       await selectChapter(chapter);
-    } else {
-      showToast('关联章节已不存在', 'error');
+      showToast(`已为「${title}」创建正文，可直接开写`, 'success');
+    } catch {
+      showToast('创建正文章节失败，请检查后端连接', 'error');
     }
+  };
+
+  /** 挂载既有章节为本要点正文（整合旧文章数据）：关联 → 按状态推进 → 打开正文 */
+  const linkExistingChapter = async (chapter: Chapter) => {
+    if (!novelId || !bodyPicker) return;
+    const live = acts
+      .find((a) => a.id === bodyPicker.actId)
+      ?.nodes.find((n) => n.id === bodyPicker.nodeId);
+    if (!live) {
+      setBodyPicker(null);
+      return;
+    }
+    updateNode(novelId, bodyPicker.actId, live.id, {
+      chapter_id: chapter.id,
+      status: live.status === 'planned' ? 'drafting' : live.status,
+    });
+    setBodyPicker(null);
+    await selectChapter(chapter);
+    showToast(`已将「${chapter.title || '未命名章节'}」挂为本要点正文`, 'success');
+  };
+
+  /**
+   * 正文入口（大纲 ↔ 章节交互合并的唯一出口）：
+   * 已关联成稿章节 → 直接打开该章节正文；未关联 → 若存在尚未挂到大纲的既有章节
+   * （旧文章），先弹选择器让作者挂载复用，避免同一篇旧文被重复建章稀释；
+   * 无可复用章节时按大纲顺序就地建一章空正文并关联后打开。
+   * 卡片悬浮标与编辑弹窗共用此入口，节点上不再散落「成稿/编辑/扩写」多个小图标。
+   */
+  const handleOpenBody = async (actId: string, node: OutlineNode) => {
+    if (!novelId) return;
+    const linked = node.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
+    if (linked) {
+      await selectChapter(linked);
+      return;
+    }
+    // 可复用的旧文章：尚未挂到任何大纲要点的章节（含 AI 采纳/手动写的存量正文）
+    const linkedIds = new Set(
+      acts.flatMap((a) => a.nodes.map((n) => n.chapter_id).filter(Boolean) as number[]),
+    );
+    const orphans = chapters.filter((c) => !linkedIds.has(c.id));
+    if (orphans.length > 0) {
+      setEditingNode(null);
+      setBodyPicker({ actId, nodeId: node.id });
+      return;
+    }
+    await createBodyForNode(actId, node);
   };
 
   // ── 空态与进度 ────────────────────────────────────────────────────────
@@ -306,6 +365,15 @@ const OutlinePanel: React.FC = () => {
   const editingNodeCount = editingNodeLive
     ? acts.find((a) => a.id === editingNode!.actId)?.nodes.length ?? 0
     : 0;
+
+  // 旧文章选择器数据：尚未挂到任何大纲要点的章节（正文入口的复用候选）
+  const pickerNode = bodyPicker
+    ? acts.find((a) => a.id === bodyPicker.actId)?.nodes.find((n) => n.id === bodyPicker.nodeId) ?? null
+    : null;
+  const linkedChapterIds = new Set(
+    acts.flatMap((a) => a.nodes.map((n) => n.chapter_id).filter(Boolean) as number[]),
+  );
+  const orphanChapters = chapters.filter((c) => !linkedChapterIds.has(c.id));
 
   return (
     <div className="flex flex-col h-full">
@@ -372,8 +440,7 @@ const OutlinePanel: React.FC = () => {
             }}
             onAddNode={() => handleAddNode(act.id)}
             onEditNode={(node) => openNodeEditor(act.id, node)}
-            onExpandNode={(node) => handleExpand(act.id, node)}
-            onJumpNode={handleJumpChapter}
+            onOpenBody={(node) => handleOpenBody(act.id, node)}
           />
         ))}
 
@@ -460,6 +527,22 @@ const OutlinePanel: React.FC = () => {
                 <Sparkles size={12} />
                 扩写成稿
               </button>
+              {/* 正文入口：与节点卡悬浮标同一出口，先落盘要点再进正文 */}
+              <button
+                onClick={() => {
+                  commitNodeEdit();
+                  closeNodeEditor();
+                  handleOpenBody(editingNode!.actId, {
+                    ...editingNodeLive,
+                    title: nodeTitleDraft.trim(),
+                  });
+                }}
+                title={editingNodeLive.chapter_id ? '打开正文章节' : '创建并打开正文章节'}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-brand-100 bg-brand-500/15 border border-brand-500/30 hover:bg-brand-500/28 hover:text-white transition-all"
+              >
+                <FileText size={12} />
+                {editingNodeLive.chapter_id ? '打开正文' : '写正文'}
+              </button>
               <div className="flex-1" />
               <button
                 onClick={() => novelId && moveNode(novelId, editingNode!.actId, editingNodeLive.id, -1)}
@@ -545,6 +628,68 @@ const OutlinePanel: React.FC = () => {
         </div>
       </Modal>
 
+      {/* 旧文章挂载选择器：把未挂大纲的存量章节整合为大要点正文 */}
+      <Modal
+        open={bodyPicker !== null}
+        onClose={() => setBodyPicker(null)}
+        title="挂载旧文章为正文"
+        width="480px"
+      >
+        <div className="px-5 py-4">
+          <p className="text-[11px] text-neutral-500 leading-relaxed mb-3">
+            为要点「{pickerNode?.title || '未命名章节'}」选择正文：以下章节尚未挂到大纲，可直接复用，避免重复建章。
+          </p>
+          <div className="max-h-[260px] overflow-y-auto space-y-1 mb-3">
+            {orphanChapters.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => linkExistingChapter(c)}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/4 border border-white/8 hover:border-brand-500/40 hover:bg-brand-500/8 text-left transition-colors group"
+             >
+                <FileText size={14} className="shrink-0 text-neutral-500 group-hover:text-brand-300 transition-colors" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-xs text-neutral-200 truncate">
+                    {c.title || '未命名章节'}
+                  </span>
+                  <span className="block text-[10px] text-neutral-500 mt-0.5">
+                    {c.word_count ? `${c.word_count.toLocaleString()} 字` : '空正文'}
+                    {' · '}{new Date(c.updated_at).toLocaleDateString()}
+                  </span>
+                </span>
+                <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-300 border border-brand-500/25 opacity-0 group-hover:opacity-100 transition-opacity">
+                  挂载
+                </span>
+              </button>
+            ))}
+            {orphanChapters.length === 0 && (
+              <p className="px-3 py-4 text-center text-[11px] text-neutral-600">
+                所有章节都已挂到大纲，没有可复用的旧文章
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setBodyPicker(null)}
+              className="px-4 py-1.5 rounded-lg text-sm text-neutral-300 hover:bg-white/8 transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => {
+                if (bodyPicker && pickerNode) {
+                  setBodyPicker(null);
+                  createBodyForNode(bodyPicker.actId, pickerNode);
+                }
+              }}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white transition-all shadow-lg shadow-indigo-600/20"
+           >
+              <Plus size={13} />
+              新建空正文
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* 扩写初稿预览 */}
       <DraftPreviewModal
         open={expandTarget !== null}
@@ -582,8 +727,7 @@ interface ActBlockProps {
   onRemove: () => void;
   onAddNode: () => void;
   onEditNode: (node: OutlineNode) => void;
-  onExpandNode: (node: OutlineNode) => void;
-  onJumpNode: (node: OutlineNode) => void;
+  onOpenBody: (node: OutlineNode) => void;
 }
 
 const ActBlock: React.FC<ActBlockProps> = ({
@@ -594,8 +738,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
   onRemove,
   onAddNode,
   onEditNode,
-  onExpandNode,
-  onJumpNode,
+  onOpenBody,
 }) => {
   return (
     <div className="mb-2">
@@ -659,8 +802,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
               key={node.id}
               node={node}
               onEdit={() => onEditNode(node)}
-              onExpand={() => onExpandNode(node)}
-              onJump={() => onJumpNode(node)}
+              onOpenBody={() => onOpenBody(node)}
             />
           ))}
         </div>
@@ -673,13 +815,13 @@ const ActBlock: React.FC<ActBlockProps> = ({
 interface NodeCardProps {
   node: OutlineNode;
   onEdit: () => void;
-  onExpand: () => void;
-  onJump: () => void;
+  onOpenBody: () => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onExpand, onJump }) => {
+const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody }) => {
   // 兜底：node.status 由 Record 查表拿到，非法值会让解引用 status.dot 抛错白屏
   const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.planned;
+  const hasBody = Boolean(node.chapter_id);
   return (
     <div
       onClick={onEdit}
@@ -690,19 +832,6 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onExpand, onJump }) =
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
-        {node.chapter_id && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              onJump();
-            }}
-            title="跳转到成稿章节"
-            className="shrink-0 flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-brand-500/12 text-brand-300 border border-brand-500/20 hover:bg-brand-500/25 transition-colors"
-          >
-            <Link2 size={9} />
-            成稿
-          </span>
-        )}
         <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border ${status.chip}`}>
           {OUTLINE_STATUS_LABELS[node.status]}
         </span>
@@ -710,29 +839,19 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onExpand, onJump }) =
       {node.summary && (
         <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{htmlToPlainText(node.summary)}</p>
       )}
-      {/* 悬停快捷操作 */}
-      <div className="absolute top-1.5 right-1.5 hidden group-hover:flex items-center gap-0.5 bg-surface-2 rounded-md">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit();
-          }}
-          title="编辑要点"
-          className="p-1 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
-        >
-          <Pencil size={11} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onExpand();
-          }}
-          title="AI 扩写成稿"
-          className="p-1 rounded text-fuchsia-300 hover:bg-fuchsia-500/15 transition-colors"
-        >
-          <Sparkles size={12} />
-        </button>
-      </div>
+      {/* 悬浮正文入口：单一大号按钮取代原「编辑 / AI 扩写」两个小图标，
+          大纲与章节的交互在这里合并——有正文就打开，没正文就建一章再打开 */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenBody();
+        }}
+        title={hasBody ? '打开正文章节' : '创建并打开正文章节'}
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-medium bg-brand-500/18 text-brand-100 border border-brand-500/35 hover:bg-brand-500/30 hover:text-white shadow-[0_2px_10px_rgba(0,0,0,0.4)] backdrop-blur-sm transition-all"
+      >
+        <FileText size={12} />
+        {hasBody ? '正文' : '写正文'}
+      </button>
     </div>
   );
 };
