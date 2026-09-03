@@ -22,12 +22,15 @@ import {
   type OutlineStatus,
 } from '@/stores/outline-store';
 import { expandOutlineToDraft } from '@/services/outline-client';
+import { trashNode } from '@/services/trash-client';
+import { useTrashStore } from '@/stores/trash-store';
 import { useToast } from '@/components/common/Toast';
 import Modal from '@/components/common/Modal';
 import TipTapEditor from '@/components/editor/TipTapEditor';
 import { htmlToPlainText } from '@/utils/html';
 import DraftPreviewModal from './DraftPreviewModal';
 import OutlineExpandedView from './OutlineExpandedView';
+import TrashModal from './TrashModal';
 
 /** 稳定引用的空数组，避免 selector 每次返回新引用导致无限渲染 */
 const EMPTY_ACTS: OutlineAct[] = [];
@@ -71,7 +74,8 @@ const toEditorHtml = (raw: string): string => {
 const OutlinePanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
-  const { createChapter, selectChapter, deleteChapter } = useNovelStore();
+  const { createChapter, selectChapter, fetchChapters } = useNovelStore();
+  const loadTrash = useTrashStore((s) => s.load);
 
   const acts = useOutlineStore((s) =>
     currentNovel ? s.byNovel[currentNovel.id] ?? EMPTY_ACTS : EMPTY_ACTS,
@@ -83,7 +87,6 @@ const OutlinePanel: React.FC = () => {
     removeAct,
     addNode,
     updateNode,
-    removeNode,
     moveNode,
   } = useOutlineStore();
 
@@ -91,6 +94,7 @@ const OutlinePanel: React.FC = () => {
 
   const [collapsedActs, setCollapsedActs] = useState<Set<string>>(new Set());
   const [expandedOpen, setExpandedOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
 
   // ── 弹窗编辑（替代左栏内联展开） ─────────────────────────────────────
   const [editingNode, setEditingNode] = useState<{ actId: string; node: OutlineNode } | null>(null);
@@ -299,49 +303,59 @@ const OutlinePanel: React.FC = () => {
   };
 
   /**
-   * 删除要点：正文统一在大纲管理，要点绑定的章节一并删除，
-   * 避免章节残留成无入口的孤儿数据。无正文的要点保持原行为直接删。
+   * 删除要点（垃圾桶）：后端事务内把「节点 + 绑定章节 + 正文」一起移入回收站，
+   * 可随时恢复。成功后刷新大纲（服务端 version 已变，本地不能直接 PUT）与章节列表。
    */
   const handleRemoveNode = async (actId: string, node: OutlineNode) => {
     if (!novelId) return;
     if (
       node.chapter_id &&
-      !window.confirm(`要点「${node.title || '未命名章节'}」已关联正文，删除要点将同时删除该章节，确定？`)
+      !window.confirm(`要点「${node.title || '未命名章节'}」连同其正文将移入回收站，可随时恢复，确定？`)
     ) {
       return;
     }
-    if (node.chapter_id) {
-      try {
-        await deleteChapter(node.chapter_id);
-      } catch {
-        /* 章节删除失败不阻塞要点删除 */
-      }
+    try {
+      await trashNode(novelId, actId, node.id);
+      showToast('已移入回收站', 'info');
+    } catch {
+      showToast('删除失败，请检查后端连接', 'error');
+    } finally {
+      // 无论成功失败都对齐服务端状态（version / acts / 章节列表）
+      await loadOutline(novelId);
+      await fetchChapters(novelId);
     }
-    removeNode(novelId, actId, node.id);
-    showToast('已删除章节要点', 'info');
   };
 
-  /** 删除幕：幕下已关联正文的要点连同章节一起删除（带确认） */
+  /** 删除幕（垃圾桶）：幕下全部要点逐个进桶，再移除空幕 */
   const handleRemoveAct = async (act: OutlineAct) => {
     if (!novelId) return;
-    const boundIds = act.nodes
-      .map((n) => n.chapter_id)
-      .filter((id): id is number => Boolean(id));
+    const boundCount = act.nodes.filter((n) => n.chapter_id).length;
     if (
-      boundIds.length > 0 &&
-      !window.confirm(`「${act.title || '未命名幕'}」下有 ${boundIds.length} 个要点已关联正文，删除幕将同时删除这些章节，确定？`)
+      act.nodes.length > 0 &&
+      !window.confirm(
+        `「${act.title || '未命名幕'}」下 ${act.nodes.length} 个要点${boundCount ? `（含 ${boundCount} 章正文）` : ''}将全部移入回收站，可随时恢复，确定？`,
+      )
     ) {
       return;
     }
-    for (const id of boundIds) {
+    let failed = false;
+    for (const n of act.nodes) {
       try {
-        await deleteChapter(id);
+        await trashNode(novelId, act.id, n.id);
       } catch {
-        /* 忽略单章删除失败 */
+        failed = true;
+        break;
       }
     }
-    removeAct(novelId, act.id);
-    showToast('已删除幕', 'info');
+    if (!failed) {
+      // 空幕从本地移除并 PUT（loadOutline 已同步到服务端最新 version）
+      removeAct(novelId, act.id);
+      showToast('幕已删除，要点移入回收站', 'info');
+    } else {
+      showToast('部分要点删除失败', 'error');
+    }
+    await loadOutline(novelId);
+    await fetchChapters(novelId);
   };
 
   // ── 空态与进度 ────────────────────────────────────────────────────────
@@ -391,6 +405,16 @@ const OutlinePanel: React.FC = () => {
             <span className="text-[10px] text-neutral-500 tabular-nums">
               {doneNodes}/{totalNodes} 章完成 · {progress}%
             </span>
+            <button
+              onClick={() => {
+                setTrashOpen(true);
+                if (novelId) loadTrash(novelId);
+              }}
+              title="回收站"
+              className="p-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
+            >
+              <Trash2 size={12} />
+            </button>
             <button
               onClick={() => setExpandedOpen(true)}
               title="大纲管理 · 展开视图"
@@ -651,6 +675,21 @@ const OutlinePanel: React.FC = () => {
           openNodeEditor(actId, node);
         }}
       />
+
+      {/* 回收站：恢复时重选幕间归属 */}
+      {currentNovel && (
+        <TrashModal
+          open={trashOpen}
+          novelId={currentNovel.id}
+          acts={acts}
+          onClose={() => setTrashOpen(false)}
+          onRestored={async () => {
+            if (!novelId) return;
+            await loadOutline(novelId);
+            await fetchChapters(novelId);
+          }}
+        />
+      )}
     </div>
   );
 };

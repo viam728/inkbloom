@@ -74,6 +74,9 @@ type Handlers struct {
 	Story *handler.StoryHandler
 	// Agent drives the conversational creation Agent (tool-calling). Optional.
 	Agent *handler.AgentHandler
+	// Trash serves the outline-node recycle bin (chapter+node+content together
+	// in, restore with act re-selection). Optional.
+	Trash *handler.TrashHandler
 	// Public serves the anonymous rollout flags + desktop download
 	// endpoints under /api/v1/public (M6, task #51). Optional.
 	Public *handler.PublicHandler
@@ -469,6 +472,14 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 
 		// Volumes (nested under novel)
 		api.GET("/novels/:id/volumes", h.Volume.ListVolumes)
+
+		// 垃圾桶：删除要点进桶 / 列表 / 重选幕恢复 / 彻底删除。
+		if h.Trash != nil {
+			api.GET("/novels/:id/trash", h.Trash.List)
+			api.POST("/novels/:id/trash", h.Trash.TrashNode)
+			api.POST("/novels/:id/trash/:trashId/restore", h.Trash.Restore)
+			api.DELETE("/novels/:id/trash/:trashId", h.Trash.Purge)
+		}
 
 		// Volumes
 		api.POST("/volumes", h.Volume.CreateVolume)

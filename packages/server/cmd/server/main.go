@@ -443,6 +443,7 @@ func main() {
 		Interaction:   interactionHandler,
 		Story:         storyHandler,
 		Agent:         agentHandler,
+		Trash:         handler.NewTrashHandler(service.NewTrashService(db, novelRepo)),
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,

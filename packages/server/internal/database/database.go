@@ -43,6 +43,8 @@ func automigrateModels() []interface{} {
 		&model.KnowledgeNode{},
 		&model.KnowledgeEdge{},
 		&model.NovelOutline{},
+		// 垃圾桶（2026-09-03）：删除要点时章节+节点+正文一起进桶，可重选幕恢复。
+		&model.ChapterTrash{},
 		&model.NovelMemory{},
 		&model.User{},
 		&model.Subscription{},
