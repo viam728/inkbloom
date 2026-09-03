@@ -77,7 +77,7 @@ export const MODELS: ModelOption[] = [
     desc: '旗舰 · 深度构思',
     icon: <Sparkles size={14} />,
   },
-  // DeepSeek / OpenAI（走默认 DeepSeek 兼容端点）
+  // DeepSeek（走默认 DeepSeek 兼容端点；未配置 OpenAI key，故不提供 gpt-* 选项）
   {
     value: 'deepseek-v4-flash',
     label: 'deepseek-v4-flash',
@@ -95,18 +95,6 @@ export const MODELS: ModelOption[] = [
     label: 'deepseek-chat',
     desc: 'DeepSeek · 长文本推演',
     icon: <MessageSquareText size={14} />,
-  },
-  {
-    value: 'gpt-4o-mini',
-    label: 'gpt-4o-mini',
-    desc: 'OpenAI · 快速轻量',
-    icon: <MessageSquareText size={14} />,
-  },
-  {
-    value: 'gpt-4o',
-    label: 'gpt-4o',
-    desc: 'OpenAI · 旗舰',
-    icon: <Cpu size={14} />,
   },
 ];
 
