@@ -42,17 +42,20 @@ type AgentService struct {
 	novelSvc     *NovelService
 	chapterSvc   *ChapterService
 	docSvc       *NovelDocService
+	branchSvc    *BranchService
 	agentContext *AgentContextService
 	aiServiceURL string
 	httpClient   *http.Client
 	logger       *zap.Logger
 }
 
-// NewAgentService creates a new AgentService.
+// NewAgentService creates a new AgentService. branchSvc is optional (nil on
+// test constructions): save_branch/list_branches degrade gracefully without it.
 func NewAgentService(
 	novelSvc *NovelService,
 	chapterSvc *ChapterService,
 	docSvc *NovelDocService,
+	branchSvc *BranchService,
 	agentContext *AgentContextService,
 	aiServiceURL string,
 	logger *zap.Logger,
@@ -61,6 +64,7 @@ func NewAgentService(
 		novelSvc:     novelSvc,
 		chapterSvc:   chapterSvc,
 		docSvc:       docSvc,
+		branchSvc:    branchSvc,
 		agentContext: agentContext,
 		aiServiceURL: strings.TrimRight(aiServiceURL, "/"),
 		httpClient:   &http.Client{Timeout: 5 * time.Minute},
@@ -171,7 +175,7 @@ func (s *AgentService) toolSchema() []AgentTool {
 // so every conversational endpoint shares one source of truth and the resolved
 // model name there is authoritative. Do NOT append an identity line here too.
 const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作小说。" +
-	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / list_chapters / get_chapter_by_title / save_memory / save_outline）" +
+	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / list_chapters / get_chapter_by_title / save_memory / save_outline / save_branch / list_branches）" +
 	"来实际创建作品、章节、撰写正文，并把角色/设定写入记忆模块、把情节规划写入大纲模块。" +
 	"章节正文统一在大纲中管理：create_chapter 新建的章节会自动挂到大纲（同名要点绑定，否则末幕追加新要点），" +
 	"因此规划整本书时优先 save_outline 生成幕/要点结构，再逐章 create_chapter + write_chapter，章节即可落到对应要点上。" +
@@ -418,6 +422,65 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 			return asJSON(map[string]any{"acts": cnt})
 		}
 		return `{"error":"acts 必填"}`
+
+	case "save_branch":
+		nid := resolveNovelID()
+		title, _ := args["title"].(string)
+		summary, _ := args["summary"].(string)
+		if s.branchSvc == nil {
+			return `{"error":"分支模块不可用"}`
+		}
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
+		if title == "" || summary == "" {
+			return `{"error":"title 与 summary 必填"}`
+		}
+		parentID, _ := args["parent_id"].(float64)
+		chapterID, _ := args["chapter_id"].(float64)
+		source, _ := args["source"].(string)
+		b, err := s.branchSvc.Create(ctx, userID, &dto.CreateBranchRequest{
+			NovelID:   nid,
+			ParentID:  int64(parentID),
+			Title:     title,
+			Summary:   summary,
+			Source:    source,
+			ChapterID: int64(chapterID),
+		})
+		if err != nil {
+			s.logger.Warn("agent save_branch failed", zap.Error(err))
+			return `{"error":"保存分支失败"}`
+		}
+		return asJSON(map[string]any{"branch_id": b.ID, "title": b.Title})
+
+	case "list_branches":
+		nid := resolveNovelID()
+		if s.branchSvc == nil {
+			return `{"error":"分支模块不可用"}`
+		}
+		if nid <= 0 {
+			return `{"error":"请先指定作品（novel_id）或选中一部作品"}`
+		}
+		list, err := s.branchSvc.List(ctx, userID, nid)
+		if err != nil {
+			s.logger.Warn("agent list_branches failed", zap.Error(err))
+			return `{"error":"读取分支失败"}`
+		}
+		nodes := make([]map[string]any, 0, len(list))
+		for _, b := range list {
+			node := map[string]any{
+				"id": b.ID, "parent_id": 0, "title": b.Title,
+				"summary": b.Summary, "source": b.Source,
+			}
+			if b.ParentID != nil {
+				node["parent_id"] = b.ParentID
+			}
+			if b.ChapterID != nil {
+				node["chapter_id"] = b.ChapterID
+			}
+			nodes = append(nodes, node)
+		}
+		return asJSON(map[string]any{"branches": nodes})
 
 	case "list_novels":
 		list, err := s.novelSvc.ListNovels(ctx, userID, 1, 50)

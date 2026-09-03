@@ -74,6 +74,8 @@ type Handlers struct {
 	Story *handler.StoryHandler
 	// Agent drives the conversational creation Agent (tool-calling). Optional.
 	Agent *handler.AgentHandler
+	// Branch serves the world-branch tree (世界线) endpoints. Optional.
+	Branch *handler.BranchHandler
 	// Trash serves the outline-node recycle bin (chapter+node+content together
 	// in, restore with act re-selection). Optional.
 	Trash *handler.TrashHandler
@@ -444,6 +446,14 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		// Chapters (nested under novel)
 		api.GET("/novels/:id/chapters", h.Chapter.ListChaptersByNovel)
 		api.PUT("/novels/:id/chapters/order", h.Chapter.ReorderChapters)
+
+		// World-branch tree (世界线)
+		if h.Branch != nil {
+			api.GET("/novels/:id/branches", h.Branch.List)
+			api.POST("/novels/:id/branches", h.Branch.Create)
+			api.PUT("/branches/:bid", h.Branch.Update)
+			api.DELETE("/branches/:bid", h.Branch.Delete)
+		}
 
 		// Chapters
 		api.POST("/chapters", h.Chapter.CreateChapter)

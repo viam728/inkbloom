@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Trash2, FileText, Wand2, Clock, PenLine, Send, BarChart3 } from 'lucide-react';
+import { BookOpen, Trash2, FileText, Wand2, Clock, PenLine, Send, BarChart3, Network } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { usePublishStore } from '@/stores/publish-store';
 import { useToast } from '@/components/common/Toast';
 import PublishModal from '@/components/publish/PublishModal';
 import WorkStatsPanel from '@/components/publish/WorkStatsPanel';
+import WorldTreePanel from '@/components/branch/WorldTreePanel';
 
 /**
  * 作品概览页（简介页）：选中作品后中央编辑区显示（无打开章节时）。
- * 作品元信息 + 发布入口（发布操作与读者数据看板的唯一入口）+ 删除入口。
+ * 作品元信息 + 发布入口（发布操作与读者数据看板的唯一入口）+ 世界线入口 + 删除入口。
  * 发布按钮从编辑器工具栏迁移至此；读者数据看板从发布弹窗分离至此。
  */
 const NovelOverview: React.FC = () => {
@@ -17,6 +18,7 @@ const NovelOverview: React.FC = () => {
     const [deleteConfirm, setDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [publishOpen, setPublishOpen] = useState(false);
+    const [worldTreeOpen, setWorldTreeOpen] = useState(false);
 
     // 发布状态（系统事实）：概览页承担发布入口与读者看板，挂载即拉取
     const pubWork = usePublishStore((s) =>
@@ -30,6 +32,7 @@ const NovelOverview: React.FC = () => {
     useEffect(() => {
         setDeleteConfirm(false);
         setPublishOpen(false);
+        setWorldTreeOpen(false);
         if (currentNovel) void usePublishStore.getState().load(currentNovel.id);
     }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -101,8 +104,8 @@ const NovelOverview: React.FC = () => {
                     </p>
                 </div>
 
-                {/* 操作区：发布入口从编辑器工具栏迁移至此 */}
-                <div className="flex items-center gap-2">
+                {/* 操作区：发布入口从编辑器工具栏迁移至此；世界线管理全书分支 */}
+                <div className="flex items-center gap-2 flex-wrap">
                     <button
                         onClick={handleNewChapter}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-medium transition-all shadow-lg shadow-indigo-600/20"
@@ -116,6 +119,13 @@ const NovelOverview: React.FC = () => {
                         <Wand2 size={14} /> AI 起稿
                     </button>
                     <div className="flex-1" />
+                    <button
+                        onClick={() => setWorldTreeOpen(true)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-600/15 hover:bg-sky-600/25 text-sky-300 text-sm font-medium transition-all"
+                        title="打开世界线：全书分支图节点树（AI 深度参与的剧情分歧管理）"
+                    >
+                        <Network size={14} /> 世界线
+                    </button>
                     <button
                         onClick={() => setPublishOpen(true)}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600/20 hover:bg-brand-600/30 text-brand-300 text-sm font-medium transition-all"
@@ -174,6 +184,9 @@ const NovelOverview: React.FC = () => {
 
             {/* 发布弹窗（Portal 到 body，与工具栏时期一致） */}
             <PublishModal open={publishOpen} onClose={() => setPublishOpen(false)} />
+
+            {/* 世界线面板：VSCode 终端式底部面板（全书分支图节点树） */}
+            <WorldTreePanel open={worldTreeOpen} onClose={() => setWorldTreeOpen(false)} />
         </div>
     );
 };
