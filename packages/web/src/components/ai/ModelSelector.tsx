@@ -101,12 +101,18 @@ export const MODELS: ModelOption[] = [
 /** 简约可展开的模型选择器：默认收起为胶囊，点击向上弹出模型列表 */
 const ModelSelector: React.FC = () => {
   const currentModel = useAIStore((s) => s.currentModel);
+  const sceneModels = useAIStore((s) => s.sceneModels);
   const setModel = useAIStore((s) => s.setModel);
   const [open, setOpen] = useState(false);
   const [sceneOpen, setSceneOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  const current = MODELS.find((m) => m.value === currentModel) ?? MODELS[0];
+  // 本选择器挂在 AI 对话面板（agent 场景）：场景覆盖优先于全局选择。
+  // 胶囊显示「实际生效」的对话模型，避免全局已切 DeepSeek 但对话仍走
+  // 被 pin 的 GLM 时产生"模型没切换"的错觉。
+  const agentPinned = sceneModels['agent'] || '';
+  const effective = agentPinned || currentModel;
+  const current = MODELS.find((m) => m.value === effective) ?? MODELS[0];
 
   // 点击外部 / Esc 关闭
   useEffect(() => {
