@@ -53,7 +53,7 @@ class OpenAIProvider(BaseLLMProvider):
         """Send a chat completion request and return the full response."""
         model = model or settings.default_model
 
-        response = await self._client.chat.completions.create(
+        response = await self._client_for(model).chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
@@ -86,7 +86,7 @@ class OpenAIProvider(BaseLLMProvider):
         """
         model = model or settings.default_model
 
-        response = await self._client.chat.completions.create(
+        response = await self._client_for(model).chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
