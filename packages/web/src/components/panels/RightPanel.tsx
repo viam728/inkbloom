@@ -46,11 +46,17 @@ const RightPanel: React.FC = () => {
   useEffect(() => {
     const showAigc = () => setActiveTab('aigc');
     const showReview = () => setActiveTab('review');
+    const showChat = () => setActiveTab('chat');
+    const showTasks = () => setActiveTab('tasks');
     window.addEventListener('inkbloom:show-aigc', showAigc);
     window.addEventListener('inkbloom:show-review', showReview);
+    window.addEventListener('inkbloom:show-chat', showChat);
+    window.addEventListener('inkbloom:show-tasks', showTasks);
     return () => {
       window.removeEventListener('inkbloom:show-aigc', showAigc);
       window.removeEventListener('inkbloom:show-review', showReview);
+      window.removeEventListener('inkbloom:show-chat', showChat);
+      window.removeEventListener('inkbloom:show-tasks', showTasks);
     };
   }, [setActiveTab]);
 

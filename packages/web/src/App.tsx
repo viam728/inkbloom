@@ -15,6 +15,7 @@ import AdminPanel from '@/components/admin/AdminPanel';
 import { wsClient } from '@/services/ws-client';
 import { buildWSURL } from '@/services/ws-url';
 import { initAuth, useAuthStore } from '@/stores/auth-store';
+import { useNovelStore } from '@/stores/novel-store';
 import { useSubscriptionStore } from '@/stores/subscription-store';
 import { useTokenStore } from '@/stores/token-store';
 import { useFlagsStore } from '@/stores/flags-store';
@@ -43,6 +44,10 @@ function AuthenticatedApp() {
   useEffect(() => {
     void useSubscriptionStore.getState().fetchSubscription().catch(() => {});
     void useTokenStore.getState().fetchBalance().catch(() => {});
+    // 作品列表加载与上次选中作品的恢复必须在应用级执行：fetchNovels 原本只挂在
+    // 作品库 Tab（NovelList）的挂载 effect 里，刷新时 leftTab 停留在大纲/记忆
+    // 会导致 currentNovel 永不恢复——概览页退化为欢迎页、节点页只剩“先选择一部作品”。
+    void useNovelStore.getState().fetchNovels().catch(() => {});
   }, []);
 
   useEffect(() => {
