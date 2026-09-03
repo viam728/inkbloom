@@ -10,10 +10,6 @@ import {
 import { htmlToPlainText } from '@/utils/html';
 
 const STATUS_CONFIG: Record<OutlineStatus, { dot: string; chip: string }> = {
-  planned: {
-    dot: 'bg-neutral-500',
-    chip: 'bg-white/6 text-neutral-400 border-white/10',
-  },
   drafting: {
     dot: 'bg-amber-400',
     chip: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
@@ -21,6 +17,10 @@ const STATUS_CONFIG: Record<OutlineStatus, { dot: string; chip: string }> = {
   done: {
     dot: 'bg-emerald-400',
     chip: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
+  },
+  published: {
+    dot: 'bg-sky-400',
+    chip: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
   },
 };
 
@@ -64,8 +64,8 @@ const OutlineExpandedView: React.FC<OutlineExpandedViewProps> = ({
                 <p className="text-[11px] text-neutral-600 px-1 py-3">暂无章节要点</p>
               ) : (
                 act.nodes.map((node) => {
-                  // 兜底：status 非法时回落 planned，避免解引用 status.dot 抛错白屏
-                  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.planned;
+                  // 兜底：status 非法时回落 drafting，避免解引用 status.dot 抛错白屏
+                  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.drafting;
                   const preview = htmlToPlainText(node.summary);
                   return (
                     <div

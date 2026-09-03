@@ -147,10 +147,10 @@ func TestSyncOutlineWritesNormalizedActs(t *testing.T) {
 	if n, ok := acts[2]["nodes"].([]any); !ok || len(n) != 0 {
 		t.Errorf("act 2 nodes should be [], got %#v", acts[2]["nodes"])
 	}
-	// illegal status must have fallen back to planned.
+	// illegal status must have fallen back to drafting (two-state model).
 	st := acts[0]["nodes"].([]any)[1].(map[string]any)["status"]
-	if st != "planned" {
-		t.Errorf("illegal status should become planned, got %v", st)
+	if st != "drafting" {
+		t.Errorf("illegal status should become drafting, got %v", st)
 	}
 	// HTML summary must not be escaped.
 	sum := acts[0]["nodes"].([]any)[0].(map[string]any)["summary"]

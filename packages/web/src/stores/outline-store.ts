@@ -1,14 +1,21 @@
 import { create } from 'zustand';
 import { fetchOutline, saveOutline, normalizeOutlineActs } from '@/services/outline-client';
 
-/** 章节大纲状态：未开始 → 写作中 → 已完成 */
-export type OutlineStatus = 'planned' | 'drafting' | 'done';
+/** 写作状态两态：写作中 → 已完成（用户可切换）；已发布由发布系统写入 */
+export type OutlineStatus = 'drafting' | 'done' | 'published';
 
 export const OUTLINE_STATUS_LABELS: Record<OutlineStatus, string> = {
-  planned: '未开始',
   drafting: '写作中',
   done: '已完成',
+  published: '已发布',
 };
+
+/** 用户可手动切换的写作状态闭集；published 由发布系统写入，UI 不可手改 */
+export const WRITABLE_OUTLINE_STATUSES: OutlineStatus[] = ['drafting', 'done'];
+
+/** 两态互切：写作中 ↔ 已完成 */
+export const toggleWritingStatus = (s: OutlineStatus): OutlineStatus =>
+  s === 'done' ? 'drafting' : 'done';
 
 /** 章节大纲节点 */
 export interface OutlineNode {
@@ -135,7 +142,7 @@ export const useOutlineStore = create<OutlineState>((set, get) => ({
       id: crypto.randomUUID(),
       title: '',
       summary: '',
-      status: 'planned',
+      status: 'drafting',
     };
     commit(set, get, novelId, (acts) =>
       acts.map((a) => (a.id === actId ? { ...a, nodes: [...a.nodes, node] } : a)),

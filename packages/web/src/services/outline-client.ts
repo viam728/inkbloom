@@ -26,7 +26,10 @@ import type { OutlineAct, OutlineNode, OutlineStatus } from '@/stores/outline-st
 // 并白屏。这里在入口处把任意形状强制收敛成 OutlineAct[] 契约形状。
 // ─────────────────────────────────────────────────────────────────────
 
-const OUTLINE_STATUSES: readonly OutlineStatus[] = ['planned', 'drafting', 'done'];
+const OUTLINE_STATUSES: readonly OutlineStatus[] = ['drafting', 'done', 'published'];
+
+/** 旧版三态遗留值（"未开始"）：读取时收敛为写作中，写回后自然淘汰 */
+const LEGACY_STATUS_MAP: Record<string, OutlineStatus> = { planned: 'drafting' };
 
 /** 生成节点 id；crypto.randomUUID 不可用时（非安全上下文）退化为随机串 */
 const newOutlineId = (): string =>
@@ -49,7 +52,9 @@ export function normalizeOutlineNode(raw: unknown): OutlineNode | null {
     title: asString(o.title),
     // summary 存的是 HTML 片段，原样保留，不做转义或清洗
     summary: asString(o.summary),
-    status: isOutlineStatus(o.status) ? o.status : 'planned',
+    status: isOutlineStatus(o.status)
+      ? o.status
+      : LEGACY_STATUS_MAP[asString(o.status)] ?? 'drafting',
   };
   if (typeof o.chapter_id === 'number' && Number.isFinite(o.chapter_id)) {
     node.chapter_id = o.chapter_id;

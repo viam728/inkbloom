@@ -150,7 +150,7 @@ func normalizeOutlineNodes(raw any) []map[string]any {
 			m["summary"] = ""
 		}
 		if status, _ := m["status"].(string); !isOutlineStatus(status) {
-			m["status"] = outlineStatusPlanned
+			m["status"] = outlineStatusDrafting
 		}
 		// chapter_id must stay numeric: the client compares it against numeric
 		// chapter ids, so a string/null value is dropped instead of poisoning

@@ -212,10 +212,10 @@ func TestSyncOutlineShapeIsContractCompliant(t *testing.T) {
 	if n, ok := acts[1]["nodes"].([]any); !ok || len(n) != 0 {
 		t.Errorf("act 2 nodes should be [], got %#v", acts[1]["nodes"])
 	}
-	// Node with status "bogus" → planned.
+	// Node with status "bogus" → drafting (two-state writing model default).
 	st := acts[0]["nodes"].([]any)[1].(map[string]any)["status"]
-	if st != "planned" {
-		t.Errorf("illegal status should fall back to planned, got %v", st)
+	if st != "drafting" {
+		t.Errorf("illegal status should fall back to drafting, got %v", st)
 	}
 }
 

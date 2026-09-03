@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
+import { useOutlineStore } from '@/stores/outline-store';
 import {
   listMyPublishedWorks,
   publishWork,
@@ -113,6 +114,22 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
         count++;
         track('publish_chapter', { work_id: published.id, chapter_id: cid });
       }
+      // 发布成功后同步大纲节点状态为「已发布」（系统管理，用户不可手改）
+      if (!scheduled) {
+        const nid = currentNovel?.id;
+        if (nid) {
+          const st = useOutlineStore.getState();
+          if (!st.byNovel[nid]) await st.loadOutline(nid);
+          const acts = useOutlineStore.getState().byNovel[nid] ?? [];
+          for (const act of acts) {
+            for (const node of act.nodes) {
+              if (node.chapter_id != null && selected.has(node.chapter_id) && node.status !== 'published') {
+                useOutlineStore.getState().updateNode(nid, act.id, node.id, { status: 'published' });
+              }
+            }
+          }
+        }
+      }
       toast.show(`已发布 ${count} 章${scheduled ? '（定时）' : ''}`, 'success');
       setSelected(new Set());
       setUseSchedule(false);
@@ -122,7 +139,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     } finally {
       setPublishing(false);
     }
-  }, [published, selected, useSchedule, scheduledAt]);
+  }, [published, selected, useSchedule, scheduledAt, currentNovel]);
 
   const toggleChapter = (id: number) => {
     setSelected((s) => {

@@ -17,6 +17,8 @@ import { useMemoryStore, sortMemoryItems } from '@/stores/memory-store';
 import {
   useOutlineStore,
   OUTLINE_STATUS_LABELS,
+  WRITABLE_OUTLINE_STATUSES,
+  toggleWritingStatus,
   type OutlineAct,
   type OutlineNode,
   type OutlineStatus,
@@ -40,11 +42,6 @@ const STATUS_CONFIG: Record<
   OutlineStatus,
   { dot: string; text: string; chip: string }
 > = {
-  planned: {
-    dot: 'bg-neutral-500',
-    text: 'text-neutral-500',
-    chip: 'bg-white/6 text-neutral-400 border-white/10',
-  },
   drafting: {
     dot: 'bg-amber-400',
     text: 'text-amber-400',
@@ -54,6 +51,11 @@ const STATUS_CONFIG: Record<
     dot: 'bg-emerald-400',
     text: 'text-emerald-400',
     chip: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
+  },
+  published: {
+    dot: 'bg-sky-400',
+    text: 'text-sky-400',
+    chip: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
   },
 };
 
@@ -278,7 +280,7 @@ const OutlinePanel: React.FC = () => {
       const chapter = await createChapter({ novel_id: novelId, title, content: '' }, insertAt);
       updateNode(novelId, actId, node.id, {
         chapter_id: chapter.id,
-        status: node.status === 'planned' ? 'drafting' : node.status,
+        status: node.status === 'done' || node.status === 'published' ? node.status : 'drafting',
       });
       await selectChapter(chapter);
       showToast(`已为「${title}」创建正文，可直接开写`, 'success');
@@ -357,6 +359,12 @@ const OutlinePanel: React.FC = () => {
     }
     await loadOutline(novelId);
     await fetchChapters(novelId);
+  };
+
+  /** 节点卡两态切换：写作中 ↔ 已完成（已发布节点由系统管理，按钮禁用） */
+  const handleToggleNodeStatus = (actId: string, node: OutlineNode) => {
+    if (!novelId || node.status === 'published') return;
+    updateNode(novelId, actId, node.id, { status: toggleWritingStatus(node.status) });
   };
 
   // ── 空态与进度 ────────────────────────────────────────────────────────
@@ -466,6 +474,7 @@ const OutlinePanel: React.FC = () => {
             onAddNode={() => handleAddNode(act.id)}
             onEditNode={(node) => openNodeEditor(act.id, node)}
             onOpenBody={(node) => handleOpenBody(act.id, node)}
+            onToggleNodeStatus={(node) => handleToggleNodeStatus(act.id, node)}
           />
         ))}
 
@@ -515,23 +524,32 @@ const OutlinePanel: React.FC = () => {
               />
             </div>
 
-            {/* 状态选择（局部专注时隐藏） */}
+            {/* 状态选择（局部专注时隐藏）：写作两态，已发布由系统管理不可手改 */}
             {!nodeEditorFocused && (
             <div className="flex items-center gap-1.5 mt-3">
               <span className="text-[11px] text-neutral-500 mr-1">状态</span>
-              {(Object.keys(OUTLINE_STATUS_LABELS) as OutlineStatus[]).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => commitNodeEdit({ status: s })}
-                  className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
-                    editingNodeLive.status === s
-                      ? STATUS_CONFIG[s].chip
-                      : 'bg-white/4 text-neutral-500 border-white/8 hover:text-neutral-300'
-                  }`}
+              {editingNodeLive.status === 'published' ? (
+                <span
+                  className={`text-[11px] px-2.5 py-1 rounded-full border ${STATUS_CONFIG.published.chip}`}
+                  title="发布状态由系统管理"
                 >
-                  {OUTLINE_STATUS_LABELS[s]}
-                </button>
-              ))}
+                  {OUTLINE_STATUS_LABELS.published}
+                </span>
+              ) : (
+                WRITABLE_OUTLINE_STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => commitNodeEdit({ status: s })}
+                    className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                      editingNodeLive.status === s
+                        ? STATUS_CONFIG[s].chip
+                        : 'bg-white/4 text-neutral-500 border-white/8 hover:text-neutral-300'
+                    }`}
+                  >
+                    {OUTLINE_STATUS_LABELS[s]}
+                  </button>
+                ))
+              )}
             </div>
             )}
 
@@ -705,6 +723,7 @@ interface ActBlockProps {
   onAddNode: () => void;
   onEditNode: (node: OutlineNode) => void;
   onOpenBody: (node: OutlineNode) => void;
+  onToggleNodeStatus: (node: OutlineNode) => void;
 }
 
 const ActBlock: React.FC<ActBlockProps> = ({
@@ -716,6 +735,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
   onAddNode,
   onEditNode,
   onOpenBody,
+  onToggleNodeStatus,
 }) => {
   return (
     <div className="mb-2">
@@ -780,6 +800,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
               node={node}
               onEdit={() => onEditNode(node)}
               onOpenBody={() => onOpenBody(node)}
+              onToggleStatus={() => onToggleNodeStatus(node)}
             />
           ))}
         </div>
@@ -788,17 +809,19 @@ const ActBlock: React.FC<ActBlockProps> = ({
   );
 };
 
-// ── 章节要点卡片（点击弹窗编辑） ────────────────────────────────────────
+// ── 章节要点卡片（点击弹窗编辑，状态标签为两态切换按钮） ─────────────────
 interface NodeCardProps {
   node: OutlineNode;
   onEdit: () => void;
   onOpenBody: () => void;
+  onToggleStatus: () => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody }) => {
+const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody, onToggleStatus }) => {
   // 兜底：node.status 由 Record 查表拿到，非法值会让解引用 status.dot 抛错白屏
-  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.planned;
+  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.drafting;
   const hasBody = Boolean(node.chapter_id);
+  const isPublished = node.status === 'published';
   return (
     <div
       onClick={onEdit}
@@ -809,9 +832,20 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody }) => {
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
-        <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border ${status.chip}`}>
-          {OUTLINE_STATUS_LABELS[node.status]}
-        </span>
+        {/* 状态两态切换（写作中 ↔ 已完成）；已发布由系统管理，仅展示 */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!isPublished) onToggleStatus();
+          }}
+          disabled={isPublished}
+          title={isPublished ? '发布状态由系统管理' : '点击切换写作状态'}
+          className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border transition-colors ${status.chip} ${
+            isPublished ? 'cursor-default' : 'hover:brightness-125'
+          }`}
+        >
+          {OUTLINE_STATUS_LABELS[node.status] ?? OUTLINE_STATUS_LABELS.drafting}
+        </button>
       </div>
       {node.summary && (
         <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{htmlToPlainText(node.summary)}</p>

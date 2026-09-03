@@ -567,12 +567,11 @@ func bindChapterByTitle(acts []map[string]any, ch model.Chapter) bool {
 
 // appendChapterNode appends a new outline node for the chapter to the last act,
 // creating a "第一幕" act when the outline has none. Always returns the acts
-// slice (it is reallocated when the outline was empty).
+// slice (it is reallocated when the outline was empty). Writing status is
+// two-state: a chapter carrying content lands as drafting, empty as drafting
+// too — legacy "planned" is no longer written.
 func appendChapterNode(acts []map[string]any, ch model.Chapter) []map[string]any {
-	status := outlineStatusPlanned
-	if ch.WordCount > 0 {
-		status = outlineStatusDrafting
-	}
+	status := outlineStatusDrafting
 	node := map[string]any{
 		"id":         idgen.NewID(),
 		"title":      ch.Title,

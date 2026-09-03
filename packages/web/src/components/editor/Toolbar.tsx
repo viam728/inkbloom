@@ -33,6 +33,14 @@ import {
 import ExportModal from '@/components/export/ExportModal';
 import PublishModal from '@/components/publish/PublishModal';
 import { useUIStore } from '@/stores/ui-store';
+import { useNovelStore } from '@/stores/novel-store';
+import {
+  useOutlineStore,
+  OUTLINE_STATUS_LABELS,
+  toggleWritingStatus,
+  type OutlineNode,
+  type OutlineStatus,
+} from '@/stores/outline-store';
 import type { MediaPlatform } from '@/types/media';
 import type { EditorVariant } from './TipTapEditor';
 
@@ -70,6 +78,18 @@ interface ToolbarButton {
 
 const iconCls = 'w-4 h-4';
 
+/** 写作状态两态切换按钮配色（写作中/已完成用户可切，已发布系统管理） */
+const STATUS_CHIP: Record<OutlineStatus, string> = {
+  drafting: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
+  done: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
+  published: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
+};
+const STATUS_DOT: Record<OutlineStatus, string> = {
+  drafting: 'bg-amber-400',
+  done: 'bg-emerald-400',
+  published: 'bg-sky-400',
+};
+
 const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, onSelectPlatform, onAdapt, preset = 'full', focusable, focused, onToggleFocus, onAIGC, aigcLoading, onOpenImagePicker }) => {
   const isNovel = variant === 'novel';
   const isPlain = preset === 'plain';
@@ -82,6 +102,23 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
     const setNovelVersionOpen = useUIStore((s) => s.setNovelVersionOpen);
   const focusMode = useUIStore((s) => s.focusMode);
   const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
+
+  // 当前章节绑定的大纲节点（写作状态切换按钮的数据源，仅小说模式）
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const currentChapter = useNovelStore((s) => s.currentChapter);
+  const outlineActs = useOutlineStore((s) =>
+    currentNovel ? s.byNovel[currentNovel.id] : undefined,
+  );
+  let statusNode: { actId: string; node: OutlineNode } | null = null;
+  if (isNovel && currentChapter && outlineActs) {
+    for (const act of outlineActs) {
+      const node = act.nodes.find((n) => n.chapter_id === currentChapter.id);
+      if (node) {
+        statusNode = { actId: act.id, node };
+        break;
+      }
+    }
+  }
 
   if (!editor) return null;
 
@@ -342,6 +379,28 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         <Download className="w-3.5 h-3.5" />
         导出
       </button>
+      {/* 写作状态两态切换（写作中 ↔ 已完成）：当前章节绑定的大纲节点；已发布由系统管理 */}
+      {isNovel && statusNode && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!currentNovel || !statusNode || statusNode.node.status === 'published') return;
+            useOutlineStore.getState().updateNode(currentNovel.id, statusNode.actId, statusNode.node.id, {
+              status: toggleWritingStatus(statusNode.node.status),
+            });
+          }}
+          disabled={statusNode.node.status === 'published'}
+          title={
+            statusNode.node.status === 'published'
+              ? '发布状态由系统管理'
+              : '切换写作状态（写作中 ↔ 已完成）'
+          }
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all disabled:cursor-default ${STATUS_CHIP[statusNode.node.status]}`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[statusNode.node.status]}`} />
+          {OUTLINE_STATUS_LABELS[statusNode.node.status]}
+        </button>
+      )}
       {/* 发布到 InkBloom（业务方案 v3 E4，施工任务 A20） */}
       <button
         type="button"
