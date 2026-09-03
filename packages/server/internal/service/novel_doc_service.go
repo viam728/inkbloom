@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/inkbloom/server/internal/model"
@@ -313,8 +314,10 @@ func clampF(v, lo, hi float64) float64 {
 // them into the outline:
 //   - AI 起稿采纳 (StoryService.AdoptChapter) and the Agent's create_chapter
 //     call BindChapterToOutline at creation time;
-//   - legacy orphans are bound by the idempotent startup migration
-//     MigrateBindOrphanChapters (wired in cmd/server/main.go).
+//   - legacy orphans (old article-library chapters never bound to the outline)
+//     are DELETED by the idempotent startup migration
+//     MigrateCleanupOrphanChapters (wired in cmd/server/main.go) so novel word
+//     counts no longer include deprecated article-library data.
 //
 // Binding is title-keyed (chapterTitleKey, ordinal-insensitive) so a drafted
 // "第3章 觉醒" binds to the planned node "觉醒"; when no unbound node matches,
@@ -340,23 +343,39 @@ func (s *NovelDocService) BindChapterToOutline(ctx context.Context, userID, nove
 	}
 }
 
-// MigrateBindOrphanChapters binds every chapter that no outline node references
-// into its novel's outline (article library merged into outline management: a
-// chapter unreachable from the outline is invisible content). Binding is
-// title-keyed where possible, otherwise the chapter is appended to the last
-// act. Intended for server startup as a one-shot data migration; it is
-// idempotent, so accidental re-runs are harmless. Returns the number of
-// chapters bound. Best-effort: per-novel failures are logged and skipped.
-func (s *NovelDocService) MigrateBindOrphanChapters(ctx context.Context) int {
+// MigrateCleanupOrphanChapters repairs chapter↔outline binding and deletes
+// deprecated article-library chapters (article library merged into outline
+// management). Per novel:
+//
+//  1. Phantom repair — nodes whose chapter_id points at a chapter that does
+//     not exist (legacy local-mode data synced to the server: the browser
+//     generated Date.now() ids that never became rows) are unbound. Without
+//     this the UI's 写正文 keeps spawning duplicate empty shells for those
+//     nodes (observed in the wild).
+//  2. Title rebind — real chapters not referenced by any node are bound to
+//     the first unbound node with a matching title (chapterTitleKey,
+//     ordinal-insensitive). Chapters carrying content are matched first so a
+//     real chapter wins over an empty duplicate shell. This preserves the
+//     outline manager's binding data instead of discarding written work.
+//  3. Cleanup — chapters still unreferenced (old article-library chapters
+//     with no matching outline node) are deleted, and the novel's aggregated
+//     word_count is recomputed so deprecated data stops being counted.
+//
+// Unlike BindChapterToOutline this migration never APPENDS new nodes: an
+// unbound legacy chapter is deprecated, not promoted. Idempotent, intended
+// for server startup; returns the number of chapters deleted. Best-effort:
+// per-novel failures are logged and skipped; a corrupt outline document skips
+// the novel entirely rather than risk mass-deleting chapters.
+func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int {
 	if s == nil || s.novelRepo == nil || s.chapterRepo == nil {
 		return 0
 	}
 	novels, err := s.novelRepo.ListAll(ctx)
 	if err != nil {
-		zap.L().Warn("orphan-chapter migration: list novels failed", zap.Error(err))
+		zap.L().Warn("orphan-chapter cleanup: list novels failed", zap.Error(err))
 		return 0
 	}
-	bound := 0
+	deleted := 0
 	for _, n := range novels {
 		chapters, err := s.chapterRepo.ListByNovelID(ctx, n.UserID, n.ID)
 		if err != nil || len(chapters) == 0 {
@@ -366,30 +385,84 @@ func (s *NovelDocService) MigrateBindOrphanChapters(ctx context.Context) int {
 		if err != nil {
 			continue
 		}
-		parsed, ok := parseOutlineActs(normalizeOutlineActsJSON(json.RawMessage(doc.Acts)))
+		acts, ok := parseOutlineActs(normalizeOutlineActsJSON(json.RawMessage(doc.Acts)))
 		if !ok {
+			// Unparseable outline: never guess — keep the chapters.
+			zap.L().Warn("orphan-chapter cleanup: unparseable outline, skipping novel",
+				zap.Int64("novel_id", n.ID))
 			continue
 		}
-		orphans := make([]model.Chapter, 0, len(chapters))
+
+		// 1) Phantom repair: drop chapter_id bindings that reference
+		// non-existent chapters.
+		existing := make(map[int64]bool, len(chapters))
 		for _, ch := range chapters {
-			if !chapterReferenced(parsed, ch.ID) {
-				orphans = append(orphans, ch)
+			existing[ch.ID] = true
+		}
+		changed := false
+		for _, act := range acts {
+			for _, node := range actNodes(act) {
+				if id, ok := node["chapter_id"].(float64); ok && !existing[int64(id)] {
+					delete(node, "chapter_id")
+					changed = true
+				}
 			}
 		}
-		if len(orphans) == 0 {
+
+		// 2) Title rebind: content chapters first, then empty shells, so real
+		// work wins duplicate-title matches.
+		sorted := make([]model.Chapter, len(chapters))
+		copy(sorted, chapters)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].WordCount > sorted[j].WordCount })
+		for _, ch := range sorted {
+			if chapterReferenced(acts, ch.ID) {
+				continue
+			}
+			if bindChapterByTitle(acts, ch) {
+				changed = true
+			}
+		}
+
+		// 3) Persist the repaired outline, then delete whatever is still
+		// unreferenced (deprecated article-library data).
+		if changed {
+			out, err := json.Marshal(acts)
+			if err == nil {
+				// No dedupOutlineActs: same reason as bindChaptersToOutline.
+				if err := s.docRepo.UpsertOutline(ctx, &model.NovelOutline{
+					UserID: n.UserID, NovelID: n.ID, Acts: datatypes.JSON(out),
+				}); err != nil {
+					zap.L().Warn("orphan-chapter cleanup: persist repaired outline failed",
+						zap.Int64("novel_id", n.ID), zap.Error(err))
+				}
+			}
+		}
+		removed := 0
+		for _, ch := range chapters {
+			if chapterReferenced(acts, ch.ID) {
+				continue // bound in outline manager — keep
+			}
+			if err := s.chapterRepo.Delete(ctx, n.UserID, ch.ID); err != nil {
+				zap.L().Warn("orphan-chapter cleanup: delete failed",
+					zap.Int64("novel_id", n.ID), zap.Int64("chapter_id", ch.ID), zap.Error(err))
+				continue
+			}
+			removed++
+		}
+		if removed == 0 {
 			continue
 		}
-		if _, _, err := s.bindChaptersToOutline(ctx, n.UserID, n.ID, orphans); err != nil {
-			zap.L().Warn("orphan-chapter migration: bind failed",
-				zap.Int64("novel_id", n.ID), zap.Int("orphans", len(orphans)), zap.Error(err))
-			continue
+		deleted += removed
+		if err := s.chapterRepo.RefreshNovelWordCount(ctx, n.UserID, n.ID); err != nil {
+			zap.L().Warn("orphan-chapter cleanup: refresh word_count failed",
+				zap.Int64("novel_id", n.ID), zap.Error(err))
 		}
-		bound += len(orphans)
 	}
-	if bound > 0 {
-		zap.L().Info("orphan-chapter migration bound chapters into outlines", zap.Int("bound", bound))
+	if deleted > 0 {
+		zap.L().Info("orphan-chapter cleanup removed deprecated article-library chapters",
+			zap.Int("deleted", deleted))
 	}
-	return bound
+	return deleted
 }
 
 // bindChaptersToOutline binds the given chapters into the outline acts and
@@ -451,8 +524,7 @@ func parseOutlineActs(raw json.RawMessage) ([]map[string]any, bool) {
 func chapterReferenced(acts []map[string]any, chapterID int64) bool {
 	want := float64(chapterID)
 	for _, act := range acts {
-		nodes, _ := act["nodes"].([]map[string]any)
-		for _, n := range nodes {
+		for _, n := range actNodes(act) {
 			if n == nil {
 				continue
 			}
@@ -473,8 +545,7 @@ func bindChapterByTitle(acts []map[string]any, ch model.Chapter) bool {
 		return false
 	}
 	for _, act := range acts {
-		nodes, _ := act["nodes"].([]map[string]any)
-		for _, n := range nodes {
+		for _, n := range actNodes(act) {
 			if n == nil {
 				continue
 			}
@@ -517,7 +588,7 @@ func appendChapterNode(acts []map[string]any, ch model.Chapter) []map[string]any
 		})
 	}
 	last := acts[len(acts)-1]
-	nodes, _ := last["nodes"].([]map[string]any)
+	nodes := actNodes(last)
 	last["nodes"] = append(nodes, node)
 	return acts
 }

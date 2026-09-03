@@ -420,6 +420,12 @@ func (s *ChapterService) DeleteChapter(ctx context.Context, userID, id int64) er
 	err = s.chapterRepo.Delete(ctx, userID, id)
 	if err == nil {
 		_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, userID, id))
+		// Refresh the aggregated novel word_count so deleted chapters stop
+		// being counted. Failure is non-blocking — the delete already succeeded.
+		if err := s.chapterRepo.RefreshNovelWordCount(ctx, userID, chapter.NovelID); err != nil {
+			zap.L().Warn("failed to refresh novel word_count after chapter delete",
+				zap.Int64("novel_id", chapter.NovelID), zap.Int64("chapter_id", id), zap.Error(err))
+		}
 	}
 	return err
 }

@@ -174,6 +174,33 @@ func normalizeOutlineNodes(raw any) []map[string]any {
 	return nodes
 }
 
+// actNodes returns an act's nodes as node maps, tolerating both shapes the
+// value can take: []map[string]any (Go-constructed acts) and []interface{}
+// (the result of a plain json.Unmarshal into []map[string]any — the inner
+// slice decodes as []interface{}, and a direct []map[string]any assertion
+// silently fails). Callers MUST go through this helper: a failed assertion
+// once made every node invisible and mass-orphaned chapters in the cleanup
+// migration.
+func actNodes(act map[string]any) []map[string]any {
+	if act == nil {
+		return nil
+	}
+	switch nodes := act["nodes"].(type) {
+	case []map[string]any:
+		return nodes
+	case []interface{}:
+		out := make([]map[string]any, 0, len(nodes))
+		for _, item := range nodes {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 // mergeOutlineAct folds one normalized act into an existing act list. When an
 // act with the same title already exists the incoming nodes are appended to it
 // (skipping nodes whose non-empty title already exists) and true is returned;
@@ -184,12 +211,12 @@ func normalizeOutlineNodes(raw any) []map[string]any {
 // acts, which is what produced the mixed/duplicated rows the panel choked on.
 func mergeOutlineAct(existing []map[string]any, incoming map[string]any) bool {
 	key := outlineTitleKey(incoming["title"])
-	incomingNodes, _ := incoming["nodes"].([]map[string]any)
+	incomingNodes := actNodes(incoming)
 	for _, act := range existing {
 		if act == nil || outlineTitleKey(act["title"]) != key {
 			continue
 		}
-		nodes, _ := act["nodes"].([]map[string]any)
+		nodes := actNodes(act)
 		if nodes == nil {
 			nodes = []map[string]any{}
 		}

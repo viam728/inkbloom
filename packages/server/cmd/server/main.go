@@ -286,8 +286,9 @@ func main() {
 	knowledgeService := service.NewKnowledgeService(knowledgeRepo, cfg.AIService.URL)
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
 	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo, outlineVersionRepo)
-	// 文章库并入大纲：把未挂到大纲要点的存量章节一次性绑进大纲（幂等迁移）。
-	docService.MigrateBindOrphanChapters(context.Background())
+	// 文章库并入大纲：删除未被任何大纲要点绑定的旧文章库章节并重算字数（幂等迁移）。
+	// 大纲管理器绑定的章节（chapter_id 引用）全部保留。
+	docService.MigrateCleanupOrphanChapters(context.Background())
 	// Q3 整本里程碑快照 (Agent safety work Q3): whole-novel bundles with
 	// one-click restore (conservative / full).
 	novelVersionService := service.NewNovelVersionService(novelRepo, chapterRepo, docService, novelVersionRepo)
