@@ -12,7 +12,6 @@ import {
 import { uploadImage } from '@/services/image-client';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
-import WorkStatsPanel from './WorkStatsPanel';
 
 /**
  * 作者侧发布弹窗（业务方案 v3 E4，施工任务 A20）
@@ -41,6 +40,11 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   const pubByChapterId = useMemo(
     () => new Map((publishState?.chapters ?? []).map((c) => [c.chapter_id, c])),
     [publishState?.chapters],
+  );
+  /** 未发布章节：可勾选发布的范围（已发布的需先取消发布） */
+  const unpublishedChapters = useMemo(
+    () => chapters.filter((c) => !pubByChapterId.has(c.id)),
+    [chapters, pubByChapterId],
   );
 
   const [loading, setLoading] = useState(false);
@@ -302,24 +306,22 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                 <span className="text-[10px] text-neutral-500">关注 {published.follow_count}</span>
               </div>
 
-              {/* 读者数据回流（A23） */}
-              <div className="px-3 py-2.5 rounded-lg bg-white/4 border border-white/6">
-                <WorkStatsPanel workId={published.id} />
-              </div>
-
-              {/* 章节列表：已发布章节打系统标签，可取消发布；勾选重新发布=更新读者侧快照 */}
+              {/* 章节列表：已发布章节不可勾选（只能先取消发布再发布），可单独取消发布 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs text-neutral-400">选择要发布的章节</label>
                   <button
                     type="button"
                     onClick={() => {
-                      if (selected.size === chapters.length) setSelected(new Set());
-                      else setSelected(new Set(chapters.map((c) => c.id)));
+                      if (selected.size === unpublishedChapters.length) setSelected(new Set());
+                      else setSelected(new Set(unpublishedChapters.map((c) => c.id)));
                     }}
-                    className="text-[10px] text-brand-400 hover:text-brand-300"
+                    disabled={unpublishedChapters.length === 0}
+                    className="text-[10px] text-brand-400 hover:text-brand-300 disabled:opacity-40 disabled:pointer-events-none"
                   >
-                    {selected.size === chapters.length ? '取消全选' : '全选'}
+                    {selected.size === unpublishedChapters.length && unpublishedChapters.length > 0
+                      ? '取消全选'
+                      : '全选未发布'}
                   </button>
                 </div>
                 <div className="space-y-1 max-h-[240px] overflow-y-auto">
@@ -331,15 +333,16 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                       <div
                         key={ch.id}
                         className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors ${
-                          checked ? 'bg-brand-600/15' : 'bg-white/4 hover:bg-white/6'
+                          checked ? 'bg-brand-600/15' : pub ? 'opacity-60' : 'bg-white/4 hover:bg-white/6'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleChapter(ch.id)}
-                          title={pub ? '重新发布将更新读者看到的快照' : undefined}
-                          className="w-3.5 h-3.5 accent-brand-500 cursor-pointer"
+                          disabled={!!pub}
+                          title={pub ? '已发布章节不可重复勾选；如需更新内容，先取消发布再发布' : undefined}
+                          className="w-3.5 h-3.5 accent-brand-500 cursor-pointer disabled:cursor-not-allowed"
                         />
                         <span className="text-xs text-neutral-200 flex-1 truncate">{ch.title}</span>
                         {pub && (
@@ -357,7 +360,15 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                         {pub && (
                           <button
                             type="button"
-                            onClick={() => void handleUnpublishChapter(ch.id, pub.id)}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
+                                )
+                              ) {
+                                void handleUnpublishChapter(ch.id, pub.id);
+                              }
+                            }}
                             title="取消发布该章（读者将不可见）"
                             className="shrink-0 p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                           >

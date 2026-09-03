@@ -18,7 +18,6 @@ import {
   Redo2,
   ImagePlus,
   Download,
-  Send,
   Activity,
   BarChart3,
   Lightbulb,
@@ -31,7 +30,6 @@ import {
     BookMarked,
 } from 'lucide-react';
 import ExportModal from '@/components/export/ExportModal';
-import PublishModal from '@/components/publish/PublishModal';
 import { useUIStore } from '@/stores/ui-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { usePublishStore } from '@/stores/publish-store';
@@ -95,7 +93,6 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
   const isNovel = variant === 'novel';
   const isPlain = preset === 'plain';
   const [exportOpen, setExportOpen] = useState(false);
-  const [publishOpen, setPublishOpen] = useState(false);
   const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
   const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
@@ -424,16 +421,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
             : OUTLINE_STATUS_LABELS[statusNode.node.status]}
         </button>
       )}
-      {/* 发布到 InkBloom（业务方案 v3 E4，施工任务 A20） */}
-      <button
-        type="button"
-        onClick={() => setPublishOpen(true)}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-brand-600/20 text-brand-300 hover:bg-brand-600/30 transition-colors"
-        title="发布到 InkBloom 公开阅读"
-      >
-        <Send className="w-3.5 h-3.5" />
-        发布
-      </button>
+      {/* 发布入口已迁移至作品概览页（NovelOverview 操作区）：发布操作与读者看板统一在概览页 */}
       <ExportModal
         open={exportOpen}
         onClose={() => setExportOpen(false)}
@@ -443,7 +431,6 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         onSelectPlatform={onSelectPlatform}
         onAdapt={onAdapt}
       />
-      <PublishModal open={publishOpen} onClose={() => setPublishOpen(false)} />
         </>
       )}
     </div>

@@ -8,6 +8,7 @@ import {
   ListOrdered,
   Maximize2,
   FileText,
+  Send,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import {
@@ -383,6 +384,7 @@ const OutlinePanel: React.FC = () => {
         open={expandedOpen}
         onClose={() => setExpandedOpen(false)}
         acts={acts}
+        publishedIds={publishedChapterIds}
         onEditNode={(actId, node) => {
           setExpandedOpen(false);
           openNodeEditor(actId, node);
@@ -517,12 +519,13 @@ interface NodeCardProps {
 }
 
 const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenBody, onToggleStatus }) => {
-  // 兜底：node.status 由 Record 查表拿到，非法值会让解引用 status.dot 抛错白屏
-  const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.drafting;
   const hasBody = Boolean(node.chapter_id);
   // 已发布 = 系统事实（published_chapters）或节点状态标记，二者任一即视为已发布
   const isPublished =
     node.status === 'published' || (node.chapter_id != null && publishedIds.has(node.chapter_id));
+  // 写作状态 chip 恒为两态（写作中/已完成）：已发布由独立图标承担，不挤占状态位
+  const writingStatus: OutlineStatus = isPublished || node.status === 'published' ? 'done' : node.status;
+  const status = STATUS_CONFIG[writingStatus] ?? STATUS_CONFIG.drafting;
   return (
     <div
       onClick={onEdit}
@@ -533,21 +536,28 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenB
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
-        {/* 状态两态切换（写作中 ↔ 已完成）；已发布由系统管理，仅展示 */}
+        {/* 已发布独立图标位：发布状态由系统管理，与写作状态分离展示 */}
+        {isPublished && (
+          <span
+            title="已发布（发布状态由系统管理）"
+            className="shrink-0 flex items-center justify-center w-4 h-4 rounded bg-sky-500/15 text-sky-300 border border-sky-500/25"
+          >
+            <Send size={9} />
+          </span>
+        )}
+        {/* 写作状态两态切换（写作中 ↔ 已完成） */}
         <button
           onClick={(e) => {
             e.stopPropagation();
             if (!isPublished) onToggleStatus();
           }}
           disabled={isPublished}
-          title={isPublished ? '发布状态由系统管理' : '点击切换写作状态'}
+          title={isPublished ? '已发布章节的写作状态视为已完成' : '点击切换写作状态'}
           className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border transition-colors ${status.chip} ${
             isPublished ? 'cursor-default' : 'hover:brightness-125'
           }`}
         >
-          {isPublished
-            ? OUTLINE_STATUS_LABELS.published
-            : OUTLINE_STATUS_LABELS[node.status] ?? OUTLINE_STATUS_LABELS.drafting}
+          {OUTLINE_STATUS_LABELS[writingStatus] ?? OUTLINE_STATUS_LABELS.drafting}
         </button>
       </div>
       {node.summary && (
