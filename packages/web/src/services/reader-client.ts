@@ -94,6 +94,14 @@ export async function publishChapter(
   )) as unknown as PublishedChapter;
 }
 
+/** 某作品已发布章节列表（发布状态的系统事实来源） */
+export async function listPublishedChapters(wid: number): Promise<PublishedChapter[]> {
+  const data = (await apiClient.get(
+    `/publish/works/${wid}/chapters`,
+  )) as unknown as PublishedChapter[];
+  return data ?? [];
+}
+
 export async function unpublishChapter(pid: number): Promise<void> {
   await apiClient.delete(`/publish/chapters/${pid}`);
 }

@@ -1,15 +1,15 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus } from 'lucide-react';
+import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus, RotateCcw } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
-import { useOutlineStore } from '@/stores/outline-store';
+import { useOutlineStore, type OutlineStatus } from '@/stores/outline-store';
+import { usePublishStore } from '@/stores/publish-store';
 import {
-  listMyPublishedWorks,
   publishWork,
   publishChapter,
+  unpublishChapter,
 } from '@/services/reader-client';
 import { uploadImage } from '@/services/image-client';
-import type { PublishedWork } from '@/types/published';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
 import WorkStatsPanel from './WorkStatsPanel';
@@ -21,8 +21,9 @@ import WorkStatsPanel from './WorkStatsPanel';
  *  1. 作品未发布 → 填写标题/简介/可见性，创建 PublishedWork
  *  2. 作品已发布 → 勾选章节发布（立即或定时），展示阅读链接
  *
- * 「草稿有改动」对比留待后端补 author-facing 的 published-chapters 端点后
- * 再接——当前先保证核心发布链路可用。
+ * 已发布章节以 published_chapters 表为系统事实（publish-store 缓存）：
+ * 列表内打「已发布」标并可取消发布；重新发布=更新读者侧快照。
+ * 发布/取消发布都会同步对应大纲节点状态（系统管理，用户不可手改）。
  */
 const VIS_OPTIONS = [
   { id: 'public', label: '公开', icon: Globe, desc: '出现在发现页，任何人可读' },
@@ -34,7 +35,14 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
 
-  const [published, setPublished] = useState<PublishedWork | null>(null);
+  // 发布状态（系统事实）：work + 已发布章节
+  const publishState = usePublishStore((s) => (currentNovel ? s.byNovel[currentNovel.id] : undefined));
+  const published = publishState?.work ?? null;
+  const pubByChapterId = useMemo(
+    () => new Map((publishState?.chapters ?? []).map((c) => [c.chapter_id, c])),
+    [publishState?.chapters],
+  );
+
   const [loading, setLoading] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
@@ -50,36 +58,43 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   const [useSchedule, setUseSchedule] = useState(false);
   const [scheduledAt, setScheduledAt] = useState('');
 
-  // 阅读链接
-  const [readUrl, setReadUrl] = useState('');
+  const readUrl = published ? `${window.location.origin}/read/${published.slug}` : '';
 
-  const reset = useCallback(() => {
-    setPublished(null);
-    setSelected(new Set());
-    setUseSchedule(false);
-    setScheduledAt('');
-    setReadUrl('');
-  }, []);
+  /** 把指定章节绑定的大纲节点状态同步为 status（发布→published，取消发布→done） */
+  const syncOutlineStatus = useCallback(
+    async (chapterIds: number[], status: OutlineStatus) => {
+      const nid = currentNovel?.id;
+      if (!nid || chapterIds.length === 0) return;
+      const st = useOutlineStore.getState();
+      if (!st.byNovel[nid]) await st.loadOutline(nid);
+      const acts = useOutlineStore.getState().byNovel[nid] ?? [];
+      const idset = new Set(chapterIds);
+      for (const act of acts) {
+        for (const node of act.nodes) {
+          if (node.chapter_id != null && idset.has(node.chapter_id) && node.status !== status) {
+            useOutlineStore.getState().updateNode(nid, act.id, node.id, { status });
+          }
+        }
+      }
+    },
+    [currentNovel],
+  );
 
-  // 打开时加载发布状态
+  // 打开时加载发布状态（系统事实）
   useEffect(() => {
     if (!open || !currentNovel) return;
     setTitle(currentNovel.title || '');
     setSynopsis(currentNovel.description || '');
     setVisibility('public');
-    reset();
+    setSelected(new Set());
+    setUseSchedule(false);
+    setScheduledAt('');
     setLoading(true);
-    listMyPublishedWorks()
-      .then((works) => {
-        const found = works.find((w) => w.novel_id === currentNovel.id);
-        if (found) {
-          setPublished(found);
-          setReadUrl(`${window.location.origin}/read/${found.slug}`);
-        }
-      })
-      .catch(() => {})
+    void usePublishStore
+      .getState()
+      .load(currentNovel.id)
       .finally(() => setLoading(false));
-  }, [open, currentNovel, reset]);
+  }, [open, currentNovel]);
 
   const handlePublishWork = useCallback(async () => {
     if (!currentNovel || !title.trim()) return;
@@ -92,8 +107,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
         visibility,
         cover_url: coverUrl || undefined,
       });
-      setPublished(w);
-      setReadUrl(`${window.location.origin}/read/${w.slug}`);
+      await usePublishStore.getState().load(currentNovel.id);
       track('publish_work', { work_id: w.id, visibility });
       toast.show('作品已发布，现在可以选择章节', 'success');
     } catch (e) {
@@ -104,33 +118,20 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   }, [currentNovel, title, synopsis, visibility]);
 
   const handlePublishChapters = useCallback(async () => {
-    if (!published || selected.size === 0) return;
+    if (!published || !currentNovel || selected.size === 0) return;
     setPublishing(true);
     try {
       const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
-      let count = 0;
+      const done: Awaited<ReturnType<typeof publishChapter>>[] = [];
       for (const cid of selected) {
-        await publishChapter(published.id, { chapter_id: cid, scheduled_at: scheduled });
-        count++;
+        done.push(await publishChapter(published.id, { chapter_id: cid, scheduled_at: scheduled }));
         track('publish_chapter', { work_id: published.id, chapter_id: cid });
       }
-      // 发布成功后同步大纲节点状态为「已发布」（系统管理，用户不可手改）
-      if (!scheduled) {
-        const nid = currentNovel?.id;
-        if (nid) {
-          const st = useOutlineStore.getState();
-          if (!st.byNovel[nid]) await st.loadOutline(nid);
-          const acts = useOutlineStore.getState().byNovel[nid] ?? [];
-          for (const act of acts) {
-            for (const node of act.nodes) {
-              if (node.chapter_id != null && selected.has(node.chapter_id) && node.status !== 'published') {
-                useOutlineStore.getState().updateNode(nid, act.id, node.id, { status: 'published' });
-              }
-            }
-          }
-        }
-      }
-      toast.show(`已发布 ${count} 章${scheduled ? '（定时）' : ''}`, 'success');
+      // 立即发布的章节同步大纲节点为「已发布」；定时发布的保持原状态，到点由读者侧生效
+      const immediate = scheduled ? [] : done.map((d) => d.chapter_id);
+      await usePublishStore.getState().markPublished(currentNovel.id, done);
+      await syncOutlineStatus(immediate, 'published');
+      toast.show(`已发布 ${done.length} 章${scheduled ? '（定时）' : ''}`, 'success');
       setSelected(new Set());
       setUseSchedule(false);
       setScheduledAt('');
@@ -139,7 +140,23 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     } finally {
       setPublishing(false);
     }
-  }, [published, selected, useSchedule, scheduledAt, currentNovel]);
+  }, [published, currentNovel, selected, useSchedule, scheduledAt, syncOutlineStatus]);
+
+  /** 取消发布单章：系统移除公开快照，大纲节点回「已完成」 */
+  const handleUnpublishChapter = useCallback(
+    async (chapterId: number, pid: number) => {
+      if (!currentNovel) return;
+      try {
+        await unpublishChapter(pid);
+        await usePublishStore.getState().markUnpublished(currentNovel.id, chapterId);
+        await syncOutlineStatus([chapterId], 'done');
+        toast.show('已取消发布该章', 'info');
+      } catch (e) {
+        toast.show(e instanceof Error ? e.message : '取消发布失败', 'error');
+      }
+    },
+    [currentNovel, syncOutlineStatus],
+  );
 
   const toggleChapter = (id: number) => {
     setSelected((s) => {
@@ -290,7 +307,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                 <WorkStatsPanel workId={published.id} />
               </div>
 
-              {/* 章节列表 */}
+              {/* 章节列表：已发布章节打系统标签，可取消发布；勾选重新发布=更新读者侧快照 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs text-neutral-400">选择要发布的章节</label>
@@ -308,10 +325,12 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                 <div className="space-y-1 max-h-[240px] overflow-y-auto">
                   {chapters.map((ch) => {
                     const checked = selected.has(ch.id);
+                    const pub = pubByChapterId.get(ch.id);
+                    const scheduledLater = pub?.scheduled_at && new Date(pub.scheduled_at) > new Date();
                     return (
-                      <label
+                      <div
                         key={ch.id}
-                        className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                        className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors ${
                           checked ? 'bg-brand-600/15' : 'bg-white/4 hover:bg-white/6'
                         }`}
                       >
@@ -319,11 +338,33 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleChapter(ch.id)}
+                          title={pub ? '重新发布将更新读者看到的快照' : undefined}
                           className="w-3.5 h-3.5 accent-brand-500 cursor-pointer"
                         />
                         <span className="text-xs text-neutral-200 flex-1 truncate">{ch.title}</span>
+                        {pub && (
+                          <span
+                            className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border ${
+                              scheduledLater
+                                ? 'bg-amber-500/12 text-amber-300 border-amber-500/25'
+                                : 'bg-sky-500/12 text-sky-300 border-sky-500/25'
+                            }`}
+                          >
+                            {scheduledLater ? '定时已排' : '已发布'}
+                          </span>
+                        )}
                         <span className="text-[10px] text-neutral-500">{ch.word_count}字</span>
-                      </label>
+                        {pub && (
+                          <button
+                            type="button"
+                            onClick={() => void handleUnpublishChapter(ch.id, pub.id)}
+                            title="取消发布该章（读者将不可见）"
+                            className="shrink-0 p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          >
+                            <RotateCcw size={11} />
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                   {chapters.length === 0 && (

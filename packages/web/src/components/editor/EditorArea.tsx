@@ -14,6 +14,8 @@ import { useTabStore, countDraftWords } from '@/stores/tab-store';
 import TipTapEditor from './TipTapEditor';
 import NovelOverview from './NovelOverview';
 import StoryWorkflowPanel from '@/components/story/StoryWorkflowPanel';
+import OutlineNodeEditor from '@/components/outline/OutlineNodeEditor';
+import MemoryEditorPanel from '@/components/memory/MemoryEditorPanel';
 import Kbd from '@/components/common/Kbd';
 import ForeshadowHintBar from '@/components/knowledge/ForeshadowHintBar';
 
@@ -37,7 +39,7 @@ const EditorArea: React.FC = () => {
   /** 每 tab 独立的保存防抖计时器 */
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-  /** flush 指定 tab：清除计时器，若脏则立即以当前草稿落盘 */
+  /** flush 指定 tab：清除计时器，若脏则立即以当前草稿落盘（仅章节 tab 有落盘语义） */
   const flushTab = useCallback((key: string) => {
     const timer = timersRef.current.get(key);
     if (timer) {
@@ -45,7 +47,7 @@ const EditorArea: React.FC = () => {
       timersRef.current.delete(key);
     }
     const tab = useTabStore.getState().tabs.find((t) => t.key === key);
-    if (tab?.isDirty && tab.saveStatus !== 'saving') {
+    if (tab?.kind === 'chapter' && tab.chapterId != null && tab.isDirty && tab.saveStatus !== 'saving') {
       void useEditorStore.getState().saveChapter(tab.chapterId, tab.draft);
     }
   }, []);
@@ -72,9 +74,9 @@ const EditorArea: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChapter?.id, currentChapter?.title, currentChapter?.content]);
 
-  // active tab → editor-store 镜像（ReviewPanel 等既有消费者仍读镜像）
+  // active tab → editor-store 镜像（ReviewPanel 等既有消费者仍读镜像；panel 类 tab 无章节语义，清空镜像）
   useEffect(() => {
-    useEditorStore.getState().mirrorTab(activeTab);
+    useEditorStore.getState().mirrorTab(activeTab && activeTab.kind === 'chapter' ? activeTab : null);
   }, [activeTab]);
 
   // 中央起稿窗口：概览页「AI 起稿」按钮 / 作品列表入口派发此事件 → 切到中央 story 视图
@@ -97,7 +99,7 @@ const EditorArea: React.FC = () => {
       setTimeout(() => {
         timersRef.current.delete(key);
         const tab = useTabStore.getState().tabs.find((t) => t.key === key);
-        if (tab?.isDirty && tab.saveStatus !== 'saving') {
+        if (tab?.kind === 'chapter' && tab.chapterId != null && tab.isDirty && tab.saveStatus !== 'saving') {
           void useEditorStore.getState().saveChapter(tab.chapterId, tab.draft);
         }
       }, SAVE_DEBOUNCE_MS),
@@ -118,7 +120,7 @@ const EditorArea: React.FC = () => {
     [addWords],
   );
 
-  /** 切换 tab：先 flush 旧 tab 未落盘内容，再经 selectChapter 同步 currentChapter（已打开 tab 不重拉内容） */
+  /** 切换 tab：章节 tab 先 flush 并经 selectChapter 同步 currentChapter；panel 类 tab 仅激活 */
   const handleSwitch = useCallback(
     (key: string) => {
       const st = useTabStore.getState();
@@ -126,6 +128,10 @@ const EditorArea: React.FC = () => {
       if (st.activeKey) flushTab(st.activeKey);
       const tab = st.tabs.find((t) => t.key === key);
       if (!tab) return;
+      if (tab.kind !== 'chapter' || tab.chapterId == null) {
+        st.setActive(key);
+        return;
+      }
       const chapter = useNovelStore.getState().chapters.find((c) => c.id === tab.chapterId);
       if (chapter) void useNovelStore.getState().selectChapter(chapter);
       else st.setActive(key);
@@ -133,7 +139,7 @@ const EditorArea: React.FC = () => {
     [flushTab],
   );
 
-  /** 关闭 tab：先 flush（调用方约定），关闭 active 后 currentChapter 跟随新激活项 */
+  /** 关闭 tab：章节 tab flush 并让 currentChapter 跟随新激活项；panel 类 tab 直接关闭 */
   const handleClose = useCallback(
     (key: string) => {
       flushTab(key);
@@ -143,11 +149,14 @@ const EditorArea: React.FC = () => {
       if (!wasActive) return;
       const nst = useTabStore.getState();
       const next = nst.tabs.find((t) => t.key === nst.activeKey);
-      const chapter = next
-        ? useNovelStore.getState().chapters.find((c) => c.id === next.chapterId)
-        : undefined;
+      if (!next) {
+        useNovelStore.setState({ currentChapter: null });
+        return;
+      }
+      // panel 类 tab 激活时保持 currentChapter 不动（回到章节 tab 时再同步）
+      if (next.kind !== 'chapter' || next.chapterId == null) return;
+      const chapter = useNovelStore.getState().chapters.find((c) => c.id === next.chapterId);
       if (chapter) void useNovelStore.getState().selectChapter(chapter);
-      else useNovelStore.setState({ currentChapter: null });
     },
     [flushTab],
   );
@@ -165,12 +174,12 @@ const EditorArea: React.FC = () => {
   const [titleEditing, setTitleEditing] = useState(false);
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /** 提交标题：tab-store + novel-store（章节列表/currentChapter）三处一致 */
+  /** 提交标题：tab-store + novel-store（章节列表/currentChapter）三处一致（仅章节 tab） */
   const commitTitle = useCallback((value: string) => {
     const st = useTabStore.getState();
     const tab = st.tabs.find((t) => t.key === st.activeKey);
     const title = value.trim();
-    if (!tab || !title || title === tab.title) return;
+    if (!tab || tab.kind !== 'chapter' || tab.chapterId == null || !title || title === tab.title) return;
     st.renameTab(tab.key, title);
     void useNovelStore.getState().renameChapter(tab.chapterId, title).catch(() => undefined);
   }, []);
@@ -184,8 +193,9 @@ const EditorArea: React.FC = () => {
     }, TITLE_DEBOUNCE_MS);
   };
 
-  const titleSlot = activeTab ? (
-    <div className="shrink-0 px-8 pt-4 pb-2 border-b border-white/4 bg-surface-0">
+  const titleSlot =
+    activeTab && activeTab.kind === 'chapter' ? (
+      <div className="shrink-0 px-8 pt-4 pb-2 border-b border-white/4 bg-surface-0">
       <input
         type="text"
         value={titleEditing ? titleDraft : activeTab.title}
@@ -328,17 +338,34 @@ const EditorArea: React.FC = () => {
         </div>
       )}
 
-      {/* 编辑器：单实例不重建，切 tab 经 content 换绑；标题下移至工具栏下方 */}
+      {/* 编辑器 / 中央面板：章节 tab 走单实例 TipTap；panel 类 tab 常驻挂载（hidden 切换）保留编辑状态 */}
       <div className="flex-1 overflow-hidden relative">
-        <TipTapEditor
-          content={activeTab.draft}
-          onChange={handleChange}
-          onWordCount={handleWordCount}
-          titleSlot={titleSlot}
-        />
+        {activeTab.kind === 'chapter' && (
+          <TipTapEditor
+            content={activeTab.draft}
+            onChange={handleChange}
+            onWordCount={handleWordCount}
+            titleSlot={titleSlot}
+          />
+        )}
+        {tabs
+          .filter((t) => t.kind !== 'chapter')
+          .map((t) => (
+            <div
+              key={t.key}
+              className={t.key === activeKey ? 'absolute inset-0 flex flex-col bg-surface-0' : 'hidden'}
+            >
+              {t.kind === 'outline-node' && t.meta?.actId && t.meta?.nodeId ? (
+                <OutlineNodeEditor tabKey={t.key} actId={t.meta.actId} nodeId={t.meta.nodeId} />
+              ) : t.kind === 'memory' ? (
+                <MemoryEditorPanel tabKey={t.key} meta={t.meta ?? {}} />
+              ) : null}
+            </div>
+          ))}
       </div>
 
-      {/* 底部状态栏：字数 / 阅读耗时 / 保存状态（平台快链已收纳进导出弹窗） */}
+      {/* 底部状态栏：字数 / 阅读耗时 / 保存状态（仅章节编辑 tab；平台快链已收纳进导出弹窗） */}
+      {activeTab.kind === 'chapter' && (
       <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/6 bg-surface-1/60 text-xs text-neutral-500">
         <div className="flex items-center gap-3">
           <span className="tabular-nums">{activeTab.wordCount.toLocaleString()} 字</span>
@@ -352,6 +379,7 @@ const EditorArea: React.FC = () => {
           </span>
         )}
       </div>
+      )}
     </div>
   );
 };

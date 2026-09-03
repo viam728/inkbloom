@@ -237,6 +237,20 @@ func (s *PublishService) UnpublishChapter(ctx context.Context, userID, pid int64
 	return s.workRepo.DeleteChapter(ctx, userID, pid)
 }
 
+// ListWorkChapters returns the author's published chapters of one work — the
+// system-of-record the web "已发布" badge derives from (publish status is
+// system-managed, never user-editable).
+func (s *PublishService) ListWorkChapters(ctx context.Context, userID, workID int64) ([]model.PublishedChapter, error) {
+	w, err := s.workRepo.WorkByID(ctx, userID, workID)
+	if err != nil {
+		return nil, err
+	}
+	if w == nil {
+		return nil, ErrNotFound
+	}
+	return s.workRepo.ListChaptersByWork(ctx, userID, workID)
+}
+
 // GetWorkStats returns the author's read-statistics for a work (plan A23):
 // follow count, distinct readers, and the per-chapter read-through funnel.
 func (s *PublishService) GetWorkStats(ctx context.Context, userID, workID int64) (*dto.WorkStatsResponse, error) {

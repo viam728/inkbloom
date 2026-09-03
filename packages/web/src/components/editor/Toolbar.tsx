@@ -34,6 +34,7 @@ import ExportModal from '@/components/export/ExportModal';
 import PublishModal from '@/components/publish/PublishModal';
 import { useUIStore } from '@/stores/ui-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { usePublishStore } from '@/stores/publish-store';
 import {
   useOutlineStore,
   OUTLINE_STATUS_LABELS,
@@ -119,6 +120,12 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
       }
     }
   }
+  // 发布状态系统事实：published_chapters 表（publish-store，OutlinePanel 打开时加载）
+  const pubChapters = usePublishStore((s) =>
+    currentNovel ? s.byNovel[currentNovel.id]?.chapters : undefined,
+  );
+  const chapterPublished =
+    !!currentChapter && (pubChapters?.some((c) => c.chapter_id === currentChapter.id) ?? false);
 
   if (!editor) return null;
 
@@ -384,21 +391,37 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         <button
           type="button"
           onClick={() => {
-            if (!currentNovel || !statusNode || statusNode.node.status === 'published') return;
+            if (!currentNovel || !statusNode || statusNode.node.status === 'published' || chapterPublished) return;
             useOutlineStore.getState().updateNode(currentNovel.id, statusNode.actId, statusNode.node.id, {
               status: toggleWritingStatus(statusNode.node.status),
             });
           }}
-          disabled={statusNode.node.status === 'published'}
+          disabled={statusNode.node.status === 'published' || chapterPublished}
           title={
-            statusNode.node.status === 'published'
+            statusNode.node.status === 'published' || chapterPublished
               ? '发布状态由系统管理'
               : '切换写作状态（写作中 ↔ 已完成）'
           }
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all disabled:cursor-default ${STATUS_CHIP[statusNode.node.status]}`}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all disabled:cursor-default ${
+            STATUS_CHIP[
+              statusNode.node.status === 'published' || chapterPublished
+                ? 'published'
+                : statusNode.node.status
+            ]
+          }`}
         >
-          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[statusNode.node.status]}`} />
-          {OUTLINE_STATUS_LABELS[statusNode.node.status]}
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              STATUS_DOT[
+                statusNode.node.status === 'published' || chapterPublished
+                  ? 'published'
+                  : statusNode.node.status
+              ]
+            }`}
+          />
+          {statusNode.node.status === 'published' || chapterPublished
+            ? '已发布'
+            : OUTLINE_STATUS_LABELS[statusNode.node.status]}
         </button>
       )}
       {/* 发布到 InkBloom（业务方案 v3 E4，施工任务 A20） */}

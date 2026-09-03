@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkbloom/server/internal/dto"
+	"github.com/inkbloom/server/internal/model"
 	"github.com/inkbloom/server/internal/pkg/contentsafety"
 	"github.com/inkbloom/server/internal/service"
 	"go.uber.org/zap"
@@ -115,6 +116,24 @@ func (h *PublishHandler) UnpublishChapter(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok"})
+}
+
+// ListWorkChapters handles GET /api/v1/publish/works/:wid/chapters — the
+// author-facing published-chapter list (system truth for the 已发布 badge).
+func (h *PublishHandler) ListWorkChapters(c *gin.Context) {
+	wid, ok := parseID(c, "wid")
+	if !ok {
+		return
+	}
+	list, err := h.ps.ListWorkChapters(c.Request.Context(), GetUserID(c), wid)
+	if err != nil {
+		h.respondPublishError(c, err)
+		return
+	}
+	if list == nil {
+		list = []model.PublishedChapter{}
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: list})
 }
 
 // GetWorkStats handles GET /api/v1/publish/works/:wid/stats (plan A23).

@@ -90,7 +90,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   flushDirtyTabs: () => {
     const { saveChapter } = get();
     for (const t of useTabStore.getState().tabs) {
-      if (t.isDirty && t.saveStatus !== 'saving') {
+      if (t.kind === 'chapter' && t.chapterId != null && t.isDirty && t.saveStatus !== 'saving') {
         void saveChapter(t.chapterId, t.draft);
       }
     }

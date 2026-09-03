@@ -76,7 +76,7 @@ const NovelVersionPanel: React.FC = () => {
                 (useNovelStore.getState().chapters ?? []).map((c) => c.id),
             );
             for (const t of useTabStore.getState().tabs) {
-                if (!validIds.has(t.chapterId)) continue;
+                if (t.kind !== 'chapter' || t.chapterId == null || !validIds.has(t.chapterId)) continue;
                 try {
                     const content = await fetchChapterContent(t.chapterId);
                     useTabStore.getState().updateTab(chapterTabKey(t.chapterId), {

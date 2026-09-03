@@ -402,6 +402,7 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 			api.PUT("/publish/works/:wid", h.Publish.UpdateWork)
 			api.DELETE("/publish/works/:wid", h.Publish.Unpublish)
 			api.POST("/publish/works/:wid/chapters", h.Publish.PublishChapter)
+			api.GET("/publish/works/:wid/chapters", h.Publish.ListWorkChapters)
 			api.DELETE("/publish/chapters/:pid", h.Publish.UnpublishChapter)
 			api.GET("/publish/chapters/:pid/emotions", h.Publish.GetChapterEmotions)
 			api.GET("/publish/works/:wid/stats", h.Publish.GetWorkStats)

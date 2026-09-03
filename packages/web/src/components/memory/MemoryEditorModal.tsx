@@ -41,6 +41,21 @@ interface MemoryEditorModalProps {
   instanceKey: string;
 }
 
+/** 内容组件 props：不含 Modal 外壳（modal=弹窗外壳内嵌；tab=中央标签页直渲） */
+interface MemoryEditorContentProps {
+  scope: 'novel' | 'media';
+  novelId?: number;
+  item: MemoryItem | null;
+  defaultType?: MemoryType;
+  onSubmit: (payload: MemoryEditorPayload) => Promise<void>;
+  onClose: () => void;
+  allItems: MemoryItem[];
+  instanceKey: string;
+  variant?: 'modal' | 'tab';
+  /** modal 外壳的全屏态（tab 场景忽略） */
+  fullscreen?: boolean;
+}
+
 const NO_ACTS: OutlineAct[] = [];
 
 const inputCls =
@@ -167,25 +182,22 @@ const RelationRow: React.FC<{
 };
 
 /**
- * 记忆条目编辑弹窗（四 Tab：基本资料 / 人物关系 / 详情 / 立绘，按分组声明渲染）：
- * 支持受控最小化挂起与全屏（宿主管理状态，多窗口并存）；
+ * 记忆条目编辑器内容（四 Tab：基本资料 / 人物关系 / 详情 / 立绘，按分组声明渲染）：
  * 详情 Tab 内置 AIGC（agent/generate）预览插入与「一键加载基本资料」；
  * 立绘 Tab 支持上传与 AI 生成（复用 /aigc/prompt + /aigc/generate 链路）。
+ * variant="tab" 时作为中央标签页内容直渲（无 Modal 外壳）。
  */
-const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
-  open,
-  onClose,
+const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
   scope,
   novelId,
   item,
   defaultType = 'character',
   onSubmit,
-  minimized,
-  onMinimize,
-  fullscreen,
-  onToggleFullscreen,
+  onClose,
   allItems,
   instanceKey,
+  variant = 'modal',
+  fullscreen = false,
 }) => {
   const { showToast } = useToast();
   const [tab, setTab] = useState<MemoryTab>('profile');
@@ -212,9 +224,8 @@ const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
   const loadOutline = useOutlineStore((s) => s.loadOutline);
   const acts = useOutlineStore((s) => (novelId !== undefined ? s.byNovel[novelId] : undefined)) ?? NO_ACTS;
 
-  // 打开时重置表单（多窗口场景下每个窗口是独立组件实例，挂载即初始化）
+  // 挂载时初始化表单（Modal 复用时由 key 重挂触发重置；tab 场景每实例独立）
   useEffect(() => {
-    if (!open) return;
     setTab('profile');
     setType(item?.type ?? defaultType);
     setName(item?.name ?? '');
@@ -232,12 +243,13 @@ const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
     setAigcPreview(null);
     setPreviewPortrait(null);
     setSaving(false);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // novel scope：打开时拉取大纲供"限制可见性"候选
+  // novel scope：挂载时拉取大纲供"限制可见性"候选
   useEffect(() => {
-    if (open && scope === 'novel' && novelId !== undefined) void loadOutline(novelId);
-  }, [open, scope, novelId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (scope === 'novel' && novelId !== undefined) void loadOutline(novelId);
+  }, [scope, novelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cfg = GROUP_CONFIG[type];
   const showVisibility = scope === 'novel' && novelId !== undefined;
@@ -410,22 +422,24 @@ const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
     }
   };
 
-  const editorHeight = fullscreen ? 'h-[76vh]' : editorFocused ? 'h-[62vh]' : 'h-[300px]';
+  const editorHeight =
+    variant === 'tab'
+      ? editorFocused
+        ? 'h-[70vh]'
+        : 'h-[52vh]'
+      : fullscreen
+        ? 'h-[76vh]'
+        : editorFocused
+          ? 'h-[62vh]'
+          : 'h-[300px]';
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      width="640px"
-      title={item?.name || '新建记忆条目'}
-      minimizable
-      minimized={minimized}
-      onMinimize={onMinimize}
-      maximizable
-      fullscreen={fullscreen}
-      onToggleFullscreen={onToggleFullscreen}
-    >
-      <div className="px-5 py-4 flex flex-col gap-3">
+    <>
+      <div
+        className={`${
+          variant === 'tab' ? 'px-6 py-4 h-full overflow-y-auto' : 'px-5 py-4'
+        } flex flex-col gap-3`}
+      >
         {/* Tab 栏：按分组声明渲染；局部专注时隐藏 */}
         {!editorFocused && (
           <div className="flex items-center gap-1 border-b border-white/8 pb-2">
@@ -801,8 +815,54 @@ const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
           </div>
         )}
       </Modal>
+      </>
+  );
+};
+
+/** Modal 外壳包装：自媒体全局记忆等多窗口场景仍以弹窗形态使用（novel 主链路已改中央标签页） */
+const MemoryEditorModal: React.FC<MemoryEditorModalProps> = ({
+  open,
+  onClose,
+  scope,
+  novelId,
+  item,
+  defaultType = 'character',
+  onSubmit,
+  minimized,
+  onMinimize,
+  fullscreen,
+  onToggleFullscreen,
+  allItems,
+  instanceKey,
+}) => {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      width="640px"
+      title={item?.name || '新建记忆条目'}
+      minimizable
+      minimized={minimized}
+      onMinimize={onMinimize}
+      maximizable
+      fullscreen={fullscreen}
+      onToggleFullscreen={onToggleFullscreen}
+    >
+      <MemoryEditorContent
+        key={open ? 'open' : 'closed'}
+        scope={scope}
+        novelId={novelId}
+        item={item}
+        defaultType={defaultType}
+        onSubmit={onSubmit}
+        onClose={onClose}
+        allItems={allItems}
+        instanceKey={instanceKey}
+        variant="modal"
+      />
     </Modal>
   );
 };
 
 export default MemoryEditorModal;
+export { MemoryEditorContent };

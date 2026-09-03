@@ -22,6 +22,7 @@ import {
 } from '@/stores/memory-store';
 import { useMediaMemoryStore } from '@/stores/media-memory-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { useTabStore } from '@/stores/tab-store';
 import { useToast } from '@/components/common/Toast';
 import { GROUP_CONFIG, GROUP_ORDER } from './memory-config';
 import MemoryEditorModal, { type MemoryEditorPayload } from './MemoryEditorModal';
@@ -206,6 +207,16 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ scope = 'novel' }) => {
 
   const openCreate = (type: MemoryType) => {
     setAddPickerOpen(false);
+    // novel 作用域：编辑器为中央标签页；media 作用域保持多窗口弹窗
+    if (!isMedia && novelId) {
+      useTabStore
+        .getState()
+        .openPanelTab(`memory-new-${type}`, `新建${GROUP_CONFIG[type].label}`, 'memory', {
+          newType: type,
+          novelId,
+        });
+      return;
+    }
     setWindows((ws) => [
       ...ws,
       { key: crypto.randomUUID(), newType: type, minimized: false, fullscreen: false },
@@ -214,6 +225,13 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ scope = 'novel' }) => {
 
   const openEdit = (item: MemoryItem) => {
     setDeleteConfirm(null);
+    if (!isMedia && novelId) {
+      useTabStore.getState().openPanelTab(`memory-${item.id}`, item.name, 'memory', {
+        itemId: item.id,
+        novelId,
+      });
+      return;
+    }
     setWindows((ws) => {
       const existing = ws.find((w) => w.itemId === item.id);
       if (existing) {

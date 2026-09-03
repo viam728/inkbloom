@@ -1,37 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
   Plus,
   Trash2,
   Pencil,
-  ArrowUp,
-  ArrowDown,
-  Sparkles,
-  FileText,
   ListOrdered,
   Maximize2,
+  FileText,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
-import { useMemoryStore, sortMemoryItems } from '@/stores/memory-store';
 import {
   useOutlineStore,
   OUTLINE_STATUS_LABELS,
-  WRITABLE_OUTLINE_STATUSES,
   toggleWritingStatus,
   type OutlineAct,
   type OutlineNode,
   type OutlineStatus,
 } from '@/stores/outline-store';
-import { expandOutlineToDraft } from '@/services/outline-client';
 import { trashNode } from '@/services/trash-client';
 import { useTrashStore } from '@/stores/trash-store';
-import { resolveSceneModel } from '@/stores/ai-store';
+import { usePublishStore } from '@/stores/publish-store';
+import { useTabStore } from '@/stores/tab-store';
 import { useToast } from '@/components/common/Toast';
 import Modal from '@/components/common/Modal';
-import TipTapEditor from '@/components/editor/TipTapEditor';
 import { htmlToPlainText } from '@/utils/html';
-import DraftPreviewModal from './DraftPreviewModal';
 import OutlineExpandedView from './OutlineExpandedView';
 import TrashModal from './TrashModal';
 
@@ -59,21 +52,8 @@ const STATUS_CONFIG: Record<
   },
 };
 
-/** 旧纯文本 summary 迁移为编辑器 HTML（幂等：已是 HTML 则原样返回） */
-const toEditorHtml = (raw: string): string => {
-  const trimmed = (raw ?? '').trim();
-  if (trimmed === '') return '';
-  if (trimmed.startsWith('<') && raw.includes('>')) return raw;
-  return raw
-    .split('\n')
-    .map((line) => {
-      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return escaped.trim() ? `<p>${escaped}</p>` : '<p></p>';
-    })
-    .join('');
-};
-
-/** 结构化创作面板：大纲（幕 → 章节要点）→ AI 扩写 → 成稿章节 */
+/** 结构化创作面板：大纲（幕 → 章节要点）→ AI 扩写 → 成稿章节。
+ *  要点编辑器为中央标签页（OutlineNodeEditor），不再使用弹窗。 */
 const OutlinePanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
@@ -90,7 +70,6 @@ const OutlinePanel: React.FC = () => {
     removeAct,
     addNode,
     updateNode,
-    moveNode,
   } = useOutlineStore();
 
   const { showToast } = useToast();
@@ -99,28 +78,26 @@ const OutlinePanel: React.FC = () => {
   const [expandedOpen, setExpandedOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
 
-  // ── 弹窗编辑（替代左栏内联展开） ─────────────────────────────────────
-  const [editingNode, setEditingNode] = useState<{ actId: string; node: OutlineNode } | null>(null);
-  const [nodeTitleDraft, setNodeTitleDraft] = useState('');
-  const [nodeSummaryDraft, setNodeSummaryDraft] = useState('');
+  // ── 幕重命名弹窗 ─────────────────────────────────────────────────────
   const [editingAct, setEditingAct] = useState<OutlineAct | null>(null);
   const [actTitleDraft, setActTitleDraft] = useState('');
-  /** 节点编辑弹窗内局部专注态（受控，由 TipTapEditor 工具栏切换） */
-  const [nodeEditorFocused, setNodeEditorFocused] = useState(false);
-
-  // 扩写 → 初稿预览状态
-  const [expandTarget, setExpandTarget] = useState<{
-    actId: string;
-    node: OutlineNode;
-  } | null>(null);
-  const [draft, setDraft] = useState<string | null>(null);
-  const [draftRefs, setDraftRefs] = useState<string[]>([]);
-  const [writing, setWriting] = useState(false);
 
   const novelId = currentNovel?.id;
 
+  // 发布状态系统事实：published_chapters 表（章节级），刷新后依然生效
+  const pubChapters = usePublishStore((s) =>
+    currentNovel ? s.byNovel[currentNovel.id]?.chapters : undefined,
+  );
+  const publishedChapterIds = useMemo(
+    () => new Set((pubChapters ?? []).map((c) => c.chapter_id)),
+    [pubChapters],
+  );
+
   useEffect(() => {
-    if (novelId) loadOutline(novelId);
+    if (novelId) {
+      loadOutline(novelId);
+      void usePublishStore.getState().load(novelId);
+    }
   }, [novelId, loadOutline]);
 
   const toggleAct = (id: string) => {
@@ -142,6 +119,16 @@ const OutlinePanel: React.FC = () => {
     }
   };
 
+  /** 要点编辑器 = 中央标签页（key 按节点 id 稳定，重开即激活） */
+  const openNodeEditor = (actId: string, node: OutlineNode) => {
+    useTabStore.getState().openPanelTab(
+      `outline-node-${node.id}`,
+      node.title || '未命名章节',
+      'outline-node',
+      { actId, nodeId: node.id, novelId },
+    );
+  };
+
   const handleAddNode = (actId: string) => {
     if (!novelId) return;
     const node = addNode(novelId, actId);
@@ -150,133 +137,36 @@ const OutlinePanel: React.FC = () => {
       next.delete(actId);
       return next;
     });
-    setEditingNode({ actId, node });
-    setNodeTitleDraft(node.title);
-    setNodeSummaryDraft(node.summary);
-    setNodeEditorFocused(false);
-  };
-
-  const openNodeEditor = (actId: string, node: OutlineNode) => {
-    setEditingNode({ actId, node });
-    setNodeTitleDraft(node.title);
-    // summary 现为 HTML；旧纯文本（含换行）迁移为 <p> 段，避免在富文本编辑器中丢换行
-    setNodeSummaryDraft(toEditorHtml(node.summary));
-    setNodeEditorFocused(false);
-  };
-
-  const closeNodeEditor = () => {
-    setEditingNode(null);
-    setNodeTitleDraft('');
-    setNodeSummaryDraft('');
-    setNodeEditorFocused(false);
-  };
-
-  const commitNodeEdit = (patch?: Partial<OutlineNode>) => {
-    if (!novelId || !editingNode) return;
-    updateNode(novelId, editingNode.actId, editingNode.node.id, {
-      title: nodeTitleDraft.trim(),
-      summary: nodeSummaryDraft.trim(),
-      ...patch,
-    });
-  };
-
-  // ── 大纲 → 成稿：AI 扩写 ─────────────────────────────────────────────
-  const handleExpand = async (actId: string, node: OutlineNode) => {
-    if (!novelId) return;
-    setEditingNode(null);
-    setExpandTarget({ actId, node });
-    setDraft(null);
-    setDraftRefs([]);
-
-    // 注入作品记忆（人物/设定/前情/灵感四组）作为上下文；灵感条目作为 tips 随时干预 AI
-    let refs: string[] = [];
-    try {
-      const mem = useMemoryStore.getState();
-      if (!mem.byNovel[novelId]) await mem.loadMemory(novelId);
-      const items = useMemoryStore.getState().byNovel[novelId] ?? [];
-      // 章节锁判据：限制可见的条目在所选章节任一完成（done）后全局解锁注入
-      const statusById = new Map(
-        acts.flatMap((a) => a.nodes.map((n) => [n.id, n.status] as const)),
-      );
-      // 置顶条目优先携带（sortMemoryItems 已含），再按 AI 可见性与可见时机过滤
-      refs = sortMemoryItems(items)
-        .filter(
-          (i) =>
-            i.ai_visible !== false &&
-            (!i.visible_chapters?.length ||
-              i.visible_chapters.some((id) => statusById.get(id) === 'done')),
-        )
-        .map((i) => i.name)
-        .slice(0, 6);
-    } catch {
-      /* 无设定也可扩写 */
-    }
-
-    try {
-      const text = await expandOutlineToDraft({
-        outlineTitle: node.title || '未命名章节',
-        // summary 现为 HTML，发送前转为纯文本（契约不变）
-        summary: htmlToPlainText(node.summary),
-        memoryContext: refs,
-      }, resolveSceneModel('expand'));
-      setDraftRefs(refs);
-      setDraft(text);
-    } catch {
-      showToast('扩写失败，请重试', 'error');
-      setExpandTarget(null);
-    }
+    openNodeEditor(actId, node);
   };
 
   /**
-   * 按大纲顺序计算新章节在成稿序列中的插入位置：
-   * 统计目标要点之前、且已扩写成稿（章节仍存在）的要点数量。
-   * 例：两幕各有一章成稿时，为第一幕新增的要点将插入到第二幕章节之前。
+   * 正文入口（大纲 ↔ 章节合并后的唯一出口）：
+   * 已关联成稿章节 → 直接打开该章节正文；未关联 → 按大纲顺序就地建一章
+   * 空正文并关联后打开。
    */
-  const computeInsertAt = (actId: string, nodeId: string): number => {
-    let count = 0;
-    for (const act of acts) {
-      for (const n of act.nodes) {
-        if (act.id === actId && n.id === nodeId) return count;
-        if (n.chapter_id && chapters.some((c) => c.id === n.chapter_id)) count++;
-      }
-    }
-    return count;
-  };
-
-  // ── 初稿 → 创建章节并写入（按大纲顺序插入） ───────────────────────────
-  const handleWriteDraft = async () => {
-    if (!novelId || !expandTarget || !draft) return;
-    setWriting(true);
-    try {
-      const title = expandTarget.node.title || '未命名章节';
-      const insertAt = computeInsertAt(expandTarget.actId, expandTarget.node.id);
-      const chapter = await createChapter(
-        { novel_id: novelId, title, content: draft },
-        insertAt,
-      );
-      updateNode(novelId, expandTarget.actId, expandTarget.node.id, {
-        chapter_id: chapter.id,
-        status: 'drafting',
-        memory_refs: draftRefs,
-      });
-      // 直接带内容跳转，编辑器即刻可见初稿
-      useNovelStore.setState({ currentChapter: { ...chapter, content: draft } });
-      showToast(`初稿已写入章节「${title}」（第 ${insertAt + 1} 章）`, 'success');
-      setExpandTarget(null);
-      setDraft(null);
-    } catch {
-      showToast('后端未连接，无法创建章节，可先复制初稿', 'error');
-    } finally {
-      setWriting(false);
-    }
-  };
-
-  /** 按大纲顺序为要点创建空白正文章节（原 handleOpenBody 的建章逻辑） */
-  const createBodyForNode = async (actId: string, node: OutlineNode) => {
+  const handleOpenBody = async (actId: string, node: OutlineNode) => {
     if (!novelId) return;
+    const linked = node.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
+    if (linked) {
+      await selectChapter(linked);
+      return;
+    }
     const title = node.title?.trim() || '未命名章节';
     try {
-      const insertAt = computeInsertAt(actId, node.id);
+      // 按大纲顺序计算插入位置：统计目标要点之前、已成稿且章节仍存在的要点数量
+      let insertAt = 0;
+      let found = false;
+      for (const act of acts) {
+        for (const n of act.nodes) {
+          if (act.id === actId && n.id === node.id) {
+            found = true;
+            break;
+          }
+          if (n.chapter_id && chapters.some((c) => c.id === n.chapter_id)) insertAt++;
+        }
+        if (found) break;
+      }
       const chapter = await createChapter({ novel_id: novelId, title, content: '' }, insertAt);
       updateNode(novelId, actId, node.id, {
         chapter_id: chapter.id,
@@ -286,46 +176,6 @@ const OutlinePanel: React.FC = () => {
       showToast(`已为「${title}」创建正文，可直接开写`, 'success');
     } catch {
       showToast('创建正文章节失败，请检查后端连接', 'error');
-    }
-  };
-
-  /**
-   * 正文入口（大纲 ↔ 章节合并后的唯一出口）：
-   * 已关联成稿章节 → 直接打开该章节正文；未关联 → 按大纲顺序就地建一章
-   * 空正文并关联后打开。文章库已并入大纲，章节正文统一在这里管理。
-   * 卡片悬浮标与编辑弹窗共用此入口，节点上不再散落「成稿/编辑/扩写」多个小图标。
-   */
-  const handleOpenBody = async (actId: string, node: OutlineNode) => {
-    if (!novelId) return;
-    const linked = node.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
-    if (linked) {
-      await selectChapter(linked);
-      return;
-    }
-    await createBodyForNode(actId, node);
-  };
-
-  /**
-   * 删除要点（垃圾桶）：后端事务内把「节点 + 绑定章节 + 正文」一起移入回收站，
-   * 可随时恢复。成功后刷新大纲（服务端 version 已变，本地不能直接 PUT）与章节列表。
-   */
-  const handleRemoveNode = async (actId: string, node: OutlineNode) => {
-    if (!novelId) return;
-    if (
-      node.chapter_id &&
-      !window.confirm(`要点「${node.title || '未命名章节'}」连同其正文将移入回收站，可随时恢复，确定？`)
-    ) {
-      return;
-    }
-    try {
-      await trashNode(novelId, actId, node.id);
-      showToast('已移入回收站', 'info');
-    } catch {
-      showToast('删除失败，请检查后端连接', 'error');
-    } finally {
-      // 无论成功失败都对齐服务端状态（version / acts / 章节列表）
-      await loadOutline(novelId);
-      await fetchChapters(novelId);
     }
   };
 
@@ -364,6 +214,7 @@ const OutlinePanel: React.FC = () => {
   /** 节点卡两态切换：写作中 ↔ 已完成（已发布节点由系统管理，按钮禁用） */
   const handleToggleNodeStatus = (actId: string, node: OutlineNode) => {
     if (!novelId || node.status === 'published') return;
+    if (node.chapter_id != null && publishedChapterIds.has(node.chapter_id)) return;
     updateNode(novelId, actId, node.id, { status: toggleWritingStatus(node.status) });
   };
 
@@ -386,20 +237,14 @@ const OutlinePanel: React.FC = () => {
 
   const totalNodes = acts.reduce((sum, a) => sum + a.nodes.length, 0);
   const doneNodes = acts.reduce(
-    (sum, a) => sum + a.nodes.filter((n) => n.status === 'done').length,
+    (sum, a) =>
+      sum +
+      a.nodes.filter(
+        (n) => n.status === 'done' || n.status === 'published' || (n.chapter_id != null && publishedChapterIds.has(n.chapter_id)),
+      ).length,
     0,
   );
   const progress = totalNodes ? Math.round((doneNodes / totalNodes) * 100) : 0;
-
-  const editingNodeLive = editingNode
-    ? acts.find((a) => a.id === editingNode.actId)?.nodes.find((n) => n.id === editingNode.node.id) ?? null
-    : null;
-  const editingNodeIdx = editingNodeLive
-    ? acts.find((a) => a.id === editingNode!.actId)?.nodes.findIndex((n) => n.id === editingNodeLive.id) ?? -1
-    : -1;
-  const editingNodeCount = editingNodeLive
-    ? acts.find((a) => a.id === editingNode!.actId)?.nodes.length ?? 0
-    : 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -465,6 +310,7 @@ const OutlinePanel: React.FC = () => {
             key={act.id}
             act={act}
             collapsed={collapsedActs.has(act.id)}
+            publishedIds={publishedChapterIds}
             onToggle={() => toggleAct(act.id)}
             onRename={() => {
               setEditingAct(act);
@@ -488,144 +334,6 @@ const OutlinePanel: React.FC = () => {
           </button>
         )}
       </div>
-
-      {/* 章节要点编辑弹窗（替代左栏内联展开，空间更宽裕） */}
-      <Modal
-        open={editingNode !== null}
-        onClose={closeNodeEditor}
-        title="编辑章节要点"
-        width="640px"
-      >
-        {editingNodeLive && (
-          <div className="px-5 py-4">
-            {/* 局部专注时隐藏标题输入，编辑板铺满 */}
-            {!nodeEditorFocused && (
-              <input
-                value={nodeTitleDraft}
-                onChange={(e) => setNodeTitleDraft(e.target.value)}
-                placeholder="章节标题（将用于成稿章节名）"
-                autoFocus
-                className="w-full px-3 py-2 rounded-lg bg-white/5 text-sm text-neutral-100 border border-white/10 placeholder-neutral-500 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all"
-              />
-            )}
-            <div
-              className={`${nodeEditorFocused ? 'h-[420px]' : 'mt-2.5 h-[260px]'} rounded-lg border border-white/10 bg-white/4 overflow-hidden flex flex-col`}
-            >
-              <TipTapEditor
-                content={nodeSummaryDraft}
-                onChange={setNodeSummaryDraft}
-                variant="memo"
-                toolbarPreset="plain"
-                placeholder={'剧情要点：主角在雨夜发现密信，与旧友摊牌……'}
-                editorClassName="prose prose-invert prose-sm max-w-none min-h-[120px] px-3 py-2 text-neutral-200 focus:outline-none"
-                focusable
-                focused={nodeEditorFocused}
-                onToggleFocus={() => setNodeEditorFocused((v) => !v)}
-              />
-            </div>
-
-            {/* 状态选择（局部专注时隐藏）：写作两态，已发布由系统管理不可手改 */}
-            {!nodeEditorFocused && (
-            <div className="flex items-center gap-1.5 mt-3">
-              <span className="text-[11px] text-neutral-500 mr-1">状态</span>
-              {editingNodeLive.status === 'published' ? (
-                <span
-                  className={`text-[11px] px-2.5 py-1 rounded-full border ${STATUS_CONFIG.published.chip}`}
-                  title="发布状态由系统管理"
-                >
-                  {OUTLINE_STATUS_LABELS.published}
-                </span>
-              ) : (
-                WRITABLE_OUTLINE_STATUSES.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => commitNodeEdit({ status: s })}
-                    className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
-                      editingNodeLive.status === s
-                        ? STATUS_CONFIG[s].chip
-                        : 'bg-white/4 text-neutral-500 border-white/8 hover:text-neutral-300'
-                    }`}
-                  >
-                    {OUTLINE_STATUS_LABELS[s]}
-                  </button>
-                ))
-              )}
-            </div>
-            )}
-
-            {/* 操作行 */}
-            <div className="flex items-center gap-1.5 mt-4">
-              <button
-                onClick={() => {
-                  commitNodeEdit();
-                  handleExpand(editingNode!.actId, {
-                    ...editingNodeLive,
-                    title: nodeTitleDraft.trim(),
-                    summary: nodeSummaryDraft.trim(),
-                  });
-                }}
-                disabled={!nodeSummaryDraft.trim()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-brand-600 to-fuchsia-600 hover:from-brand-500 hover:to-fuchsia-500 disabled:opacity-40 transition-all shadow-lg shadow-brand-600/20"
-              >
-                <Sparkles size={12} />
-                扩写成稿
-              </button>
-              {/* 正文入口：与节点卡悬浮标同一出口，先落盘要点再进正文 */}
-              <button
-                onClick={() => {
-                  commitNodeEdit();
-                  closeNodeEditor();
-                  handleOpenBody(editingNode!.actId, {
-                    ...editingNodeLive,
-                    title: nodeTitleDraft.trim(),
-                  });
-                }}
-                title={editingNodeLive.chapter_id ? '打开正文章节' : '创建并打开正文章节'}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-brand-100 bg-brand-500/15 border border-brand-500/30 hover:bg-brand-500/28 hover:text-white transition-all"
-              >
-                <FileText size={12} />
-                {editingNodeLive.chapter_id ? '打开正文' : '写正文'}
-              </button>
-              <div className="flex-1" />
-              <button
-                onClick={() => novelId && moveNode(novelId, editingNode!.actId, editingNodeLive.id, -1)}
-                disabled={editingNodeIdx === 0}
-                title="在大纲中上移"
-                className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-white/8 disabled:opacity-30 transition-colors"
-              >
-                <ArrowUp size={13} />
-              </button>
-              <button
-                onClick={() => novelId && moveNode(novelId, editingNode!.actId, editingNodeLive.id, 1)}
-                disabled={editingNodeIdx >= editingNodeCount - 1}
-                title="在大纲中下移"
-                className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-white/8 disabled:opacity-30 transition-colors"
-              >
-                <ArrowDown size={13} />
-              </button>
-              <button
-                onClick={() => {
-                  handleRemoveNode(editingNode!.actId, editingNodeLive);
-                  closeNodeEditor();
-                }}
-                title="删除要点"
-                className="p-1.5 rounded-md text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-              >
-                <Trash2 size={13} />
-              </button>
-              <button
-                onClick={() => {
-                  commitNodeEdit();
-                  closeNodeEditor();
-                }}
-                className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white transition-all shadow-lg shadow-indigo-600/20"
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
 
       {/* 幕重命名弹窗 */}
       <Modal
@@ -670,21 +378,7 @@ const OutlinePanel: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 扩写初稿预览 */}
-      <DraftPreviewModal
-        open={expandTarget !== null}
-        title={expandTarget?.node.title || ''}
-        draft={draft}
-        memoryRefs={draftRefs}
-        writing={writing}
-        onClose={() => {
-          setExpandTarget(null);
-          setDraft(null);
-        }}
-        onWrite={handleWriteDraft}
-      />
-
-      {/* 展开大视图：点击卡片先关大视图再开编辑弹窗（Modal Esc 为 window capture，禁止嵌套） */}
+      {/* 展开大视图：点击卡片打开中央要点编辑 tab */}
       <OutlineExpandedView
         open={expandedOpen}
         onClose={() => setExpandedOpen(false)}
@@ -717,6 +411,8 @@ const OutlinePanel: React.FC = () => {
 interface ActBlockProps {
   act: OutlineAct;
   collapsed: boolean;
+  /** 发布状态的系统事实：已发布章节 id 集（published_chapters 表） */
+  publishedIds: Set<number>;
   onToggle: () => void;
   onRename: () => void;
   onRemove: () => void;
@@ -729,6 +425,7 @@ interface ActBlockProps {
 const ActBlock: React.FC<ActBlockProps> = ({
   act,
   collapsed,
+  publishedIds,
   onToggle,
   onRename,
   onRemove,
@@ -798,6 +495,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
             <NodeCard
               key={node.id}
               node={node}
+              publishedIds={publishedIds}
               onEdit={() => onEditNode(node)}
               onOpenBody={() => onOpenBody(node)}
               onToggleStatus={() => onToggleNodeStatus(node)}
@@ -809,19 +507,22 @@ const ActBlock: React.FC<ActBlockProps> = ({
   );
 };
 
-// ── 章节要点卡片（点击弹窗编辑，状态标签为两态切换按钮） ─────────────────
+// ── 章节要点卡片（点击打开中央要点编辑 tab，状态标签为两态切换按钮） ─────
 interface NodeCardProps {
   node: OutlineNode;
+  publishedIds: Set<number>;
   onEdit: () => void;
   onOpenBody: () => void;
   onToggleStatus: () => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody, onToggleStatus }) => {
+const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenBody, onToggleStatus }) => {
   // 兜底：node.status 由 Record 查表拿到，非法值会让解引用 status.dot 抛错白屏
   const status = STATUS_CONFIG[node.status] ?? STATUS_CONFIG.drafting;
   const hasBody = Boolean(node.chapter_id);
-  const isPublished = node.status === 'published';
+  // 已发布 = 系统事实（published_chapters）或节点状态标记，二者任一即视为已发布
+  const isPublished =
+    node.status === 'published' || (node.chapter_id != null && publishedIds.has(node.chapter_id));
   return (
     <div
       onClick={onEdit}
@@ -844,7 +545,9 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, onEdit, onOpenBody, onToggleS
             isPublished ? 'cursor-default' : 'hover:brightness-125'
           }`}
         >
-          {OUTLINE_STATUS_LABELS[node.status] ?? OUTLINE_STATUS_LABELS.drafting}
+          {isPublished
+            ? OUTLINE_STATUS_LABELS.published
+            : OUTLINE_STATUS_LABELS[node.status] ?? OUTLINE_STATUS_LABELS.drafting}
         </button>
       </div>
       {node.summary && (
