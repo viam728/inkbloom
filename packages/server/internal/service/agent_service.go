@@ -165,9 +165,11 @@ func (s *AgentService) toolSchema() []AgentTool {
 	}
 }
 
-// systemPrompt is the Agent's persona + tool-usage rule. Identity is NOT
-// hardcoded here: the resolved model name is appended at Run() time so the
-// model answers "who are you" with its native name instead of a fake persona.
+// systemPrompt is the Agent's persona + tool-usage rule. Identity truthfulness
+// (answer "who are you" with the native model name, never a fake GPT persona)
+// is injected centrally in ai-service's /api/agent/chat handler (_with_identity),
+// so every conversational endpoint shares one source of truth and the resolved
+// model name there is authoritative. Do NOT append an identity line here too.
 const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作小说。" +
 	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / list_chapters / get_chapter_by_title / save_memory / save_outline）" +
 	"来实际创建作品、章节、撰写正文，并把角色/设定写入记忆模块、把情节规划写入大纲模块。" +

@@ -85,6 +85,30 @@ _prompt_builder = PromptBuilder()
 _image_prompt_builder = ImagePromptBuilder(_llm)
 
 
+# ── 模型身份如实化 ──────────────────────────────────────────────────────
+# 所有「作者可对话」的端点统一注入一条身份指令：模型被问"你是谁/什么模型"时
+# 以原生名称回答（GLM / DeepSeek 等），不伪装成 GPT/ChatGPT 或其他产品。
+# 幂等：同一 system 段只追加一次；知识抽取/图像 prompt 等机器调用端点不经此层，
+# 不受影响（它们从不被问身份，且要求严格 JSON 输出）。
+_IDENTITY_HINT = (
+    "当用户询问你是谁、你的名字或底层模型时，如实以底层模型的原生名称回答"
+    "（如 GLM、DeepSeek），不要自称 GPT/ChatGPT 等其他产品，不要伪装或虚构名字。"
+)
+
+
+def _with_identity(messages: list[dict], model: str) -> list[dict]:
+    """把身份指令追加到首条 system 消息末尾（无 system 时插入一条），幂等。"""
+    hint = f"你由模型 {model} 驱动；{_IDENTITY_HINT}" if model else _IDENTITY_HINT
+    out = [dict(m) for m in messages]
+    for m in out:
+        if m.get("role") == "system" and isinstance(m.get("content"), str):
+            if _IDENTITY_HINT not in m["content"]:
+                m["content"] = m["content"] + "\n" + hint
+            return out
+    return [{"role": "system", "content": hint}] + out
+
+
+
 def _sse_stream(messages, model, temperature, max_tokens):
     """Shared SSE generator (tech plan v2 §6.3).
 
@@ -92,7 +116,6 @@ def _sse_stream(messages, model, temperature, max_tokens):
     usage meta event `data: {"usage": {...}}` right before `[DONE]` so the
     Go proxy can settle token billing against the real upstream usage.
     """
-
     async def generate():
         usage: dict | None = None
         try:
@@ -143,7 +166,7 @@ async def chat_stream(request: ChatHTTPRequest):
     """Stream chat completion chunks via SSE."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-    return _sse_stream(messages, model, request.temperature, request.max_tokens)
+    return _sse_stream(_with_identity(messages, model), model, request.temperature, request.max_tokens)
 
 
 @app.post("/api/chat/complete")
@@ -154,7 +177,7 @@ async def chat_complete(request: ChatHTTPRequest):
 
     try:
         result = await _llm.chat(
-            messages=messages,
+            messages=_with_identity(messages, model),
             model=model,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
@@ -231,7 +254,7 @@ async def agent_chat(request: AgentChatHTTPRequest):
     model = request.model or settings.default_model
     try:
         result = await _llm.chat_with_tools(
-            messages=messages,
+            messages=_with_identity(messages, model),
             tools=tools,
             model=model,
             temperature=request.temperature,
@@ -256,7 +279,7 @@ async def inline_completion(request: InlineRequest):
     """Inline completion - SSE streaming."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-    return _sse_stream(messages, model, request.temperature, request.max_tokens)
+    return _sse_stream(_with_identity(messages, model), model, request.temperature, request.max_tokens)
 
 
 @app.post("/api/chat/rewrite")
@@ -264,7 +287,7 @@ async def rewrite_text(request: RewriteRequest):
     """Text rewrite (polish/expand/condense/humanize) - SSE streaming."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     model = request.model or settings.default_model
-    return _sse_stream(messages, model, request.temperature, request.max_tokens)
+    return _sse_stream(_with_identity(messages, model), model, request.temperature, request.max_tokens)
 
 
 # ── Knowledge HTTP endpoints ─────────────────────────────────────────────

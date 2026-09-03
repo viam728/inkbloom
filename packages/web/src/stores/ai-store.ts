@@ -421,6 +421,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
         () => {
           set({ isRewriteStreaming: false, showDiffViewer: true });
         },
+        resolveSceneModel('rewrite'),
       );
     } catch {
       set({ isRewriteStreaming: false });
