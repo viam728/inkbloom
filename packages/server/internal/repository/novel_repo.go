@@ -16,6 +16,9 @@ type NovelRepository interface {
 	Create(ctx context.Context, novel *model.Novel) error
 	GetByID(ctx context.Context, userID, id int64) (*model.Novel, error)
 	List(ctx context.Context, userID int64, offset, limit int) ([]model.Novel, int64, error)
+	// ListAll returns every novel across users. Server-startup data migrations
+	// only (e.g. binding orphan chapters into outlines); never expose via API.
+	ListAll(ctx context.Context) ([]model.Novel, error)
 	Update(ctx context.Context, userID int64, novel *model.Novel) error
 	Delete(ctx context.Context, userID, id int64) error
 }
@@ -64,6 +67,12 @@ func (r *novelRepository) List(ctx context.Context, userID int64, offset, limit 
 	}
 
 	return novels, total, nil
+}
+
+func (r *novelRepository) ListAll(ctx context.Context) ([]model.Novel, error) {
+	var novels []model.Novel
+	err := r.db.WithContext(ctx).Order("id ASC").Find(&novels).Error
+	return novels, err
 }
 
 func (r *novelRepository) Update(ctx context.Context, userID int64, novel *model.Novel) error {

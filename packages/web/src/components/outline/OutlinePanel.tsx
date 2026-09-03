@@ -13,7 +13,6 @@ import {
   Maximize2,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
-import type { Chapter } from '@/types';
 import { useMemoryStore, sortMemoryItems } from '@/stores/memory-store';
 import {
   useOutlineStore,
@@ -72,7 +71,7 @@ const toEditorHtml = (raw: string): string => {
 const OutlinePanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
-  const { createChapter, selectChapter } = useNovelStore();
+  const { createChapter, selectChapter, deleteChapter } = useNovelStore();
 
   const acts = useOutlineStore((s) =>
     currentNovel ? s.byNovel[currentNovel.id] ?? EMPTY_ACTS : EMPTY_ACTS,
@@ -101,9 +100,6 @@ const OutlinePanel: React.FC = () => {
   const [actTitleDraft, setActTitleDraft] = useState('');
   /** 节点编辑弹窗内局部专注态（受控，由 TipTapEditor 工具栏切换） */
   const [nodeEditorFocused, setNodeEditorFocused] = useState(false);
-
-  /** 未挂大纲的旧文章选择器：为无正文的要点挂载既有章节（整合旧文章数据到大纲正文） */
-  const [bodyPicker, setBodyPicker] = useState<{ actId: string; nodeId: string } | null>(null);
 
   // 扩写 → 初稿预览状态
   const [expandTarget, setExpandTarget] = useState<{
@@ -286,30 +282,10 @@ const OutlinePanel: React.FC = () => {
     }
   };
 
-  /** 挂载既有章节为本要点正文（整合旧文章数据）：关联 → 按状态推进 → 打开正文 */
-  const linkExistingChapter = async (chapter: Chapter) => {
-    if (!novelId || !bodyPicker) return;
-    const live = acts
-      .find((a) => a.id === bodyPicker.actId)
-      ?.nodes.find((n) => n.id === bodyPicker.nodeId);
-    if (!live) {
-      setBodyPicker(null);
-      return;
-    }
-    updateNode(novelId, bodyPicker.actId, live.id, {
-      chapter_id: chapter.id,
-      status: live.status === 'planned' ? 'drafting' : live.status,
-    });
-    setBodyPicker(null);
-    await selectChapter(chapter);
-    showToast(`已将「${chapter.title || '未命名章节'}」挂为本要点正文`, 'success');
-  };
-
   /**
-   * 正文入口（大纲 ↔ 章节交互合并的唯一出口）：
-   * 已关联成稿章节 → 直接打开该章节正文；未关联 → 若存在尚未挂到大纲的既有章节
-   * （旧文章），先弹选择器让作者挂载复用，避免同一篇旧文被重复建章稀释；
-   * 无可复用章节时按大纲顺序就地建一章空正文并关联后打开。
+   * 正文入口（大纲 ↔ 章节合并后的唯一出口）：
+   * 已关联成稿章节 → 直接打开该章节正文；未关联 → 按大纲顺序就地建一章
+   * 空正文并关联后打开。文章库已并入大纲，章节正文统一在这里管理。
    * 卡片悬浮标与编辑弹窗共用此入口，节点上不再散落「成稿/编辑/扩写」多个小图标。
    */
   const handleOpenBody = async (actId: string, node: OutlineNode) => {
@@ -319,17 +295,53 @@ const OutlinePanel: React.FC = () => {
       await selectChapter(linked);
       return;
     }
-    // 可复用的旧文章：尚未挂到任何大纲要点的章节（含 AI 采纳/手动写的存量正文）
-    const linkedIds = new Set(
-      acts.flatMap((a) => a.nodes.map((n) => n.chapter_id).filter(Boolean) as number[]),
-    );
-    const orphans = chapters.filter((c) => !linkedIds.has(c.id));
-    if (orphans.length > 0) {
-      setEditingNode(null);
-      setBodyPicker({ actId, nodeId: node.id });
+    await createBodyForNode(actId, node);
+  };
+
+  /**
+   * 删除要点：正文统一在大纲管理，要点绑定的章节一并删除，
+   * 避免章节残留成无入口的孤儿数据。无正文的要点保持原行为直接删。
+   */
+  const handleRemoveNode = async (actId: string, node: OutlineNode) => {
+    if (!novelId) return;
+    if (
+      node.chapter_id &&
+      !window.confirm(`要点「${node.title || '未命名章节'}」已关联正文，删除要点将同时删除该章节，确定？`)
+    ) {
       return;
     }
-    await createBodyForNode(actId, node);
+    if (node.chapter_id) {
+      try {
+        await deleteChapter(node.chapter_id);
+      } catch {
+        /* 章节删除失败不阻塞要点删除 */
+      }
+    }
+    removeNode(novelId, actId, node.id);
+    showToast('已删除章节要点', 'info');
+  };
+
+  /** 删除幕：幕下已关联正文的要点连同章节一起删除（带确认） */
+  const handleRemoveAct = async (act: OutlineAct) => {
+    if (!novelId) return;
+    const boundIds = act.nodes
+      .map((n) => n.chapter_id)
+      .filter((id): id is number => Boolean(id));
+    if (
+      boundIds.length > 0 &&
+      !window.confirm(`「${act.title || '未命名幕'}」下有 ${boundIds.length} 个要点已关联正文，删除幕将同时删除这些章节，确定？`)
+    ) {
+      return;
+    }
+    for (const id of boundIds) {
+      try {
+        await deleteChapter(id);
+      } catch {
+        /* 忽略单章删除失败 */
+      }
+    }
+    removeAct(novelId, act.id);
+    showToast('已删除幕', 'info');
   };
 
   // ── 空态与进度 ────────────────────────────────────────────────────────
@@ -365,15 +377,6 @@ const OutlinePanel: React.FC = () => {
   const editingNodeCount = editingNodeLive
     ? acts.find((a) => a.id === editingNode!.actId)?.nodes.length ?? 0
     : 0;
-
-  // 旧文章选择器数据：尚未挂到任何大纲要点的章节（正文入口的复用候选）
-  const pickerNode = bodyPicker
-    ? acts.find((a) => a.id === bodyPicker.actId)?.nodes.find((n) => n.id === bodyPicker.nodeId) ?? null
-    : null;
-  const linkedChapterIds = new Set(
-    acts.flatMap((a) => a.nodes.map((n) => n.chapter_id).filter(Boolean) as number[]),
-  );
-  const orphanChapters = chapters.filter((c) => !linkedChapterIds.has(c.id));
 
   return (
     <div className="flex flex-col h-full">
@@ -434,10 +437,7 @@ const OutlinePanel: React.FC = () => {
               setEditingAct(act);
               setActTitleDraft(act.title);
             }}
-            onRemove={() => {
-              if (novelId) removeAct(novelId, act.id);
-              showToast('已删除幕', 'info');
-            }}
+            onRemove={() => handleRemoveAct(act)}
             onAddNode={() => handleAddNode(act.id)}
             onEditNode={(node) => openNodeEditor(act.id, node)}
             onOpenBody={(node) => handleOpenBody(act.id, node)}
@@ -562,9 +562,8 @@ const OutlinePanel: React.FC = () => {
               </button>
               <button
                 onClick={() => {
-                  if (novelId) removeNode(novelId, editingNode!.actId, editingNodeLive.id);
+                  handleRemoveNode(editingNode!.actId, editingNodeLive);
                   closeNodeEditor();
-                  showToast('已删除章节要点', 'info');
                 }}
                 title="删除要点"
                 className="p-1.5 rounded-md text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
@@ -623,68 +622,6 @@ const OutlinePanel: React.FC = () => {
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:pointer-events-none text-white transition-all shadow-lg shadow-indigo-600/20"
             >
               保存
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* 旧文章挂载选择器：把未挂大纲的存量章节整合为大要点正文 */}
-      <Modal
-        open={bodyPicker !== null}
-        onClose={() => setBodyPicker(null)}
-        title="挂载旧文章为正文"
-        width="480px"
-      >
-        <div className="px-5 py-4">
-          <p className="text-[11px] text-neutral-500 leading-relaxed mb-3">
-            为要点「{pickerNode?.title || '未命名章节'}」选择正文：以下章节尚未挂到大纲，可直接复用，避免重复建章。
-          </p>
-          <div className="max-h-[260px] overflow-y-auto space-y-1 mb-3">
-            {orphanChapters.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => linkExistingChapter(c)}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/4 border border-white/8 hover:border-brand-500/40 hover:bg-brand-500/8 text-left transition-colors group"
-             >
-                <FileText size={14} className="shrink-0 text-neutral-500 group-hover:text-brand-300 transition-colors" />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-xs text-neutral-200 truncate">
-                    {c.title || '未命名章节'}
-                  </span>
-                  <span className="block text-[10px] text-neutral-500 mt-0.5">
-                    {c.word_count ? `${c.word_count.toLocaleString()} 字` : '空正文'}
-                    {' · '}{new Date(c.updated_at).toLocaleDateString()}
-                  </span>
-                </span>
-                <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-300 border border-brand-500/25 opacity-0 group-hover:opacity-100 transition-opacity">
-                  挂载
-                </span>
-              </button>
-            ))}
-            {orphanChapters.length === 0 && (
-              <p className="px-3 py-4 text-center text-[11px] text-neutral-600">
-                所有章节都已挂到大纲，没有可复用的旧文章
-              </p>
-            )}
-          </div>
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => setBodyPicker(null)}
-              className="px-4 py-1.5 rounded-lg text-sm text-neutral-300 hover:bg-white/8 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={() => {
-                if (bodyPicker && pickerNode) {
-                  setBodyPicker(null);
-                  createBodyForNode(bodyPicker.actId, pickerNode);
-                }
-              }}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white transition-all shadow-lg shadow-indigo-600/20"
-           >
-              <Plus size={13} />
-              新建空正文
             </button>
           </div>
         </div>

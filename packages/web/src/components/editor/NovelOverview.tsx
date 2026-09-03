@@ -37,9 +37,8 @@ const NovelOverview: React.FC = () => {
     };
 
     const handleNewChapter = async () => {
-        // 打开章节列表侧栏的创建入口（复用 ChapterList 的交互）
-        // 这里只提示，实际创建走左侧 ChapterList 或命令面板
-        showToast('请在左侧「章节」列表新建章节', 'info');
+        // 文章库并入大纲：章节正文统一在大纲面板管理（要点上的「写正文」入口）
+        showToast('请在大纲面板选择要点，点「写正文」创建章节', 'info');
     };
 
     return (

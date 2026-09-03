@@ -87,7 +87,7 @@ func (s *AgentService) toolSchema() []AgentTool {
 			},
 			"required": []string{"title"},
 		}),
-		ft("create_chapter", "在指定小说下新建一个章节骨架（标题），不写正文。", map[string]any{
+		ft("create_chapter", "在指定小说下新建一个章节骨架（标题），不写正文。章节会自动挂到大纲：有同名要点则绑定为该要点正文，否则在末幕追加新要点。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
@@ -169,6 +169,8 @@ func (s *AgentService) toolSchema() []AgentTool {
 const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作小说。" +
 	"你可以调用工具（create_novel / create_chapter / write_chapter / list_novels / list_chapters / get_chapter_by_title / save_memory / save_outline）" +
 	"来实际创建作品、章节、撰写正文，并把角色/设定写入记忆模块、把情节规划写入大纲模块。" +
+	"章节正文统一在大纲中管理：create_chapter 新建的章节会自动挂到大纲（同名要点绑定，否则末幕追加新要点），" +
+	"因此规划整本书时优先 save_outline 生成幕/要点结构，再逐章 create_chapter + write_chapter，章节即可落到对应要点上。" +
 	"执行工具后，用简洁中文向用户汇报结果。" +
 	"当用户想开始创作时，主动调用工具完成任务，而不是只给建议。" +
 	"当用户用'第N章/某章'口吻指代章节时，先调用 list_chapters 或 get_chapter_by_title 解析出真实 chapter_id，再 write_chapter；不要凭空新建章节。"
@@ -357,6 +359,9 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 			s.logger.Warn("agent create_chapter failed", zap.Error(err))
 			return `{"error":"创建章节失败"}`
 		}
+		// 文章库并入大纲：Agent 新建的章节自动挂到大纲（同名要点绑定，
+		// 无匹配则追加新要点），保证章节在大纲管理中可达。Best-effort。
+		s.docSvc.BindChapterToOutline(ctx, userID, nid, ch.ID, ch.Title, false)
 		return asJSON(map[string]any{"chapter_id": ch.ID, "title": ch.Title})
 
 	case "write_chapter":

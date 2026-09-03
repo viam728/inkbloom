@@ -1,7 +1,6 @@
 import React from 'react';
 import { Library, Brain, ListOrdered, Megaphone, Lightbulb } from 'lucide-react';
 import NovelList from './NovelList';
-import ChapterList from './ChapterList';
 import KnowledgePanel from '../knowledge/KnowledgePanel';
 import MemoryPanel from '../memory/MemoryPanel';
 import OutlinePanel from '../outline/OutlinePanel';
@@ -66,8 +65,8 @@ const LeftPanel: React.FC = () => {
       {activeTab === 'library' && (
         <>
           <div className="flex-1 overflow-y-auto py-1 min-h-0">
+            {/* 文章库并入大纲：章节正文统一在大纲面板管理，作品库只列作品 */}
             <NovelList />
-            <ChapterList />
           </div>
           {/* 知识图谱面板 */}
           <KnowledgePanel />

@@ -308,6 +308,9 @@ func (s *StoryService) AdoptChapter(ctx context.Context, userID, id int64, req *
 	if err != nil {
 		return nil, err
 	}
+	// 文章库并入大纲：采纳的章节必须在大纲可达。按标题匹配未绑定的要点
+	// 挂载 chapter_id，无匹配则追加为新要点（末幕）。Best-effort，不阻塞采纳。
+	s.docSvc.BindChapterToOutline(ctx, userID, job.NovelID, ch.ID, req.Title, req.Content != "")
 
 	// Increment chapter count and persist the adopted record metadata.
 	job.ChapterKeys++

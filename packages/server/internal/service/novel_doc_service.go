@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/inkbloom/server/internal/model"
+	"github.com/inkbloom/server/internal/pkg/idgen"
 	"github.com/inkbloom/server/internal/repository"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
@@ -303,4 +304,220 @@ func clampF(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+// ── 章节 ↔ 大纲统一绑定（文章库并入大纲：章节正文统一在大纲管理） ──────────
+//
+// With the standalone article library removed, a chapter that no outline node
+// references is unreachable content. Every writer of chapters therefore binds
+// them into the outline:
+//   - AI 起稿采纳 (StoryService.AdoptChapter) and the Agent's create_chapter
+//     call BindChapterToOutline at creation time;
+//   - legacy orphans are bound by the idempotent startup migration
+//     MigrateBindOrphanChapters (wired in cmd/server/main.go).
+//
+// Binding is title-keyed (chapterTitleKey, ordinal-insensitive) so a drafted
+// "第3章 觉醒" binds to the planned node "觉醒"; when no unbound node matches,
+// a new node is appended to the last act (creating a first act when the
+// outline is empty).
+
+// BindChapterToOutline binds one chapter into the novel's outline. Best-effort
+// by design: errors are logged and swallowed so AI adoption / agent chapter
+// creation never fail because of the outline binding. drafting marks a chapter
+// that already carries content (node status bumps planned → drafting).
+func (s *NovelDocService) BindChapterToOutline(ctx context.Context, userID, novelID, chapterID int64, title string, drafting bool) {
+	// Tests may construct callers (Agent/Story services) without a doc service.
+	if s == nil || s.docRepo == nil {
+		return
+	}
+	ch := model.Chapter{ID: chapterID, UserID: userID, NovelID: novelID, Title: title}
+	if drafting {
+		ch.WordCount = 1
+	}
+	if _, _, err := s.bindChaptersToOutline(ctx, userID, novelID, []model.Chapter{ch}); err != nil {
+		zap.L().Warn("bind chapter to outline failed",
+			zap.Int64("novel_id", novelID), zap.Int64("chapter_id", chapterID), zap.Error(err))
+	}
+}
+
+// MigrateBindOrphanChapters binds every chapter that no outline node references
+// into its novel's outline (article library merged into outline management: a
+// chapter unreachable from the outline is invisible content). Binding is
+// title-keyed where possible, otherwise the chapter is appended to the last
+// act. Intended for server startup as a one-shot data migration; it is
+// idempotent, so accidental re-runs are harmless. Returns the number of
+// chapters bound. Best-effort: per-novel failures are logged and skipped.
+func (s *NovelDocService) MigrateBindOrphanChapters(ctx context.Context) int {
+	if s == nil || s.novelRepo == nil || s.chapterRepo == nil {
+		return 0
+	}
+	novels, err := s.novelRepo.ListAll(ctx)
+	if err != nil {
+		zap.L().Warn("orphan-chapter migration: list novels failed", zap.Error(err))
+		return 0
+	}
+	bound := 0
+	for _, n := range novels {
+		chapters, err := s.chapterRepo.ListByNovelID(ctx, n.UserID, n.ID)
+		if err != nil || len(chapters) == 0 {
+			continue
+		}
+		doc, err := s.docRepo.GetOutline(ctx, n.UserID, n.ID)
+		if err != nil {
+			continue
+		}
+		parsed, ok := parseOutlineActs(normalizeOutlineActsJSON(json.RawMessage(doc.Acts)))
+		if !ok {
+			continue
+		}
+		orphans := make([]model.Chapter, 0, len(chapters))
+		for _, ch := range chapters {
+			if !chapterReferenced(parsed, ch.ID) {
+				orphans = append(orphans, ch)
+			}
+		}
+		if len(orphans) == 0 {
+			continue
+		}
+		if _, _, err := s.bindChaptersToOutline(ctx, n.UserID, n.ID, orphans); err != nil {
+			zap.L().Warn("orphan-chapter migration: bind failed",
+				zap.Int64("novel_id", n.ID), zap.Int("orphans", len(orphans)), zap.Error(err))
+			continue
+		}
+		bound += len(orphans)
+	}
+	if bound > 0 {
+		zap.L().Info("orphan-chapter migration bound chapters into outlines", zap.Int("bound", bound))
+	}
+	return bound
+}
+
+// bindChaptersToOutline binds the given chapters into the outline acts and
+// persists the updated document (version bump via UpsertOutline; the soft
+// client version check does not apply to server-side binding). Returns the
+// updated acts JSON with the current version, or the original acts when
+// nothing changed.
+func (s *NovelDocService) bindChaptersToOutline(ctx context.Context, userID, novelID int64, chapters []model.Chapter) (json.RawMessage, int, error) {
+	doc, err := s.docRepo.GetOutline(ctx, userID, novelID)
+	if err != nil {
+		return nil, 0, err
+	}
+	acts, ok := parseOutlineActs(normalizeOutlineActsJSON(json.RawMessage(doc.Acts)))
+	if !ok {
+		acts = []map[string]any{}
+	}
+	changed := false
+	for _, ch := range chapters {
+		if chapterReferenced(acts, ch.ID) {
+			continue // idempotent: already bound somewhere in the outline
+		}
+		if bindChapterByTitle(acts, ch) {
+			changed = true
+			continue
+		}
+		acts = appendChapterNode(acts, ch)
+		changed = true
+	}
+	if !changed {
+		return json.RawMessage(doc.Acts), doc.Version, nil
+	}
+	out, err := json.Marshal(acts)
+	if err != nil {
+		return nil, 0, err
+	}
+	// No dedupOutlineActs here: mergeOutlineAct drops same-title nodes, which
+	// would silently discard a just-appended binding for a duplicate-titled
+	// chapter and turn the read boundary into a binding loop.
+	upsert := &model.NovelOutline{UserID: userID, NovelID: novelID, Acts: datatypes.JSON(out)}
+	if err := s.docRepo.UpsertOutline(ctx, upsert); err != nil {
+		return nil, 0, err
+	}
+	return out, upsert.Version, nil
+}
+
+// parseOutlineActs decodes normalized acts JSON into a mutable act map slice.
+func parseOutlineActs(raw json.RawMessage) ([]map[string]any, bool) {
+	var acts []map[string]any
+	if len(raw) == 0 {
+		return []map[string]any{}, true
+	}
+	if err := json.Unmarshal(raw, &acts); err != nil {
+		return nil, false
+	}
+	return acts, true
+}
+
+// chapterReferenced reports whether any outline node already binds chapterID.
+func chapterReferenced(acts []map[string]any, chapterID int64) bool {
+	want := float64(chapterID)
+	for _, act := range acts {
+		nodes, _ := act["nodes"].([]map[string]any)
+		for _, n := range nodes {
+			if n == nil {
+				continue
+			}
+			if id, _ := n["chapter_id"].(float64); id == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bindChapterByTitle binds chapterID into the FIRST unbound node whose title
+// matches the chapter title (ordinal-insensitive, quote-stripped). A planned
+// node bumps to drafting when the chapter carries content; done/drafting stay.
+func bindChapterByTitle(acts []map[string]any, ch model.Chapter) bool {
+	key := chapterTitleKey(ch.Title)
+	if key == "" {
+		return false
+	}
+	for _, act := range acts {
+		nodes, _ := act["nodes"].([]map[string]any)
+		for _, n := range nodes {
+			if n == nil {
+				continue
+			}
+			if _, bound := n["chapter_id"]; bound {
+				continue
+			}
+			if chapterTitleKey(n["title"]) != key {
+				continue
+			}
+			n["chapter_id"] = float64(ch.ID)
+			if status, _ := n["status"].(string); status == outlineStatusPlanned && ch.WordCount > 0 {
+				n["status"] = outlineStatusDrafting
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// appendChapterNode appends a new outline node for the chapter to the last act,
+// creating a "第一幕" act when the outline has none. Always returns the acts
+// slice (it is reallocated when the outline was empty).
+func appendChapterNode(acts []map[string]any, ch model.Chapter) []map[string]any {
+	status := outlineStatusPlanned
+	if ch.WordCount > 0 {
+		status = outlineStatusDrafting
+	}
+	node := map[string]any{
+		"id":         idgen.NewID(),
+		"title":      ch.Title,
+		"summary":    "",
+		"status":     status,
+		"chapter_id": float64(ch.ID),
+	}
+	if len(acts) == 0 {
+		return append(acts, map[string]any{
+			"id":    idgen.NewID(),
+			"title": "第一幕",
+			"nodes": []map[string]any{node},
+		})
+	}
+	last := acts[len(acts)-1]
+	nodes, _ := last["nodes"].([]map[string]any)
+	last["nodes"] = append(nodes, node)
+	return acts
 }
