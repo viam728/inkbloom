@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import apiClient from '@/services/api-client';
 import { wsClient } from '@/services/ws-client';
+import { toast } from '@/components/common/Toast';
+import { useTaskStore } from '@/stores/task-store';
 import type { AIGCTask, AigcRecord, Asset, GenerateOptions, ImageGenResponse } from '@/types/aigc';
 
 /** /aigc/records 首拉上限：limit=48，最多翻 3 页 */
@@ -60,6 +62,14 @@ export const useAIGCStore = create<AIGCStore>((set, get) => ({
         provider: options.provider ?? 'pollinations',
       };
       set((s) => ({ tasks: [...s.tasks, task] }));
+      // 备忘录 L61：任务同时登记进右侧板任务通知（会话临时，终态自动销毁）
+      useTaskStore.getState().register({
+        id: taskId,
+        type: 'image_gen',
+        status: 'pending',
+        novel_id: options.novel_id ?? null,
+        chapter_id: options.chapter_id ?? null,
+      });
 
       // Start polling
       get().pollTaskStatus(taskId);
@@ -72,7 +82,12 @@ export const useAIGCStore = create<AIGCStore>((set, get) => ({
   },
 
   pollTaskStatus: async (taskId) => {
+    // F2-8（X-12）：轮询加上限与失败态 —— 卡 pending 的任务曾以 2s 间隔
+    // 无限请求且失败只关 spinner，任务外观永远 pending、无提示无重试。
+    const MAX_POLLS = 150; // 2s × 150 = 5 分钟
+    let polls = 0;
     const poll = async () => {
+      polls += 1;
       try {
         const data = (await apiClient.get(`/tasks/${taskId}`)) as any;
         const status: string = data?.status ?? 'pending';
@@ -86,13 +101,29 @@ export const useAIGCStore = create<AIGCStore>((set, get) => ({
 
         if (status === 'success' || status === 'failed' || status === 'dead_letter') {
           set({ generating: false });
+          if (status !== 'success') {
+            toast.show('图片生成任务失败，请重试', 'error');
+          }
+          return;
+        }
+
+        if (polls >= MAX_POLLS) {
+          set((s) => ({
+            generating: false,
+            tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' } : t)),
+          }));
+          toast.show('图片生成超时，请重试', 'error');
           return;
         }
 
         // Continue polling after 2 seconds
         setTimeout(poll, 2000);
       } catch {
-        set({ generating: false });
+        set((s) => ({
+          generating: false,
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' } : t)),
+        }));
+        toast.show('图片生成任务查询失败，请重试', 'error');
       }
     };
 

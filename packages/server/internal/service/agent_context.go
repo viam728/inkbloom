@@ -99,10 +99,13 @@ type AgentOutlineActOut struct {
 }
 
 // AgentOutlineNodeOut is the node shape forwarded to the AI service.
+// ChapterID carries the bound chapter (0 = not yet written) so the model can
+// address chapters by outline position instead of guessing by title.
 type AgentOutlineNodeOut struct {
-	Title   string `json:"title"`
-	Status  string `json:"status"`
-	Summary string `json:"summary"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary"`
+	ChapterID int64  `json:"chapter_id,omitempty"`
 }
 
 // AgentChapterExcerpt is one preceding-chapter excerpt entry.
@@ -181,6 +184,9 @@ func (s *AgentContextService) BuildAgentContext(
 	if err != nil {
 		return nil, err
 	}
+	// 备忘录 L57/59：章节顺序 = 大纲顺序。前文摘录按大纲序推进，
+	// Agent 对"上一章/前文章节"的感知与作者侧章节序列一致。
+	chapters = orderedChaptersByOutline(chapters, acts)
 
 	// Index node statuses for the chapter-lock rule and locate the chapter
 	// linked to nodeID (preceding excerpts stop before it).
@@ -304,7 +310,9 @@ func filterVisibleItems(items []agentMemoryItem, doneNodes map[string]bool) []ag
 	return visible
 }
 
-// buildOutlineActsOut maps parsed acts to the frozen output shape.
+// buildOutlineActsOut maps parsed acts to the frozen output shape. Each node
+// carries its bound chapter_id (0 = 未成稿) and the outline order doubles as
+// the chapter sequence (备忘录 L59: Agent 按大纲顺序 id 认章节，不认标题).
 func buildOutlineActsOut(acts []agentOutlineAct) []AgentOutlineActOut {
 	out := make([]AgentOutlineActOut, 0, len(acts))
 	for _, act := range acts {
@@ -313,21 +321,61 @@ func buildOutlineActsOut(acts []agentOutlineAct) []AgentOutlineActOut {
 			Nodes: make([]AgentOutlineNodeOut, 0, len(act.Nodes)),
 		}
 		for _, node := range act.Nodes {
-			actOut.Nodes = append(actOut.Nodes, AgentOutlineNodeOut{
+			nodeOut := AgentOutlineNodeOut{
 				Title:   node.Title,
 				Status:  node.Status,
 				Summary: node.Summary,
-			})
+			}
+			if node.ChapterID != nil {
+				if id, err := strconv.ParseInt(*node.ChapterID, 10, 64); err == nil {
+					nodeOut.ChapterID = id
+				}
+			}
+			actOut.Nodes = append(actOut.Nodes, nodeOut)
 		}
 		out = append(out, actOut)
 	}
 	return out
 }
 
-// buildPrecedingChapters walks chapters in position order (ListByNovelID
-// already sorts ASC), stopping before the chapter linked to nodeID when a
-// cutoff applies, and emits title+excerpt entries under a shared ~4000-rune
-// budget.
+// orderedChaptersByOutline returns the chapters in outline order (备忘录 L57/59):
+// chapters bound to outline nodes come first following the acts→nodes array
+// order; unbound legacy chapters keep their position order afterwards. This is
+// the canonical chapter sequence the agent must reason about — titles are
+// cosmetic and may change freely.
+func orderedChaptersByOutline(chapters []model.Chapter, acts []agentOutlineAct) []model.Chapter {
+	byID := make(map[int64]model.Chapter, len(chapters))
+	for _, c := range chapters {
+		byID[c.ID] = c
+	}
+	out := make([]model.Chapter, 0, len(chapters))
+	seen := make(map[int64]bool, len(chapters))
+	for _, act := range acts {
+		for _, node := range act.Nodes {
+			if node.ChapterID == nil {
+				continue
+			}
+			if id, err := strconv.ParseInt(*node.ChapterID, 10, 64); err == nil {
+				if c, ok := byID[id]; ok && !seen[id] {
+					out = append(out, c)
+					seen[id] = true
+				}
+			}
+		}
+	}
+	for _, c := range chapters {
+		if !seen[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// buildPrecedingChapters walks chapters in the canonical outline order
+// (chapters bound to outline nodes first, in acts→nodes array order; unbound
+// legacy chapters keep position order afterwards), stopping before the chapter
+// linked to nodeID when a cutoff applies, and emits title+excerpt entries
+// under a shared ~4000-rune budget.
 func buildPrecedingChapters(chapters []model.Chapter, cutoffChapterID int64) []AgentChapterExcerpt {
 	out := make([]AgentChapterExcerpt, 0, len(chapters))
 	budget := precedingChapterBudget

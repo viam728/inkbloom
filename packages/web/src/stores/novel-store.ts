@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import apiClient from '@/services/api-client';
+import { toast } from '@/components/common/Toast';
 import {
   localNovels,
   createLocalNovel,
@@ -15,6 +16,7 @@ import type { Novel, Chapter } from '@/types';
 import type { CreateNovelRequest, UpdateNovelRequest, CreateChapterRequest } from '@/types';
 import { useTabStore, chapterTabKey, countDraftWords } from './tab-store';
 import { useEditorStore } from './editor-store';
+import { useOutlineStore, sortChaptersByOutline } from './outline-store';
 
 const DEV_MOCK = import.meta.env.DEV;
 
@@ -33,6 +35,8 @@ interface NovelStore {
   /** 清空当前选定作品（新建小说入口进入「需填书名」的全本创作模式时使用） */
   deselectNovel: () => void;
   fetchChapters: (novelId: number) => Promise<void>;
+  /** 本地更新章节字数（自动保存成功后替代全量 fetchChapters，F2-7） */
+  updateChapterWordCount: (id: number, wordCount: number) => void;
   createChapter: (data: CreateChapterRequest, insertAt?: number) => Promise<Chapter>;
   renameChapter: (id: number, title: string) => Promise<void>;
   reorderChapters: (orderedIds: number[]) => Promise<void>;
@@ -154,6 +158,21 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       set({ chapters });
       useTabStore.getState().prune(chapters.map((c) => c.id));
     }
+    // 备忘录 L57：章节顺序严格按大纲排列顺序。大纲已加载则立即重排；
+    // 未加载则先拉大纲（幂等）再重排。
+    const ost = useOutlineStore.getState();
+    if (ost.byNovel[novelId]) {
+      resortChaptersByOutline(novelId);
+    } else {
+      void useOutlineStore.getState().loadOutline(novelId).then(() => resortChaptersByOutline(novelId));
+    }
+  },
+
+  updateChapterWordCount: (id, wordCount) => {
+    set((s) => ({
+      chapters: s.chapters.map((c) => (c.id === id ? { ...c, word_count: wordCount } : c)),
+      currentChapter: s.currentChapter?.id === id ? { ...s.currentChapter, word_count: wordCount } : s.currentChapter,
+    }));
   },
 
   createChapter: async (data, insertAt) => {
@@ -238,7 +257,11 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const data = await apiClient.get(`/chapters/${chapter.id}/content`) as any;
       const content = data?.content ?? data?.content_json ?? '';
       set({ currentChapter: { ...chapter, content, content_json: data?.content_json } });
-      useTabStore.getState().updateTab(key, { draft: content, wordCount: countDraftWords(content) });
+      useTabStore.getState().updateTab(key, {
+        draft: content,
+        wordCount: countDraftWords(content),
+        loadError: false,
+      });
     } catch (e) {
       console.error('selectChapter load content failed', e);
       if (DEV_MOCK) {
@@ -246,6 +269,11 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         const content = chapter.content || getLocalContent(chapter.id) || '';
         set({ currentChapter: { ...chapter, content } });
         useTabStore.getState().updateTab(key, { draft: content, wordCount: countDraftWords(content) });
+      } else {
+        // F2-8：静默失败会让用户对着可能不完整的编辑器动笔，一动笔就
+        // 以空/截断内容覆盖正文。显式标记 loadError 并提示。
+        toast.show('章节内容加载失败，请点击重试后再编辑，避免覆盖正文', 'error');
+        useTabStore.getState().updateTab(key, { loadError: true });
       }
     }
   },
@@ -273,3 +301,19 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     });
   },
 }));
+
+/** 按大纲顺序重排当前作品的 chapters（备忘录 L57）。大纲未加载时跳过。 */
+function resortChaptersByOutline(novelId: number) {
+  const acts = useOutlineStore.getState().byNovel[novelId];
+  if (!acts || acts.length === 0) return;
+  useNovelStore.setState((s) =>
+    s.currentNovel?.id === novelId ? { chapters: sortChaptersByOutline(s.chapters, acts) } : {},
+  );
+}
+
+// 大纲变化（移动节点/绑定成稿/增删）后即时重排章节，保证章节序列始终严格跟随大纲
+useOutlineStore.subscribe((s, prev) => {
+  const nid = useNovelStore.getState().currentNovel?.id;
+  if (!nid) return;
+  if (s.byNovel[nid] !== prev.byNovel[nid]) resortChaptersByOutline(nid);
+});

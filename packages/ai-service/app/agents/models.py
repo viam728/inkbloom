@@ -8,11 +8,16 @@ from pydantic import BaseModel, Field
 
 
 class OutlineNodeCtx(BaseModel):
-    """A single outline node within an act."""
+    """A single outline node within an act.
+
+    chapter_id is the bound chapter (0/absent = not yet written); the node's
+    position in the outline doubles as the chapter sequence number.
+    """
 
     title: str
     status: str
     summary: str = ""
+    chapter_id: int | None = None
 
 
 class OutlineAct(BaseModel):

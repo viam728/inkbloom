@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus, RotateCcw } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
-import { useOutlineStore, type OutlineStatus } from '@/stores/outline-store';
+import { useOutlineStore, sortChaptersByOutline, type OutlineStatus } from '@/stores/outline-store';
 import { usePublishStore } from '@/stores/publish-store';
 import {
   publishWork,
@@ -33,6 +33,12 @@ const VIS_OPTIONS = [
 const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
+  // 大纲顺序（备忘录 L57）：发布管理中章节严格按大纲排列顺序排序与发布
+  const outlineActs = useOutlineStore((s) => (currentNovel ? s.byNovel[currentNovel.id] : undefined));
+  const orderedChapters = useMemo(
+    () => sortChaptersByOutline(chapters, outlineActs),
+    [chapters, outlineActs],
+  );
 
   // 发布状态（系统事实）：work + 已发布章节
   const publishState = usePublishStore((s) => (currentNovel ? s.byNovel[currentNovel.id] : undefined));
@@ -43,8 +49,8 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   );
   /** 未发布章节：可勾选发布的范围（已发布的需先取消发布） */
   const unpublishedChapters = useMemo(
-    () => chapters.filter((c) => !pubByChapterId.has(c.id)),
-    [chapters, pubByChapterId],
+    () => orderedChapters.filter((c) => !pubByChapterId.has(c.id)),
+    [orderedChapters, pubByChapterId],
   );
 
   const [loading, setLoading] = useState(false);
@@ -84,7 +90,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     [currentNovel],
   );
 
-  // 打开时加载发布状态（系统事实）
+  // 打开时加载发布状态（系统事实）与大纲（章节顺序依据）
   useEffect(() => {
     if (!open || !currentNovel) return;
     setTitle(currentNovel.title || '');
@@ -98,6 +104,10 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
       .getState()
       .load(currentNovel.id)
       .finally(() => setLoading(false));
+    // 大纲未加载时补拉（章节按大纲序排序与发布的前提）
+    if (!useOutlineStore.getState().byNovel[currentNovel.id]) {
+      void useOutlineStore.getState().loadOutline(currentNovel.id);
+    }
   }, [open, currentNovel]);
 
   const handlePublishWork = useCallback(async () => {
@@ -127,9 +137,11 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     try {
       const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
       const done: Awaited<ReturnType<typeof publishChapter>>[] = [];
-      for (const cid of selected) {
-        done.push(await publishChapter(published.id, { chapter_id: cid, scheduled_at: scheduled }));
-        track('publish_chapter', { work_id: published.id, chapter_id: cid });
+      // 备忘录 L57：按大纲顺序依次发布（勾选集合按 orderedChapters 展示序展开）
+      for (const ch of orderedChapters) {
+        if (!selected.has(ch.id)) continue;
+        done.push(await publishChapter(published.id, { chapter_id: ch.id, scheduled_at: scheduled }));
+        track('publish_chapter', { work_id: published.id, chapter_id: ch.id });
       }
       // 立即发布的章节同步大纲节点为「已发布」；定时发布的保持原状态，到点由读者侧生效
       const immediate = scheduled ? [] : done.map((d) => d.chapter_id);
@@ -144,7 +156,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     } finally {
       setPublishing(false);
     }
-  }, [published, currentNovel, selected, useSchedule, scheduledAt, syncOutlineStatus]);
+  }, [published, currentNovel, selected, orderedChapters, useSchedule, scheduledAt, syncOutlineStatus]);
 
   /** 取消发布单章：系统移除公开快照，大纲节点回「已完成」 */
   const handleUnpublishChapter = useCallback(
@@ -325,7 +337,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                   </button>
                 </div>
                 <div className="space-y-1 max-h-[240px] overflow-y-auto">
-                  {chapters.map((ch) => {
+                  {orderedChapters.map((ch, idx) => {
                     const checked = selected.has(ch.id);
                     const pub = pubByChapterId.get(ch.id);
                     const scheduledLater = pub?.scheduled_at && new Date(pub.scheduled_at) > new Date();
@@ -344,6 +356,10 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                           title={pub ? '已发布章节不可重复勾选；如需更新内容，先取消发布再发布' : undefined}
                           className="w-3.5 h-3.5 accent-brand-500 cursor-pointer disabled:cursor-not-allowed"
                         />
+                        {/* 大纲序号（备忘录 L57）：章节顺序严格按大纲排列顺序 */}
+                        <span className="shrink-0 w-6 text-right text-[10px] text-neutral-600 tabular-nums">
+                          {idx + 1}
+                        </span>
                         <span className="text-xs text-neutral-200 flex-1 truncate">{ch.title}</span>
                         {pub && (
                           <span
@@ -378,7 +394,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                       </div>
                     );
                   })}
-                  {chapters.length === 0 && (
+                  {orderedChapters.length === 0 && (
                     <p className="text-xs text-neutral-500 text-center py-4">还没有章节</p>
                   )}
                 </div>

@@ -32,6 +32,8 @@ export interface EditorTab {
   wordCount: number;
   isDirty: boolean;
   saveStatus: TabSaveStatus;
+  /** 正文加载失败（F2-8）：编辑器内容可能不完整，阻断自动保存直到重载成功 */
+  loadError?: boolean;
   /** panel 类 tab 的定位信息 */
   meta?: TabMeta;
 }

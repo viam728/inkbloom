@@ -17,6 +17,36 @@ export const WRITABLE_OUTLINE_STATUSES: OutlineStatus[] = ['drafting', 'done'];
 export const toggleWritingStatus = (s: OutlineStatus): OutlineStatus =>
   s === 'done' ? 'drafting' : 'done';
 
+/**
+ * 大纲顺序的成稿章节 id 序列（备忘录 L57：章节顺序严格按大纲排列顺序）。
+ * acts → nodes 的数组序即大纲序；未绑定 chapter_id 的节点（尚未成稿）跳过。
+ */
+export function outlineChapterOrder(acts: OutlineAct[] | undefined): number[] {
+  const ids: number[] = [];
+  for (const act of acts ?? []) {
+    for (const node of act.nodes) {
+      if (node.chapter_id != null) ids.push(node.chapter_id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * 按大纲顺序排序章节：绑定大纲的章节按大纲序排在前，未绑定的按原顺序垫后。
+ * 大纲未加载/为空时原样返回。
+ */
+export function sortChaptersByOutline<T extends { id: number }>(
+  chapters: T[],
+  acts: OutlineAct[] | undefined,
+): T[] {
+  const order = outlineChapterOrder(acts);
+  if (order.length === 0 || chapters.length <= 1) return chapters;
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const bound = chapters.filter((c) => rank.has(c.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
+  const rest = chapters.filter((c) => !rank.has(c.id));
+  return [...bound, ...rest];
+}
+
 /** 章节大纲节点 */
 export interface OutlineNode {
   id: string;

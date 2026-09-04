@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,18 +152,18 @@ func (s *AgentService) toolSchema() []AgentTool {
 			},
 			"required": []string{"novel_id", "acts"},
 		}),
-		ft("list_chapters", "列出某部小说的全部章节（chapter_id + title），写章节前先确认正确的 chapter_id，避免误建章节。", map[string]any{
+		ft("list_chapters", "列出某部小说的全部章节，按大纲顺序返回（order=大纲序号，从 1 开始；chapter_id=真实章节 ID）。章节顺序只认大纲顺序，不认标题。写章节前先用本工具确认正确的 chapter_id，避免误建章节。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
 			},
 			"required": []string{"novel_id"},
 		}),
-		ft("get_chapter_by_title", "按标题或关键词查找章节，返回匹配的 chapter_id 与 title；找不到返回 found:false。用于把用户口述的'第N章/某章'解析成真实 chapter_id。", map[string]any{
+		ft("get_chapter_by_title", "按标题或关键词模糊查找章节，返回匹配的 chapter_id 与 title；找不到返回 found:false。仅用于用户给出（部分）标题名的场景；章节顺序/第N章一律以 list_chapters 的大纲序号为准。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"novel_id": map[string]any{"type": "integer", "description": "小说 ID"},
-				"title":    map[string]any{"type": "string", "description": "章节标题或关键词（可含'第N章'/'《》'等）"},
+				"title":    map[string]any{"type": "string", "description": "章节标题或关键词"},
 			},
 			"required": []string{"novel_id", "title"},
 		}),
@@ -181,7 +182,9 @@ const agentSystemPrompt = "你是 InkBloom 的创作 Agent，帮助用户创作�
 	"因此规划整本书时优先 save_outline 生成幕/要点结构，再逐章 create_chapter + write_chapter，章节即可落到对应要点上。" +
 	"执行工具后，用简洁中文向用户汇报结果。" +
 	"当用户想开始创作时，主动调用工具完成任务，而不是只给建议。" +
-	"当用户用'第N章/某章'口吻指代章节时，先调用 list_chapters 或 get_chapter_by_title 解析出真实 chapter_id，再 write_chapter；不要凭空新建章节。"
+	"章节顺序只认大纲顺序、不认标题（备忘录 L59）：大纲第 N 个要点即第 N 章，标题随时可改、不作为顺序依据。" +
+	"当用户用'第N章'指代章节时，先调用 list_chapters，按返回的 order（大纲序号）定位 chapter_id，再 write_chapter；" +
+	"只有当用户明确给出标题名时才用 get_chapter_by_title 模糊查找；不要凭空新建章节。"
 
 // Run executes one Agent turn: given the conversation messages, it loops with
 // the LLM (execute tool calls, feed results back) until the model returns a
@@ -504,9 +507,49 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 			s.logger.Warn("agent list_chapters failed", zap.Error(err))
 			return `{"error":"列出章节失败"}`
 		}
+		// 备忘录 L59：章节顺序 = 大纲顺序。按大纲 acts→nodes 数组序输出，
+		// order 为大纲序号（第 N 个要点 = 第 N 章，未成稿要点无章节条目）；
+		// 标题仅作展示，不作为顺序依据。未绑定大纲的存量章节垫在最后。
 		items := make([]map[string]any, 0, len(list))
-		for _, c := range list {
-			items = append(items, map[string]any{"chapter_id": c.ID, "title": c.Title})
+		if acts := s.loadAgentOutlineActs(ctx, userID, nid); len(acts) > 0 {
+			byID := make(map[int64]dto.ChapterResponse, len(list))
+			for _, c := range list {
+				byID[c.ID] = c
+			}
+			order := 0
+			seen := make(map[int64]bool, len(list))
+			for _, act := range acts {
+				for _, node := range act.Nodes {
+					order++
+					if node.ChapterID == nil {
+						continue
+					}
+					id, perr := strconv.ParseInt(*node.ChapterID, 10, 64)
+					if perr != nil {
+						continue
+					}
+					c, ok := byID[id]
+					if !ok || seen[id] {
+						continue
+					}
+					seen[id] = true
+					items = append(items, map[string]any{
+						"order": order, "chapter_id": c.ID,
+						"title": c.Title, "node_title": node.Title, "status": node.Status,
+					})
+				}
+			}
+			for _, c := range list {
+				if seen[c.ID] {
+					continue
+				}
+				order++
+				items = append(items, map[string]any{"order": order, "chapter_id": c.ID, "title": c.Title})
+			}
+		} else {
+			for i, c := range list {
+				items = append(items, map[string]any{"order": i + 1, "chapter_id": c.ID, "title": c.Title})
+			}
 		}
 		return asJSON(map[string]any{"chapters": items})
 
@@ -532,6 +575,21 @@ func (s *AgentService) executeTool(ctx context.Context, userID int64, novelID in
 	default:
 		return `{"error":"未知工具: ` + tc.Name + `"}`
 	}
+}
+
+// loadAgentOutlineActs parses the novel's outline JSONB into the minimal
+// act/node shape used for outline-ordered chapter listing (备忘录 L59).
+// Absent or malformed documents yield nil so callers degrade to position order.
+func (s *AgentService) loadAgentOutlineActs(ctx context.Context, userID, novelID int64) []agentOutlineAct {
+	doc, err := s.docSvc.GetOutline(ctx, userID, novelID)
+	if err != nil || doc == nil || len(doc.Acts) == 0 {
+		return nil
+	}
+	var acts []agentOutlineAct
+	if json.Unmarshal(doc.Acts, &acts) != nil {
+		return nil
+	}
+	return acts
 }
 
 // writeChapter generates chapter body via the chapter agent scene and saves it.

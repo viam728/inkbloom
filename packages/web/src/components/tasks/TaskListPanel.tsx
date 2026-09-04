@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { ListTodo, Loader2, RefreshCw, Ban, Palette, CircleCheck, CircleX, Clock3, LoaderCircle } from 'lucide-react';
+import { ListTodo, Ban, Palette, CircleCheck, CircleX, Clock3, LoaderCircle } from 'lucide-react';
 import { useTaskStore, type TaskItem } from '@/stores/task-store';
 import { useNovelStore } from '@/stores/novel-store';
 
@@ -97,18 +97,15 @@ const TaskRow: React.FC<{ task: TaskItem }> = ({ task }) => {
   );
 };
 
-/** 右侧板「任务」栏目：后台任务统一管理（当前为 AI 图片生成任务），支持中止 */
+/** 右侧板「任务」栏目：会话内后台任务状态通知（提示 + 中断），终态自动销毁 */
 const TaskListPanel: React.FC = () => {
   const tasks = useTaskStore((s) => s.tasks);
-  const loading = useTaskStore((s) => s.loading);
-  const load = useTaskStore((s) => s.load);
   const startWatch = useTaskStore((s) => s.startWatch);
   const currentNovel = useNovelStore((s) => s.currentNovel);
 
   useEffect(() => {
     startWatch();
-    void load();
-  }, [startWatch, load]);
+  }, [startWatch]);
 
   // 切换作品：本地过滤展示（任务面板展示全部任务并标注归属）
   const visible = currentNovel
@@ -129,18 +126,6 @@ const TaskListPanel: React.FC = () => {
             {activeCount} 进行中
           </span>
         )}
-        <div className="flex-1" />
-        <button
-          onClick={() => void load()}
-          title="刷新任务列表"
-          className="p-1 rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
-        >
-          {loading ? (
-            <Loader2 size={13} className="animate-spin" />
-          ) : (
-            <RefreshCw size={13} />
-          )}
-        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-3 min-h-0">
@@ -148,10 +133,12 @@ const TaskListPanel: React.FC = () => {
           <div className="flex flex-col items-center justify-center text-center px-4 py-10">
             <ListTodo size={24} className="text-neutral-700 mb-2.5" />
             <p className="text-xs text-neutral-500 leading-relaxed">
-              暂无后台任务
+              暂无任务通知
               <br />
               <span className="text-neutral-600">
-                AI 图片生成等任务会在这里统一管理，可随时中止
+                本会话创建的后台任务会在这里提示状态、可随时中止；
+                <br />
+                完成或中止后通知自动销毁，刷新页面即清空
               </span>
             </p>
           </div>

@@ -13,15 +13,22 @@ from app.agents.models import AgentContext
 
 
 def _format_outline(context: AgentContext) -> str:
-    """Format outline acts/nodes into a readable block."""
+    """Format outline acts/nodes into a readable block.
+
+    章节顺序 = 大纲顺序（大纲第 N 个要点即第 N 章）：节点按全局序号编号，
+    已绑定成稿章节的节点附 chapter_id；标题仅作展示，不作为顺序依据。
+    """
     if not context.outline_acts:
         return ""
     lines: list[str] = []
-    for i, act in enumerate(context.outline_acts, start=1):
-        lines.append(f"第{i}幕：{act.title}")
+    seq = 0
+    for act in context.outline_acts:
+        lines.append(f"【{act.title}】")
         for node in act.nodes:
+            seq += 1
+            bound = f"，chapter_id={node.chapter_id}" if node.chapter_id else "，未成稿"
             summary = f"——{node.summary}" if node.summary else ""
-            lines.append(f"  · {node.title}（{node.status}）{summary}")
+            lines.append(f"  第{seq}章 · {node.title}（{node.status}{bound}）{summary}")
     return "\n".join(lines)
 
 
