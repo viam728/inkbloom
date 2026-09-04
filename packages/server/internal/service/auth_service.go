@@ -434,28 +434,41 @@ func (s *AuthService) CancelDeregistration(ctx context.Context, uid int64) error
 
 // EnsureDemoUser seeds the id=1 demo account that owns pre-isolation legacy
 // data (migrations/010 backfills every row to user_id = 1). Ownership is the
-// only reason this account exists, so it is created with a random, never
-// logged password and — when disableLogin is true (every mode except local) —
-// immediately locked.
+// only reason this account exists, so on a production install it is created
+// with a random, never-logged password and locked — it must never be loggable
+// there. disableLogin carries that production decision (see Config.IsProduction).
 //
-// Installs seeded by older builds carry the well-known "inkbloom123"
-// password; those accounts are locked on first startup under this build
-// rather than left loggable.
+// Installs seeded by older builds carry the well-known "inkbloom123" password;
+// those are locked on first production startup. In a non-production (local
+// dev) run the gate is inverted: a previously-locked account is re-enabled so
+// development keeps a known, usable account.
 func (s *AuthService) EnsureDemoUser(ctx context.Context, disableLogin bool) error {
 	existing, err := s.users.GetByPhone(ctx, DemoUserPhone)
 	if err != nil {
 		return err
 	}
 	if existing != nil {
-		if !disableLogin || existing.Status == model.UserStatusDisabled {
+		if disableLogin {
+			if existing.Status == model.UserStatusDisabled {
+				return nil
+			}
+			// Legacy seed with a public password: lock it down now.
+			if err := s.users.UpdateStatus(ctx, existing.ID, model.UserStatusDisabled); err != nil {
+				return fmt.Errorf("locking legacy demo account: %w", err)
+			}
+			s.logger.Warn("demo account disabled: it owns legacy data and is not meant to be logged into",
+				zap.Int64("user_id", existing.ID))
 			return nil
 		}
-		// Legacy seed with a public password: lock it down now.
-		if err := s.users.UpdateStatus(ctx, existing.ID, model.UserStatusDisabled); err != nil {
-			return fmt.Errorf("locking legacy demo account: %w", err)
+		// Non-production: restore a previously-locked account so local dev can
+		// log in with the well-known seed password again.
+		if existing.Status != model.UserStatusActive {
+			if err := s.users.UpdateStatus(ctx, existing.ID, model.UserStatusActive); err != nil {
+				return fmt.Errorf("re-enabling demo account for local dev: %w", err)
+			}
+			s.logger.Info("demo account re-enabled for non-production run",
+				zap.Int64("user_id", existing.ID))
 		}
-		s.logger.Warn("demo account disabled: it owns legacy data and is not meant to be logged into",
-			zap.Int64("user_id", existing.ID))
 		return nil
 	}
 

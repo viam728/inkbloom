@@ -119,6 +119,15 @@ type VersionHistoryConfig struct {
 // IsLocal reports whether the server runs in the embedded local mode.
 func (c *Config) IsLocal() bool { return c.Mode == "local" }
 
+// IsProduction reports a real multi-tenant deployment: cloud mode built with
+// the release gin server mode (config.prod.yaml). Local development runs the
+// same cloud stack in debug mode and is NOT production — security gates that
+// only make sense for public installs (locking the legacy demo account) key
+// off this, so day-to-day development keeps its well-known dev credentials.
+func (c *Config) IsProduction() bool {
+	return c.Mode != "local" && c.Server.Mode == "release"
+}
+
 // AIServiceConfig holds AI service-related configuration.
 type AIServiceConfig struct {
 	URL string `mapstructure:"url"`

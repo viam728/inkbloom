@@ -237,9 +237,11 @@ func main() {
 	feedbackHandler := handler.NewFeedbackHandler(feedbackService)
 
 	// Seed the id=1 demo account that owns pre-isolation legacy data
-	// (migrations/010). Outside local mode the account is created disabled:
-	// ownership is its only purpose, it must never be loggable.
-	if err := authService.EnsureDemoUser(context.Background(), !cfg.IsLocal()); err != nil {
+	// (migrations/010). Only a real production install locks it: ownership is
+	// its sole purpose there and it must never be loggable. Local development
+	// (cloud+debug / local) keeps it usable so day-to-day testing has a
+	// known account.
+	if err := authService.EnsureDemoUser(context.Background(), cfg.IsProduction()); err != nil {
 		sugar.Fatalf("failed to ensure demo user: %v", err)
 	}
 
