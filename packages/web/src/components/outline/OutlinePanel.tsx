@@ -560,22 +560,23 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenB
           {OUTLINE_STATUS_LABELS[writingStatus] ?? OUTLINE_STATUS_LABELS.drafting}
         </button>
       </div>
+      {/* 正文入口（章名下方常驻，大纲与章节的交互合并——有正文就打开，没正文就建一章再打开） */}
+      <div className="mt-1.5 pl-3.5 flex items-center">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenBody();
+          }}
+          title={hasBody ? '打开正文章节' : '创建并打开正文章节'}
+          className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-brand-500/12 text-brand-200 border border-brand-500/25 hover:bg-brand-500/25 hover:text-white transition-colors"
+        >
+          <FileText size={11} />
+          {hasBody ? '正文' : '写正文'}
+        </button>
+      </div>
       {node.summary && (
         <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{htmlToPlainText(node.summary)}</p>
       )}
-      {/* 悬浮正文入口：单一大号按钮取代原「编辑 / AI 扩写」两个小图标，
-          大纲与章节的交互在这里合并——有正文就打开，没正文就建一章再打开 */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenBody();
-        }}
-        title={hasBody ? '打开正文章节' : '创建并打开正文章节'}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-medium bg-brand-500/18 text-brand-100 border border-brand-500/35 hover:bg-brand-500/30 hover:text-white shadow-[0_2px_10px_rgba(0,0,0,0.4)] backdrop-blur-sm transition-all"
-      >
-        <FileText size={12} />
-        {hasBody ? '正文' : '写正文'}
-      </button>
     </div>
   );
 };
