@@ -48,18 +48,21 @@ func (h *SubscriptionHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	order, err := h.payService.CreateOrder(c.Request.Context(), uid, req.Period, req.Channel)
+	created, err := h.payService.CreateOrder(c.Request.Context(), uid, req.Period, req.Channel)
 	if err != nil {
 		status, code := mapBillingError(err)
 		c.JSON(status, dto.APIResponse{Code: code, Message: err.Error()})
 		return
 	}
+	order := created.Order
 	c.JSON(http.StatusCreated, dto.APIResponse{Code: 201, Message: "created", Data: dto.CreateOrderResponse{
 		OrderID:     order.ID,
 		OutTradeNo:  order.OutTradeNo,
 		AmountCents: order.AmountCents,
 		Channel:     order.Channel,
 		Status:      order.Status,
+		CodeURL:     created.CodeURL,
+		PayURL:      created.PayURL,
 	}})
 }
 
@@ -74,14 +77,26 @@ func NewPaymentHandler(ps *service.PaymentService) *PaymentHandler {
 }
 
 // Notify handles POST /api/v1/payment/notify/:channel (no auth: channel callback).
+// F4-6: the channel's own signature authenticates the request BEFORE the
+// order is fulfilled — this endpoint used to accept a bare out_trade_no with
+// zero verification, i.e. free subscriptions for anyone who could guess or
+// observe an order number.
 func (h *PaymentHandler) Notify(c *gin.Context) {
-	var req dto.NotifyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: err.Error()})
+	channel := c.Param("channel")
+	provider, ok := h.payService.Provider(channel)
+	if !ok {
+		c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "channel not available"})
 		return
 	}
 
-	if err := h.payService.Notify(c.Request.Context(), c.Param("channel"), req.OutTradeNo); err != nil {
+	outTradeNo, channelTradeNo, err := provider.VerifyNotify(c.Request)
+	if err != nil {
+		// 401 with no detail: never leak why verification failed.
+		c.JSON(http.StatusUnauthorized, dto.APIResponse{Code: 401, Message: "unauthorized"})
+		return
+	}
+
+	if err := h.payService.Notify(c.Request.Context(), channel, outTradeNo, channelTradeNo); err != nil {
 		status, code := mapBillingError(err)
 		c.JSON(status, dto.APIResponse{Code: code, Message: err.Error()})
 		return

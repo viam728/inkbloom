@@ -2,11 +2,17 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"time"
 
 	"github.com/inkbloom/server/internal/model"
 	"gorm.io/gorm"
 )
+
+// ErrInvalidStatusFilter rejects a non-integer ?status= value before it can
+// reach the SQL layer (F1-7).
+var ErrInvalidStatusFilter = errors.New("status filter must be an integer or active/disabled/all")
 
 // AdminStats is the raw dashboard aggregation (subscription state counts are
 // derived by the service layer so the time-driven state machine stays in one
@@ -127,8 +133,15 @@ func (r *adminRepository) ListUsers(ctx context.Context, search string, status s
 	case "disabled":
 		where = append(where, `u.status <> 0`)
 	default:
-		where = append(where, `u.status = ?`)
-		args = append(args, status)
+		// F1-7: only integer statuses reach the query. A raw string used to
+		// flow straight into `u.status = ?`, which PostgreSQL rejects as
+		// smallint = text (SQLSTATE 42883) — a 500 from a query param.
+		if n, perr := strconv.Atoi(status); perr == nil {
+			where = append(where, `u.status = ?`)
+			args = append(args, int16(n))
+		} else {
+			return 0, nil, ErrInvalidStatusFilter
+		}
 	}
 	whereSQL := ""
 	if len(where) > 0 {

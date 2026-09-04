@@ -82,9 +82,20 @@ func (s *KnowledgeService) ExtractFromChapter(ctx context.Context, userID, novel
 			RelationType string `json:"relation_type"`
 			Description  string `json:"description"`
 		} `json:"relations"`
+		// Degraded marks "AI is down" as opposed to "no entities found"
+		// (F3-3): writing an empty graph on an outage erased the author's
+		// real knowledge data while the UI reported success.
+		Degraded bool   `json:"degraded"`
+		Error    string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decode AI response: %w", err)
+	}
+
+	// F3-3: never persist anything on a degraded answer — an outage must not
+	// be able to erase real knowledge data under a success banner.
+	if result.Degraded {
+		return fmt.Errorf("AI extraction degraded, knowledge graph left untouched: %s", result.Error)
 	}
 
 	// Store entities as nodes

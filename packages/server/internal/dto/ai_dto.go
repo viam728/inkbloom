@@ -211,4 +211,8 @@ type AgentGenerateRequest struct {
 	ItemID      *string `json:"item_id,omitempty"`
 	NodeID      *string `json:"node_id,omitempty"`
 	Instruction string  `json:"instruction,omitempty"`
+	// Model is the caller-selected model (empty → ai-service default). Threaded
+	// through to the orchestrator so scene-model config applies to agent
+	// generation (e.g. outline 扩写) too.
+	Model string `json:"model,omitempty"`
 }

@@ -41,6 +41,14 @@ type PaymentService struct {
 	logger    *zap.Logger
 }
 
+// CreatedOrder bundles the persisted order with the channel's pay artefact
+// (QR content / redirect URL) the client needs to complete the payment.
+type CreatedOrder struct {
+	Order   *model.PaymentOrder
+	CodeURL string
+	PayURL  string
+}
+
 // NewPaymentService creates a PaymentService from the registered providers.
 func NewPaymentService(orders repository.PaymentOrderRepository, subs *SubscriptionService,
 	providers []payment.Provider, logger *zap.Logger) *PaymentService {
@@ -51,10 +59,19 @@ func NewPaymentService(orders repository.PaymentOrderRepository, subs *Subscript
 	return &PaymentService{orders: orders, subs: subs, providers: m, logger: logger}
 }
 
+// Provider exposes the registered channel provider (F4-6): the notify
+// handler needs it to authenticate callbacks before fulfilling.
+func (s *PaymentService) Provider(channel string) (payment.Provider, bool) {
+	p, ok := s.providers[channel]
+	return p, ok
+}
+
 // CreateOrder places a subscription order. The sandbox channel pays
 // instantly: an internal callback fulfills the order and extends the
-// subscription before the response is returned.
-func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, channel string) (*model.PaymentOrder, error) {
+// subscription before the response is returned. Real channels keep the
+// order in `created` until the verified notify arrives; the returned
+// CreatedOrder carries the pay artefact for the client.
+func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, channel string) (*CreatedOrder, error) {
 	price, ok := periodPricing[period]
 	if !ok {
 		return nil, ErrInvalidPeriod
@@ -64,8 +81,12 @@ func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, 
 		return nil, ErrInvalidChannel
 	}
 
-	// alipay/wechat providers exist but are not open yet.
-	if err := provider.Prepay(ctx, "", price.amountCents, "InkBloom 基础订阅"); err != nil {
+	// F4-6: the merchant order number must exist BEFORE Prepay — real
+	// channels echo it in the pay artefact and the notify, and the old chain
+	// passed an empty string here.
+	outTradeNo := newOutTradeNo()
+	prepay, err := provider.Prepay(ctx, outTradeNo, price.amountCents, "InkBloom 基础订阅")
+	if err != nil {
 		if errors.Is(err, payment.ErrChannelUnavailable) {
 			return nil, ErrChannelNotOpen
 		}
@@ -78,7 +99,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, 
 		Period:      &period,
 		Channel:     channel,
 		AmountCents: price.amountCents,
-		OutTradeNo:  newOutTradeNo(),
+		OutTradeNo:  outTradeNo,
 		Status:      model.OrderStatusCreated,
 	}
 	if err := s.orders.Create(ctx, order); err != nil {
@@ -88,7 +109,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, 
 	// Sandbox: immediately simulate a successful payment via the same
 	// fulfillment path used by real channel callbacks.
 	if channel == model.OrderChannelSandbox {
-		if err := s.Notify(ctx, channel, order.OutTradeNo); err != nil {
+		if err := s.Notify(ctx, channel, order.OutTradeNo, "SANDBOX-"+outTradeNo); err != nil {
 			return nil, err
 		}
 		order.Status = model.OrderStatusPaid
@@ -96,14 +117,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, userID int64, period, 
 		order.PaidAt = &now
 		order.FulfilledAt = &now
 	}
-	return order, nil
+	return &CreatedOrder{Order: order, CodeURL: prepay.CodeURL, PayURL: prepay.PayURL}, nil
 }
 
 // Notify is the idempotent payment callback entry (also used internally by
 // the sandbox channel). Duplicate notifications succeed without extending
 // the subscription twice: the created→paid transition is an atomic
-// conditional UPDATE, and only the winner extends.
-func (s *PaymentService) Notify(ctx context.Context, channel, outTradeNo string) error {
+// conditional UPDATE, and only the winner extends. channelTradeNo records
+// the channel's own transaction id (F4-6); the handler passes it only after
+// VerifyNotify has authenticated the callback.
+func (s *PaymentService) Notify(ctx context.Context, channel, outTradeNo, channelTradeNo string) error {
 	order, err := s.orders.GetByOutTradeNo(ctx, outTradeNo)
 	if err != nil {
 		return err
@@ -123,7 +146,7 @@ func (s *PaymentService) Notify(ctx context.Context, channel, outTradeNo string)
 	}
 
 	now := time.Now()
-	won, err := s.orders.MarkPaid(ctx, order.ID, "SANDBOX-"+order.OutTradeNo, now)
+	won, err := s.orders.MarkPaid(ctx, order.ID, channelTradeNo, now)
 	if err != nil {
 		return err
 	}

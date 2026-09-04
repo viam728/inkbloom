@@ -38,20 +38,22 @@ def create_agent_router(llm: BaseLLMProvider) -> APIRouter:
 
         try:
             user_prompt = scene_cfg["user_prompt"](request.context, request.instruction)
-            content, err, usage = await orchestrator.run(llm, scene_cfg, user_prompt)
+            content, err, usage = await orchestrator.run(
+                llm, scene_cfg, user_prompt, model=request.model
+            )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             if err:
                 return {
                     "content": "",
                     "scene": scene,
-                    "model": settings.default_model,
+                    "model": request.model or settings.default_model,
                     "elapsed_ms": elapsed_ms,
                     "error": err,
                 }
             return {
                 "content": content,
                 "scene": scene,
-                "model": settings.default_model,
+                "model": request.model or settings.default_model,
                 "elapsed_ms": elapsed_ms,
                 "usage": usage,
             }

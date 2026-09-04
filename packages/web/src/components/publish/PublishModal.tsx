@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus, RotateCcw } from 'lucide-react';
+import { X, Loader2, Send, CheckCircle2, ExternalLink, Globe, Link2, Lock, ImagePlus, RefreshCw, EyeOff, GitCompare } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useOutlineStore, sortChaptersByOutline, type OutlineStatus } from '@/stores/outline-store';
 import { usePublishStore } from '@/stores/publish-store';
@@ -9,6 +9,9 @@ import {
   publishChapter,
   unpublishChapter,
 } from '@/services/reader-client';
+import { getChapterVersion, fetchChapterContent } from '@/services/history-client';
+import DiffViewer from '@/components/editor/DiffViewer';
+import { htmlToPlainText } from '@/utils/html';
 import { uploadImage } from '@/services/image-client';
 import { track } from '@/services/analytics';
 import { toast } from '@/components/common/Toast';
@@ -174,6 +177,67 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     [currentNovel, syncOutlineStatus],
   );
 
+  /**
+   * 重新发布单章：用当前编辑版本覆盖已发布的读者快照（备忘录 L51/L57）。
+   * 复用 publishChapter 的 upsert 语义——同 (work, chapter) 覆盖快照、刷新
+   * version_id milestone，无需先取消发布，读者持续可读。
+   */
+  const handleRepublishChapter = useCallback(
+    async (chapterId: number) => {
+      if (!published || !currentNovel) return;
+      if (
+        !window.confirm(
+          '此操作将用当前编辑版本覆盖已发布的读者版本，确定重新发布？',
+        )
+      ) {
+        return;
+      }
+      setPublishing(true);
+      try {
+        const done = await publishChapter(published.id, { chapter_id: chapterId });
+        await usePublishStore.getState().markPublished(currentNovel.id, [done]);
+        await syncOutlineStatus([chapterId], 'published');
+        toast.show('已用编辑版本更新发布', 'success');
+      } catch (e) {
+        toast.show(e instanceof Error ? e.message : '重新发布失败', 'error');
+      } finally {
+        setPublishing(false);
+      }
+    },
+    [published, currentNovel, syncOutlineStatus],
+  );
+
+  /** 发布版 vs 编辑版只读对比（复用 DiffViewer） */
+  const [compare, setCompare] = useState<{
+    loading: boolean;
+    publishedText: string;
+    draftText: string;
+    title: string;
+  } | null>(null);
+
+  const handleComparePublished = useCallback(async (chapterId: number, title: string, versionId?: number) => {
+    if (!versionId) {
+      toast.show('该章发布版本缺少快照记录，无法对比', 'error');
+      return;
+    }
+    setCompare({ loading: true, publishedText: '', draftText: '', title });
+    try {
+      const [ver, draft] = await Promise.all([
+        getChapterVersion(chapterId, versionId),
+        fetchChapterContent(chapterId),
+      ]);
+      setCompare({
+        loading: false,
+        publishedText: htmlToPlainText(ver.content ?? ''),
+        draftText: htmlToPlainText(draft ?? ''),
+        title,
+      });
+    } catch (e) {
+      setCompare(null);
+      toast.show(e instanceof Error ? e.message : '对比加载失败', 'error');
+    }
+  }, []);
+
   const toggleChapter = (id: number) => {
     setSelected((s) => {
       const next = new Set(s);
@@ -190,7 +254,9 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   // 使 inset-0 只覆盖工具栏那一小条、弹窗内容被编辑器其它表面遮挡（历史
   // 多发的“弹窗内容被盖住”根因）。挂到 body 后 fixed 恢复相对视口定位。
   // 与 common/Modal.tsx 的 Portal 策略保持一致，避免同类问题复发。
-  return createPortal(
+  return (
+    <>
+      {createPortal(
     <div className="fixed inset-0 z-[1000] flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
       <div
@@ -353,7 +419,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                           checked={checked}
                           onChange={() => toggleChapter(ch.id)}
                           disabled={!!pub}
-                          title={pub ? '已发布章节不可重复勾选；如需更新内容，先取消发布再发布' : undefined}
+                          title={pub ? '已发布章节不可重复勾选；如需更新读者内容，用「重新发布」覆盖' : undefined}
                           className="w-3.5 h-3.5 accent-brand-500 cursor-pointer disabled:cursor-not-allowed"
                         />
                         {/* 大纲序号（备忘录 L57）：章节顺序严格按大纲排列顺序 */}
@@ -374,22 +440,41 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                         )}
                         <span className="text-[10px] text-neutral-500">{ch.word_count}字</span>
                         {pub && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
-                                )
-                              ) {
-                                void handleUnpublishChapter(ch.id, pub.id);
-                              }
-                            }}
-                            title="取消发布该章（读者将不可见）"
-                            className="shrink-0 p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                          >
-                            <RotateCcw size={11} />
-                          </button>
+                          <div className="shrink-0 flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => void handleComparePublished(ch.id, ch.title, pub.version_id)}
+                              title="发布版 vs 编辑版对比"
+                              className="p-1 rounded text-neutral-600 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
+                            >
+                              <GitCompare size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRepublishChapter(ch.id)}
+                              disabled={publishing}
+                              title="重新发布（用编辑版本覆盖发布版本）"
+                              className="p-1 rounded text-neutral-600 hover:text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 transition-colors"
+                            >
+                              <RefreshCw size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
+                                  )
+                                ) {
+                                  void handleUnpublishChapter(ch.id, pub.id);
+                                }
+                              }}
+                              title="取消发布该章（读者将不可见）"
+                              className="p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                            >
+                              <EyeOff size={11} />
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
@@ -434,6 +519,22 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
       </div>
     </div>,
     document.body,
+      )}
+
+      {/* 发布版 vs 编辑版只读对比（复用 DiffViewer，层级高于发布弹窗 z-[1000]） */}
+      {compare && (
+        <DiffViewer
+          original={compare.publishedText}
+          modified={compare.draftText}
+          onAccept={() => setCompare(null)}
+          onReject={() => setCompare(null)}
+          title={`发布版 vs 编辑版 · ${compare.title}`}
+          rejectText="关闭"
+          hideAccept
+          overlayClass="z-[1100]"
+        />
+      )}
+    </>
   );
 };
 

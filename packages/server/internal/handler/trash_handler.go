@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -92,7 +93,7 @@ func (h *TrashHandler) Restore(c *gin.Context) {
 	}
 	if err := h.trashSvc.Restore(c.Request.Context(), GetUserID(c), novelID, trashID, req.TargetActID); err != nil {
 		status := http.StatusInternalServerError
-		if err == service.ErrTrashNotFound {
+		if errors.Is(err, service.ErrTrashNotFound) {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, dto.APIResponse{Code: status, Message: err.Error()})
@@ -113,7 +114,7 @@ func (h *TrashHandler) Purge(c *gin.Context) {
 	}
 	if err := h.trashSvc.Purge(c.Request.Context(), GetUserID(c), novelID, trashID); err != nil {
 		status := http.StatusInternalServerError
-		if err == service.ErrTrashNotFound {
+		if errors.Is(err, service.ErrTrashNotFound) {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, dto.APIResponse{Code: status, Message: err.Error()})

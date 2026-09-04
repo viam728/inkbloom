@@ -557,8 +557,15 @@ func (h *AIHandler) billSSECall(c *gin.Context, upstreamPath string, reqBody []b
 		meta.PromptTokens = &prompt
 		meta.CompletionTokens = &completion
 	}
-	if err := h.tokenService.Consume(c.Request.Context(), uid, units, meta); err != nil {
-		h.logger.Warn("token deduction failed after SSE stream",
+	// The request context is already cancelled by the time a long stream ends
+	// whenever the client disconnects — the most common outcome of a slow
+	// generation. Settling the bill on a request-bound context would silently
+	// drop the deduction (revenue loss, scriptable), so settle with a context
+	// that survives the request.
+	billCtx, billCancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+	defer billCancel()
+	if err := h.tokenService.Consume(billCtx, uid, units, meta); err != nil {
+		h.logger.Error("token deduction failed after SSE stream",
 			zap.String("path", upstreamPath),
 			zap.Int64("user_id", uid),
 			zap.Int64("units", units),
@@ -947,6 +954,9 @@ func (h *AIHandler) AgentGenerate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: "failed to build agent context"})
 		return
 	}
+	// Forward the caller-selected model so scene-model config (e.g. outline 扩写)
+	// reaches the orchestrator too; empty falls back to the ai-service default.
+	payload.Model = req.Model
 
 	body, err := json.Marshal(payload)
 	if err != nil {

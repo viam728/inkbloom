@@ -40,7 +40,7 @@ func newTestOutlineAgent(t *testing.T) (*AgentService, *gorm.DB) {
 	novelRepo := repository.NewNovelRepository(db)
 	docRepo := repository.NewNovelDocRepository(db)
 	docSvc := NewNovelDocService(novelRepo, docRepo, nil, repository.NewOutlineVersionRepository(db))
-	agent := NewAgentService(nil, nil, docSvc, nil, "http://127.0.0.1:1", zap.NewNop())
+	agent := NewAgentService(nil, nil, docSvc, nil, nil, "http://127.0.0.1:1", zap.NewNop())
 	return agent, db
 }
 

@@ -13,6 +13,10 @@ interface DiffViewerProps {
   title?: string;
   acceptText?: string;
   rejectText?: string;
+  /** 只读对比：隐藏接受按钮（发布版 vs 编辑版预览用，无回滚/接受语义） */
+  hideAccept?: boolean;
+  /** 遮罩层级类名：宿主弹窗层级更高时（如发布弹窗 z-[1000]）需传入更高值 */
+  overlayClass?: string;
 }
 
 interface DiffSegment {
@@ -93,6 +97,8 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
   title,
   acceptText,
   rejectText,
+  hideAccept = false,
+  overlayClass = 'z-50',
 }) => {
   const segments = useMemo(() => computeDiff(original, modified), [original, modified]);
 
@@ -101,7 +107,7 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
   // 会为 fixed 后代建立 containing block——不挂 portal 的话全屏遮罩会被
   // 困在弹窗面板内（“弹窗内容被遮挡/错位”同类根因）。
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className={`fixed inset-0 ${overlayClass} flex items-center justify-center bg-black/60`}>
       <div className="bg-neutral-800 border border-neutral-600 rounded-lg shadow-2xl w-[720px] max-w-[90vw] max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-700">
@@ -150,15 +156,17 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
             onClick={onReject}
             className="px-4 py-1.5 rounded text-sm font-medium text-neutral-300 bg-neutral-700 hover:bg-neutral-600 transition-colors"
           >
-            {rejectText ?? '拒绝'}
+            {rejectText ?? (hideAccept ? '关闭' : '拒绝')}
           </button>
-          <button
-            type="button"
-            onClick={onAccept}
-            className="px-4 py-1.5 rounded text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
-          >
-            {acceptText ?? '接受'}
-          </button>
+          {!hideAccept && (
+            <button
+              type="button"
+              onClick={onAccept}
+              className="px-4 py-1.5 rounded text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
+            >
+              {acceptText ?? '接受'}
+            </button>
+          )}
         </div>
       </div>
     </div>,

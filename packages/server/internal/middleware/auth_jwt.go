@@ -81,18 +81,26 @@ func authJWT(tokens *authtoken.Manager, legacyEnabled bool, legacyToken string, 
 		}
 
 		if state != nil {
-			// Checker errors fail open: a lookup hiccup must not lock out
-			// every authenticated request.
-			if status, role, err := state(c.Request.Context(), uid); err == nil {
-				if status != 0 { // model.UserStatusActive
-					c.AbortWithStatusJSON(http.StatusForbidden, dto.APIResponse{
-						Code:    403,
-						Message: "账号已被禁用",
-					})
-					return
-				}
-				c.Set("user_role", role)
+			// Fail-closed (F1): a state-lookup error must not wave a disabled
+			// account through. The checker caches per-user state, so this
+			// only bites when the store itself is unhealthy — rejecting then
+			// is the safe side of the trade-off.
+			status, role, err := state(c.Request.Context(), uid)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, dto.APIResponse{
+					Code:    500,
+					Message: "无法确认账号状态，请稍后重试",
+				})
+				return
 			}
+			if status != 0 { // model.UserStatusActive
+				c.AbortWithStatusJSON(http.StatusForbidden, dto.APIResponse{
+					Code:    403,
+					Message: "账号已被禁用",
+				})
+				return
+			}
+			c.Set("user_role", role)
 		}
 
 		c.Set("user_id", uid)

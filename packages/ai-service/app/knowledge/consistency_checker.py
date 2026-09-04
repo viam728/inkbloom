@@ -6,6 +6,7 @@ from typing import Any
 
 from app.llm.base import BaseLLMProvider
 from app.config import settings
+from app.knowledge.errors import ExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,9 @@ class ConsistencyChecker:
 
         except json.JSONDecodeError as e:
             logger.error("Failed to parse consistency JSON: %s, content: %s", e, result.content[:200])
-            return []
+            raise ExtractionError(f"consistency check: unparseable LLM output: {e}") from e
+        except ExtractionError:
+            raise
         except Exception as e:
             logger.error("Consistency check failed: %s", e)
-            return []
+            raise ExtractionError(f"consistency check failed: {e}") from e

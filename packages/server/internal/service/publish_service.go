@@ -103,7 +103,24 @@ func (s *PublishService) CreateWork(ctx context.Context, userID int64, req *dto.
 		Visibility: visibility,
 	}
 	if err := s.workRepo.CreateWork(ctx, w); err != nil {
-		return nil, err
+		// TOCTOU (F1-7): the slug may have been taken between SlugExists and
+		// CreateWork — the unique index is the arbiter. Retry the derivation
+		// once for derived slugs so concurrent publishes of similar titles
+		// land with suffixed slugs instead of a raw 500.
+		if isUniqueViolation(err) && req.Slug == "" {
+			retry, rerr := s.resolveSlug(ctx, "", req.Title, req.NovelID)
+			if rerr != nil {
+				return nil, ErrSlugTaken
+			}
+			w.Slug = retry
+			if cerr := s.workRepo.CreateWork(ctx, w); cerr != nil {
+				return nil, ErrSlugTaken
+			}
+		} else if isUniqueViolation(err) {
+			return nil, ErrSlugTaken
+		} else {
+			return nil, err
+		}
 	}
 	resp := toWorkResponse(w)
 	s.fillAIInspired(ctx, &resp, userID, req.NovelID)
@@ -197,8 +214,9 @@ func (s *PublishService) PublishChapter(ctx context.Context, userID, workID int6
 
 	// Snapshot the current draft as a milestone so the published version is
 	// traceable. Label carries the work title + chapter position so the
-	// history panel reads naturally.
-	label := fmt.Sprintf("发布《%s》第%d章", w.Title, chapter.Position)
+	// history panel reads naturally. position is the outline-ordered 0-based
+	// rank (备忘录 L57), so the human-facing "第N章" is position+1.
+	label := fmt.Sprintf("发布《%s》第%d章", w.Title, chapter.Position+1)
 	snap, err := s.history.CreateSnapshot(ctx, userID, req.ChapterID, &dto.CreateVersionRequest{
 		Kind: model.VersionKindMilestone, Label: label,
 	})

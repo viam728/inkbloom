@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.agents.team import (
@@ -36,6 +36,29 @@ logger = logging.getLogger(__name__)
 _router = TaskRouter()
 _pipeline = TeamPipeline()
 _optimizer = CostOptimizer()
+
+
+def _reject_unimplemented(result: PipelineResult) -> None:
+    """F3-1: a task that died on a stub agent is a 501, not a fake success.
+
+    The stub agents previously returned `success=true` / DONE with nothing
+    behind it; when every task in a run failed with the not-implemented
+    marker, the endpoint now refuses to pretend work happened.
+    """
+    tasks = getattr(result, "tasks", None) or []
+    if not tasks:
+        return
+    failed_on_stub = [
+        t
+        for t in tasks
+        if getattr(getattr(t, "status", None), "name", str(getattr(t, "status", ""))) == "FAILED"
+        and "not implemented" in (getattr(t, "result_summary", "") or "")
+    ]
+    if len(failed_on_stub) == len(tasks):
+        raise HTTPException(
+            status_code=501,
+            detail="agent not implemented: this task type has no real LLM wiring yet (F3-1)",
+        )
 
 
 # ── Request / Response models ───────────────────────────────────────────
@@ -161,11 +184,15 @@ def create_team_router() -> APIRouter:
         """Execute a single task through the full Agent team pipeline.
 
         The pipeline performs: route -> execute -> verify -> retry on failure.
+        F3-1: stub agents now surface as 501 instead of a fake `success=true`
+        with no artifact behind it.
         """
         start = time.perf_counter()
         task = _make_task_card(request.task)
         result = await _pipeline.run(task)
         elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        _reject_unimplemented(result)
 
         return {
             "success": result.success,
@@ -188,6 +215,8 @@ def create_team_router() -> APIRouter:
         )
         result = await _pipeline.run_batch(batch)
         elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        _reject_unimplemented(result)
 
         return {
             "success": result.success,

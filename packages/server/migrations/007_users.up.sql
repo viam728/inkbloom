@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
 SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1), true);
 
 -- Demo account (id=1) is seeded at startup via AuthService.EnsureDemoUser:
--- phone='13800000000', nickname='本地数据用户', password='inkbloom123'
--- (argon2id hashes carry a random salt, so the seed must run in Go code).
+-- phone='13800000000', nickname='本地数据用户'. Since the F1 security pass the
+-- account is seeded with a random password and locked outside local mode: it
+-- exists only to own legacy data and must never be logged into.
 -- EnsureDemoUser re-runs the same setval after seeding.

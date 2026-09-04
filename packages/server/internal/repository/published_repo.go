@@ -36,6 +36,12 @@ type PublishedRepository interface {
 	ListChaptersByWork(ctx context.Context, userID, workID int64) ([]model.PublishedChapter, error)
 	UpsertChapter(ctx context.Context, userID int64, c *model.PublishedChapter) error
 	DeleteChapter(ctx context.Context, userID, pid int64) error
+	// SyncPositionsFromChapters realigns each published chapter's position to
+	// its source chapter's current position. Run once at startup AFTER the
+	// orphan-chapter cleanup has normalized chapters.position to outline order,
+	// so the reader/author chapter lists follow the outline (备忘录 L57). The
+	// correlated subquery is dialect-portable (Postgres + SQLite).
+	SyncPositionsFromChapters(ctx context.Context) error
 
 	// Progress.
 	GetProgress(ctx context.Context, userID, workID int64) (*model.ReadingProgress, error)
@@ -227,6 +233,20 @@ func (r *publishedRepository) UpsertChapter(ctx context.Context, userID int64, c
 func (r *publishedRepository) DeleteChapter(ctx context.Context, userID, pid int64) error {
 	return r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).
 		Delete(&model.PublishedChapter{}, pid).Error
+}
+
+// SyncPositionsFromChapters realigns published_chapters.position to the source
+// chapter's current position. Portable correlated subquery (Postgres + SQLite);
+// only rows whose position actually differs are touched.
+func (r *publishedRepository) SyncPositionsFromChapters(ctx context.Context) error {
+	return r.db.WithContext(ctx).Exec(
+		`UPDATE published_chapters
+		 SET position = (SELECT c.position FROM chapters c WHERE c.id = published_chapters.chapter_id)
+		 WHERE EXISTS (
+			SELECT 1 FROM chapters c
+			WHERE c.id = published_chapters.chapter_id AND c.position <> published_chapters.position
+		 )`,
+	).Error
 }
 
 func (r *publishedRepository) GetProgress(ctx context.Context, userID, workID int64) (*model.ReadingProgress, error) {

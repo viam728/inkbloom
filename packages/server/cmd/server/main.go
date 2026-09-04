@@ -16,6 +16,7 @@ import (
 	"github.com/inkbloom/server/internal/database"
 	"github.com/inkbloom/server/internal/handler"
 	"github.com/inkbloom/server/internal/middleware"
+	"github.com/inkbloom/server/internal/pkg/assetguard"
 	"github.com/inkbloom/server/internal/pkg/authtoken"
 	"github.com/inkbloom/server/internal/pkg/breaker"
 	"github.com/inkbloom/server/internal/pkg/contentsafety"
@@ -149,21 +150,67 @@ func main() {
 	// Signed asset URLs share the JWT secret so the static /assets/files route
 	// can authenticate <img> requests without an Authorization header.
 	signedurl.SetSecret(cfg.JWT.Secret)
-	smsProvider := sms.NewDevProvider(logger)
+	// F4-2: the SMS channel comes from configuration (dev | aliyun |
+	// tencent). The dev provider never delivers and never logs the code.
+	smsProvider, err := sms.New(sms.FactoryConfig{
+		Provider: cfg.SMS.Provider,
+		Aliyun: sms.AliyunSMSConfig{
+			AccessKeyID:     cfg.SMS.Aliyun.AccessKeyID,
+			AccessKeySecret: cfg.SMS.Aliyun.AccessKeySecret,
+			SignName:        cfg.SMS.Aliyun.SignName,
+			TemplateCode:    cfg.SMS.Aliyun.TemplateCode,
+		},
+		Tencent: sms.TencentSMSConfig{
+			SecretID:   cfg.SMS.Tencent.SecretID,
+			SecretKey:  cfg.SMS.Tencent.SecretKey,
+			SDKAppID:   cfg.SMS.Tencent.SDKAppID,
+			SignName:   cfg.SMS.Tencent.SignName,
+			TemplateID: cfg.SMS.Tencent.TemplateID,
+		},
+	}, logger)
+	if err != nil {
+		sugar.Fatalf("sms provider: %v", err)
+	}
 	userRepo := repository.NewUserRepository(db)
 	userSessionRepo := repository.NewUserSessionRepository(db)
 
 	// Initialize M3 billing (task #39): subscription state machine + payment
-	// orders. Only the sandbox channel is open; alipay/wechat are TODO stubs.
+	// orders. F4-6: sandbox is registered in local mode only; the real
+	// channels join only when their credentials are enabled in config.
 	subRepo := repository.NewSubscriptionRepository(db)
 	orderRepo := repository.NewPaymentOrderRepository(db)
 	subService := service.NewSubscriptionService(subRepo, logger)
-	paymentService := service.NewPaymentService(orderRepo, subService,
-		[]payment.Provider{
-			payment.NewSandboxProvider(),
-			payment.NewAlipayProvider(),
-			payment.NewWechatProvider(),
-		}, logger)
+	payProviders := make([]payment.Provider, 0, 3)
+	if cfg.IsLocal() {
+		payProviders = append(payProviders, payment.NewSandboxProvider())
+	}
+	if cfg.Payment.Alipay.Enabled {
+		alipayProvider, perr := payment.NewAlipayProvider(payment.AlipayConfig{
+			AppID:         cfg.Payment.Alipay.AppID,
+			PrivateKeyPEM: cfg.Payment.Alipay.PrivateKey,
+			PublicKeyPEM:  cfg.Payment.Alipay.PublicKey,
+			NotifyURL:     cfg.Payment.Alipay.NotifyURL,
+		})
+		if perr != nil {
+			sugar.Fatalf("alipay provider: %v", perr)
+		}
+		payProviders = append(payProviders, alipayProvider)
+	}
+	if cfg.Payment.Wechat.Enabled {
+		wechatProvider, werr := payment.NewWechatProvider(payment.WechatConfig{
+			AppID:         cfg.Payment.Wechat.AppID,
+			MchID:         cfg.Payment.Wechat.MchID,
+			CertSerialNo:  cfg.Payment.Wechat.CertSerialNo,
+			PrivateKeyPEM: cfg.Payment.Wechat.PrivateKey,
+			APIv3Key:      cfg.Payment.Wechat.APIv3Key,
+			NotifyURL:     cfg.Payment.Wechat.NotifyURL,
+		})
+		if werr != nil {
+			sugar.Fatalf("wechat pay provider: %v", werr)
+		}
+		payProviders = append(payProviders, wechatProvider)
+	}
+	paymentService := service.NewPaymentService(orderRepo, subService, payProviders, logger)
 
 	// Initialize M4 token billing (task #43): accounts / ledger / orders.
 	// AI entitlements depend ONLY on the token balance (independent of the
@@ -189,9 +236,11 @@ func main() {
 	feedbackService := service.NewFeedbackService(repository.NewFeedbackRepository(db), logger)
 	feedbackHandler := handler.NewFeedbackHandler(feedbackService)
 
-	// Seed the id=1 demo account (phone 13800000000 / inkbloom123)
-	if err := authService.EnsureDemoUser(context.Background()); err != nil {
-		sugar.Errorf("failed to ensure demo user: %v", err)
+	// Seed the id=1 demo account that owns pre-isolation legacy data
+	// (migrations/010). Outside local mode the account is created disabled:
+	// ownership is its only purpose, it must never be loggable.
+	if err := authService.EnsureDemoUser(context.Background(), !cfg.IsLocal()); err != nil {
+		sugar.Fatalf("failed to ensure demo user: %v", err)
 	}
 
 	// Backfill a trial subscription for every user without one (demo account
@@ -287,11 +336,23 @@ func main() {
 	aiContextBuilder := service.NewAIContextBuilder(chapterRepo, novelRepo, db, logger)
 	docService := service.NewNovelDocService(novelRepo, docRepo, chapterRepo, outlineVersionRepo)
 	// 文章库并入大纲：删除未被任何大纲要点绑定的旧文章库章节并重算字数（幂等迁移）。
-	// 大纲管理器绑定的章节（chapter_id 引用）全部保留。
-	docService.MigrateCleanupOrphanChapters(context.Background())
+	// 大纲管理器绑定的章节（chapter_id 引用）全部保留。错误可见（F1-7）：
+	// 数据层故障时拒绝继续启动，而不是静默跳过数据迁移。
+	if removed, err := docService.MigrateCleanupOrphanChapters(context.Background()); err != nil {
+		sugar.Fatalf("orphan-chapter cleanup migration failed: %v", err)
+	} else if removed > 0 {
+		sugar.Infof("orphan-chapter cleanup removed %d deprecated chapter(s)", removed)
+	}
+	// 备忘录 L57: the cleanup above normalized chapters.position to outline order.
+	// Realign published_chapters.position (the reader/author list sort key) to it
+	// so the "第N章" numbering follows the outline. Idempotent; runs every boot.
+	if err := publishedRepo.SyncPositionsFromChapters(context.Background()); err != nil {
+		sugar.Fatalf("published-chapter position sync failed: %v", err)
+	}
 	// Q3 整本里程碑快照 (Agent safety work Q3): whole-novel bundles with
-	// one-click restore (conservative / full).
-	novelVersionService := service.NewNovelVersionService(novelRepo, chapterRepo, docService, novelVersionRepo)
+	// one-click restore (conservative / full). db enables the transactional
+	// restore (F1-7).
+	novelVersionService := service.NewNovelVersionService(novelRepo, chapterRepo, docService, novelVersionRepo, db)
 	// Closed-loop Agent (plan P2-b): the agent context now also carries the
 	// knowledge graph and open foreshadow threads so generation stays
 	// consistent with established world-building.
@@ -334,7 +395,7 @@ func main() {
 	foreshadowHandler := handler.NewForeshadowHandler(foreshadowService)
 	// E4 publish/reader handlers are instantiated after publishService,
 	// which itself must wait for csChecker (see below).
-	portraitHandler := handler.NewPortraitHandler(fileStorage)
+	portraitHandler := handler.NewPortraitHandler(fileStorage, novelRepo)
 	// Unified image store (task #57): ingest/dedupe/list/delete gallery
 	// images under /api/v1/images.
 	imageService := service.NewImageService(assetRepo, fileStorage, logger)
@@ -448,9 +509,14 @@ func main() {
 		UserState:    userGuard.State,
 		Writable:     subService.ReadOnly,
 		Tokens:       tokenMgr,
-		WSHub:        wsHub,
-		RateLimiter:  rateLimiter,
-		Storage:      fileStorage,
+		// Asset ownership policy for /assets/files and /assets/sign (F1-4).
+		AssetGuard: assetguard.New(func(ctx context.Context, userID, novelID int64) bool {
+			novel, err := novelRepo.GetByID(ctx, userID, novelID)
+			return err == nil && novel != nil
+		}),
+		WSHub:       wsHub,
+		RateLimiter: rateLimiter,
+		Storage:     fileStorage,
 		WebDist:      webDist,
 		DB:           db,
 	})
@@ -534,11 +600,20 @@ func main() {
 		sugar.Info("shutdown signal received, shutting down gracefully...")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 		defer shutdownCancel()
-		return httpServer.Shutdown(shutdownCtx)
+		err := httpServer.Shutdown(shutdownCtx)
+		// HTTP is down — no new task submissions. Drain the worker pool now:
+		// Stop closes taskCh so workers' range loops exit instead of leaking
+		// until os.Exit (F1-7).
+		engine.Stop()
+		return err
 	})
 
 	if err := g.Wait(); err != nil {
-		sugar.Fatalf("server exited with error: %v", err)
+		// Fatal skips deferred Sync calls — log and exit explicitly so the
+		// final batch of structured entries is flushed (F1-7).
+		sugar.Errorf("server exited with error: %v", err)
+		_ = logger.Sync()
+		os.Exit(1)
 	}
 	sugar.Info("server stopped")
 }

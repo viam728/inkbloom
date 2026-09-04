@@ -43,28 +43,17 @@ class AssistantAgent(BaseAgent):
     async def execute(self, task: TaskCard) -> TaskCard:
         """Execute simple validation or fix tasks.
 
-        In production this would invoke the DeepSeek V4 Flash API for:
-          - Running ``go test``, ``pnpm test``, etc.
-          - Applying lint fixes
-          - Generating docstrings
-          - Reviewing diffs
-
-        Current implementation is a stub that simulates verification.
+        F3-1: this agent has no real LLM wiring yet. It used to simulate a
+        passing verification (`all_passed: True`) which marked unverified
+        work as delivered; it now fails the task loudly so the pipeline and
+        the caller see the truth. Wiring the DeepSeek V4 Flash API (go test
+        / lint / docstrings / diff review) re-enables the real path.
         """
-        self.logger.info("AssistantAgent executing: %s", task.to_summary())
-
-        # Simulate verification work
-        result = f"Verified {task.title}: all checks passed"
-
+        self.logger.info("AssistantAgent refusing stub execution: %s", task.to_summary())
         return task.update_status(
-            status=TaskStatus.DONE,
+            status=TaskStatus.FAILED,
             assigned_agent=self.capabilities.name,
-            result_summary=result,
-            verification_report={
-                "checks_run": ["build", "test", "lint"],
-                "all_passed": True,
-                "issues_found": 0,
-            },
+            result_summary="agent not implemented: verification LLM wiring pending (F3-1)",
         )
 
     async def batch_verify(self, tasks: list[TaskCard]) -> list[TaskCard]:

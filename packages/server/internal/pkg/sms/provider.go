@@ -24,11 +24,13 @@ func NewDevProvider(logger *zap.Logger) *DevProvider {
 	return &DevProvider{logger: logger}
 }
 
-// Send logs the verification code at Info level.
-func (p *DevProvider) Send(_ context.Context, phone, code string) error {
-	p.logger.Info("sms verification code issued (dev provider, no real SMS sent)",
-		zap.String("phone", phone),
-		zap.String("code", code))
+// Send logs that a code was issued — and never the code itself (P0-2/F1-1):
+// the Info log with the plaintext code let anyone with log access take over
+// arbitrary phone accounts. Local desktop mode surfaces the code through the
+// UI instead; cloud mode must configure a real channel.
+func (p *DevProvider) Send(_ context.Context, phone, _ string) error {
+	p.logger.Info("sms verification code issued (dev provider, not delivered; code intentionally NOT logged)",
+		zap.String("phone", phone))
 	return nil
 }
 

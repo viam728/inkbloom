@@ -52,16 +52,22 @@ type TaskEngine struct {
 	workerCount int
 	taskCh      chan model.Task
 	resultCh    chan TaskResult
-	db          *gorm.DB
-	redis       *redis.Client
-	nats        NATSPublisher
-	lock        dlock.LockAcquirer
-	repo        repository.TaskRepository
-	registry    HandlerRegistry
-	breaker     *breaker.Breaker
-	logger      *zap.Logger
-	cancel      context.CancelFunc
+	// retrySem caps how many backoff waits can be pending at once, so an
+	// upstream outage cannot spawn an unbounded fleet of sleeping goroutines.
+	retrySem  chan struct{}
+	db        *gorm.DB
+	redis     *redis.Client
+	nats      NATSPublisher
+	lock      dlock.LockAcquirer
+	repo      repository.TaskRepository
+	registry  HandlerRegistry
+	breaker   *breaker.Breaker
+	logger    *zap.Logger
+	cancel    context.CancelFunc
 }
+
+// maxPendingRetries bounds concurrent retry waits (4x worker pool).
+const maxPendingRetries = 16
 
 // NewTaskEngine creates a new TaskEngine.
 func NewTaskEngine(
@@ -78,6 +84,7 @@ func NewTaskEngine(
 		workerCount: workerCount,
 		taskCh:      make(chan model.Task, workerCount*2),
 		resultCh:    make(chan TaskResult, workerCount*2),
+		retrySem:    make(chan struct{}, maxPendingRetries),
 		db:          db,
 		redis:       rdb,
 		nats:        nats,
@@ -281,7 +288,9 @@ func (e *TaskEngine) processTask(ctx context.Context, task model.Task, logger *z
 	handler, ok := e.registry[task.Type]
 	if !ok {
 		logger.Error("no handler registered for task type", zap.String("type", task.Type))
-		e.repo.UpdateStatus(ctx, task.ID, "dead_letter")
+		if updateErr := e.repo.UpdateStatus(ctx, task.ID, "dead_letter"); updateErr != nil {
+			logger.Error("failed to mark unhandled task as dead_letter", zap.Error(updateErr))
+		}
 		return
 	}
 
@@ -301,12 +310,17 @@ func (e *TaskEngine) processTask(ctx context.Context, task model.Task, logger *z
 
 	// Success: update status, result, progress
 	now := time.Now()
-	e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+	if updateErr := e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
 		"status":       "success",
 		"result":       result,
 		"progress":     100,
 		"completed_at": now,
-	})
+	}).Error; updateErr != nil {
+		// The work is done but the record disagrees — flag it loudly so the
+		// discrepancy can be repaired instead of silently sticking in
+		// "running" forever.
+		logger.Error("task succeeded but status update failed", zap.Error(updateErr))
+	}
 	middleware.ObserveTask(task.Type, "success") // v2 §8.1
 
 	// Publish completion event (user_id routes the WS push to the owner,
@@ -326,31 +340,63 @@ func (e *TaskEngine) processTask(ctx context.Context, task model.Task, logger *z
 }
 
 // handleFailure manages retry logic with exponential backoff.
+// Retries are bounded in count AND in concurrency: the backoff sleep selects
+// on ctx.Done() so shutdown does not strand goroutines, and a semaphore caps
+// how many retries can be waiting at once (an upstream outage used to spawn
+// an unbounded fleet of sleepers).
 func (e *TaskEngine) handleFailure(ctx context.Context, task model.Task, err error, logger *zap.Logger) {
-	if task.RetryCount < task.MaxRetries {
-		// Increment retry count
-		e.repo.IncrementRetry(ctx, task.ID)
+	// Reload the authoritative retry count: task.RetryCount is a stale
+	// snapshot from before IncrementRetry landed in previous cycles.
+	current, getErr := e.repo.GetByID(ctx, task.ID)
+	if getErr != nil || current == nil {
+		logger.Error("failed to re-fetch task for failure handling", zap.Error(getErr))
+		return
+	}
 
-		// Exponential backoff: 2^retryCount seconds
-		delay := time.Duration(math.Pow(2, float64(task.RetryCount))) * time.Second
+	if current.RetryCount < current.MaxRetries {
+		if incErr := e.repo.IncrementRetry(ctx, task.ID); incErr != nil {
+			logger.Error("failed to increment retry count", zap.Error(incErr))
+		}
+
+		// Exponential backoff based on the fresh count.
+		delay := time.Duration(math.Pow(2, float64(current.RetryCount))) * time.Second
 
 		// Reset status to pending for retry (no-op if the user cancelled the
 		// running task mid-flight: the cancelled guard in the WHERE clause
 		// keeps the terminal state, and the retry below re-checks it).
-		e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND status != 'cancelled'", task.ID).Updates(map[string]interface{}{
+		if updateErr := e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND status != 'cancelled'", task.ID).Updates(map[string]interface{}{
 			"status":    "pending",
 			"error_msg": err.Error(),
-		})
+		}).Error; updateErr != nil {
+			logger.Error("failed to reset task for retry", zap.Error(updateErr))
+		}
 
-		// Re-enqueue with delay
+		// Re-enqueue after a cancellable delay, under the retry semaphore.
 		go func() {
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case e.retrySem <- struct{}{}:
+			}
+			defer func() { <-e.retrySem }()
+
 			updatedTask, getErr := e.repo.GetByID(ctx, task.ID)
-			if getErr != nil {
+			if getErr != nil || updatedTask == nil {
 				logger.Error("failed to re-fetch task for retry", zap.Error(getErr))
 				return
 			}
+			// The user may have cancelled while the backoff slept.
+			if updatedTask.Status != "pending" {
+				return
+			}
 			select {
+			case <-ctx.Done():
+				return
 			case e.taskCh <- *updatedTask:
 				logger.Info("task re-enqueued for retry",
 					zap.Int16("retry", updatedTask.RetryCount+1),
@@ -362,10 +408,12 @@ func (e *TaskEngine) handleFailure(ctx context.Context, task model.Task, err err
 		}()
 	} else {
 		// Max retries exceeded → dead_letter
-		e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		if updateErr := e.db.WithContext(ctx).Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
 			"status":    "dead_letter",
 			"error_msg": err.Error(),
-		})
+		}).Error; updateErr != nil {
+			logger.Error("failed to move task to dead_letter", zap.Error(updateErr))
+		}
 		middleware.ObserveTask(task.Type, "dead_letter") // v2 §8.1
 		logger.Error("task moved to dead_letter after max retries")
 
@@ -376,7 +424,7 @@ func (e *TaskEngine) handleFailure(ctx context.Context, task model.Task, err err
 			"type":    task.Type,
 			"status":  "dead_letter",
 			"error":   err.Error(),
-			"retries": task.RetryCount,
+			"retries": current.RetryCount,
 		})
 		e.nats.Publish("aigc.task.dead_letter", eventPayload)
 	}

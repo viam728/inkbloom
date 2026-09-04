@@ -46,35 +46,16 @@ class PrimaryAgent(BaseAgent):
     async def execute(self, task: TaskCard) -> TaskCard:
         """Execute a complex task via planning and decomposition.
 
-        For truly complex tasks, this Agent:
-          1. Analyzes the task requirements
-          2. Decomposes into sub-tasks (child TaskCards)
-          3. Returns the decomposition plan as result_summary
-
-        For medium tasks, it may execute directly (stubbed).
+        F3-1: the "decomposition" here is a string heuristic with no LLM
+        behind it — it used to report DONE as if planning had happened.
+        The agent now fails its tasks until the K3-1M API is wired, so
+        pipeline results are never fabricated plans.
         """
-        self.logger.info("PrimaryAgent executing: %s", task.to_summary())
-
-        # Decomposition logic for complex tasks
-        if task.complexity == Complexity.COMPLEX:
-            sub_tasks = self._decompose(task)
-            result = (
-                f"Decomposed into {len(sub_tasks)} sub-tasks: "
-                + ", ".join(st.id for st in sub_tasks)
-            )
-            return task.update_status(
-                status=TaskStatus.DONE,
-                assigned_agent=self.capabilities.name,
-                result_summary=result,
-                verification_report={"sub_tasks": [st.model_dump() for st in sub_tasks]},
-            )
-
-        # Direct execution stub for medium tasks
-        result = f"PrimaryAgent completed: {task.title}"
+        self.logger.info("PrimaryAgent refusing stub execution: %s", task.to_summary())
         return task.update_status(
-            status=TaskStatus.DONE,
+            status=TaskStatus.FAILED,
             assigned_agent=self.capabilities.name,
-            result_summary=result,
+            result_summary="agent not implemented: planning LLM wiring pending (F3-1)",
         )
 
     def _decompose(self, task: TaskCard) -> list[TaskCard]:

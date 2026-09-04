@@ -17,6 +17,7 @@ import (
 	"github.com/inkbloom/server/internal/dto"
 	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/pkg/storage"
+	"github.com/inkbloom/server/internal/repository"
 )
 
 const (
@@ -52,11 +53,14 @@ var portraitExtensions = map[string]bool{
 // (~/.inkbloom/novels/*) so they are directly servable via /assets/files/*.
 type PortraitHandler struct {
 	fs *storage.FileStorage
+	// novels verifies the caller owns the target novel before any write
+	// lands in its asset directory (F1-4).
+	novels repository.NovelRepository
 }
 
 // NewPortraitHandler creates a new PortraitHandler.
-func NewPortraitHandler(fs *storage.FileStorage) *PortraitHandler {
-	return &PortraitHandler{fs: fs}
+func NewPortraitHandler(fs *storage.FileStorage, novels repository.NovelRepository) *PortraitHandler {
+	return &PortraitHandler{fs: fs, novels: novels}
 }
 
 // UploadNovelPortrait handles POST /novels/:id/portraits — multipart field
@@ -66,6 +70,22 @@ func (h *PortraitHandler) UploadNovelPortrait(c *gin.Context) {
 	novelID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || novelID <= 0 {
 		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid novel id"})
+		return
+	}
+
+	// Ownership check (F1-4): without it any logged-in user could plant
+	// files into another user's novel asset directory.
+	if h.novels == nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: "novel ownership check unavailable"})
+		return
+	}
+	novel, err := h.novels.GetByID(c.Request.Context(), GetUserID(c), novelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: "novel lookup failed"})
+		return
+	}
+	if novel == nil {
+		c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
 		return
 	}
 

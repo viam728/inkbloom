@@ -143,7 +143,10 @@ func TestMigrateCleanupOrphanChapters(t *testing.T) {
 	svc, db, ctx := newCleanupTestService(t)
 	seedCleanupFixtures(t, db, ctx, svc)
 
-	deleted := svc.MigrateCleanupOrphanChapters(ctx)
+	deleted, err := svc.MigrateCleanupOrphanChapters(ctx)
+	if err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
 	if deleted != 1 {
 		t.Fatalf("deleted = %d, want 1 (only the unmatchable orphan)", deleted)
 	}
@@ -190,8 +193,8 @@ func TestMigrateCleanupOrphanChapters(t *testing.T) {
 	}
 
 	// 幂等：重跑不再删除任何章节。
-	if again := svc.MigrateCleanupOrphanChapters(ctx); again != 0 {
-		t.Errorf("second run deleted %d chapters, want 0 (idempotent)", again)
+	if again, err := svc.MigrateCleanupOrphanChapters(ctx); err != nil || again != 0 {
+		t.Errorf("second run deleted %d chapters (err=%v), want 0 (idempotent)", again, err)
 	}
 }
 
@@ -220,7 +223,10 @@ func TestMigrateCleanupOrphanChaptersEmptyOutline(t *testing.T) {
 		t.Fatalf("seed empty outline: %v", err)
 	}
 
-	deleted := svc.MigrateCleanupOrphanChapters(ctx)
+	deleted, err := svc.MigrateCleanupOrphanChapters(ctx)
+	if err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
 	if deleted != 2 {
 		t.Fatalf("deleted = %d, want 2 (chapters under empty/absent outlines are all orphans)", deleted)
 	}

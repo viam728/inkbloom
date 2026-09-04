@@ -6,6 +6,7 @@ from typing import Any
 
 from app.llm.base import BaseLLMProvider
 from app.config import settings
+from app.knowledge.errors import ExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,11 @@ class EntityExtractor:
 
         except json.JSONDecodeError as e:
             logger.error("Failed to parse entity JSON: %s, content: %s", e, result.content[:200])
-            return []
+            # F3-3: a parse failure is an AI fault, not "no entities" —
+            # raise so the endpoint can answer degraded instead of 200 [].
+            raise ExtractionError(f"entity extraction: unparseable LLM output: {e}") from e
+        except ExtractionError:
+            raise
         except Exception as e:
             logger.error("Entity extraction failed: %s", e)
-            return []
+            raise ExtractionError(f"entity extraction failed: {e}") from e

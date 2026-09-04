@@ -2,6 +2,7 @@ import axios, { type InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { toast } from '@/components/common/Toast';
+import { flushAllDrafts, hasAnyDraft } from '@/utils/draft-vault';
 
 /** 附加到请求配置上的鉴权控制标记 */
 interface AuthAwareConfig extends InternalAxiosRequestConfig {
@@ -82,13 +83,18 @@ apiClient.interceptors.response.use(
         retryConfig.headers.Authorization = `Bearer ${useAuthStore.getState().access_token}`;
         return apiClient(retryConfig);
       }
-      // 续期失败：清空会话，App 依据 status 条件渲染回到登录页
+      // 续期失败：先把未落盘的本地草稿兜底写满（F2-2），再清空会话 ——
+      // 编辑树会随 guest 态整体卸载，此后的 flush 时机不复存在
+      flushAllDrafts();
       useAuthStore.setState({
         access_token: null,
         refresh_token: null,
         user: null,
         status: 'guest',
       });
+      if (hasAnyDraft()) {
+        toast.show('登录已过期，未保存的草稿已暂存本地，重新登录后自动恢复', 'info');
+      }
     }
 
     const msg = error.response?.data?.message || error.message;

@@ -19,6 +19,8 @@ export interface AgentGenerateRequest {
   item_id?: string;
   node_id?: string;
   instruction?: string;
+  /** 调用方选定的模型（空则 ai-service 默认）；场景模型配置经此透传 */
+  model?: string;
 }
 
 export interface AgentGenerateResult {

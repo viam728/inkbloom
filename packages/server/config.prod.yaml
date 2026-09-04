@@ -1,0 +1,36 @@
+# InkBloom production configuration (F1-6).
+# Mount into the container: -v ./packages/server/config.prod.yaml:/app/config.yaml
+# Secrets are NEVER placed in this file - they come from the environment
+# (INKBLOOM_JWT_SECRET etc., see .env.example).
+
+server:
+  port: 8080
+  mode: release
+  # Production domains go through INKBLOOM_SERVER_CORS_ORIGINS (comma list).
+  cors_origins: []
+
+log:
+  level: info
+  format: json
+
+# No static backdoor token. No legacy token bypass.
+auth:
+  token: ""
+  legacy_token: false
+
+jwt:
+  # Empty here on purpose: INKBLOOM_JWT_SECRET must be injected via env.
+  secret: ""
+  access_ttl: 2h
+  refresh_ttl: 720h
+
+admin:
+  # Ships empty - inject real operator phones via INKBLOOM_ADMIN_PHONES.
+  phones: []
+
+rollout:
+  percent: 100
+  features:
+    token_billing: true
+    desktop_download: true
+    feedback: true

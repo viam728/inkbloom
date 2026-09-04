@@ -25,7 +25,8 @@ log:
   format: console  # console/json
 
 auth:
-  token: inkbloom-dev-token
+  # 内测安全（F1）：不再内置任何静态后门口令。
+  token: ""
   # 过渡后门：置 true 时旧静态 token 仍可通过鉴权（回滚用，默认关闭）
   legacy_token: false
 
@@ -40,8 +41,9 @@ ai_service:
   url: http://localhost:8100
 
 admin:
-  # 手机号命中者在登录/注册时自动提升为运营角色（role>=1）
-  phones: ["13800000000"]
+  # 手机号命中者在登录/注册时自动提升为运营角色（role>=1）。
+  # 默认为空；生产通过 INKBLOOM_ADMIN_PHONES 显式注入。
+  phones: []
 
 rollout:
   # 灰度百分比（0-100）：已登录用户 uid % 100 < percent 时 flags.enabled=true

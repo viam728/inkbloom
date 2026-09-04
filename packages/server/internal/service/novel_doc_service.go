@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -52,6 +53,18 @@ type NovelDocService struct {
 	docRepo           repository.NovelDocRepository
 	chapterRepo       repository.ChapterRepository
 	outlineVersionRepo repository.OutlineVersionRepository
+}
+
+// WithDocRepo returns a shallow copy of the service whose document writes go
+// through the given repo (a transaction-bound instance during the atomic
+// restore, F1-7). The copy shares the other dependencies by design.
+func (s *NovelDocService) WithDocRepo(dr repository.NovelDocRepository) *NovelDocService {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	clone.docRepo = dr
+	return &clone
 }
 
 // NewNovelDocService creates a new NovelDocService.
@@ -366,14 +379,18 @@ func (s *NovelDocService) BindChapterToOutline(ctx context.Context, userID, nove
 // for server startup; returns the number of chapters deleted. Best-effort:
 // per-novel failures are logged and skipped; a corrupt outline document skips
 // the novel entirely rather than risk mass-deleting chapters.
-func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int {
+// MigrateCleanupOrphanChapters deletes chapters no longer bound to any
+// outline node (deprecated article-library data). Chapters are soft-deleted
+// and deletions are logged with full ids. Returns the deletion count; the
+// error surfaces store-level failures so startup can refuse to continue
+// rather than silently skipping the migration (F1-7).
+func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) (int, error) {
 	if s == nil || s.novelRepo == nil || s.chapterRepo == nil {
-		return 0
+		return 0, nil
 	}
 	novels, err := s.novelRepo.ListAll(ctx)
 	if err != nil {
-		zap.L().Warn("orphan-chapter cleanup: list novels failed", zap.Error(err))
-		return 0
+		return 0, fmt.Errorf("orphan-chapter cleanup: list novels: %w", err)
 	}
 	deleted := 0
 	for _, n := range novels {
@@ -394,20 +411,13 @@ func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int 
 		}
 
 		// 1) Phantom repair: drop chapter_id bindings that reference
-		// non-existent chapters.
+		// non-existent chapters, and clear duplicate bindings (one chapter per
+		// node). boundOrder is the outline-ordered list of still-valid ids.
 		existing := make(map[int64]bool, len(chapters))
 		for _, ch := range chapters {
 			existing[ch.ID] = true
 		}
-		changed := false
-		for _, act := range acts {
-			for _, node := range actNodes(act) {
-				if id, ok := node["chapter_id"].(float64); ok && !existing[int64(id)] {
-					delete(node, "chapter_id")
-					changed = true
-				}
-			}
-		}
+		acts, changed, _ := sanitizeOutlineBindings(acts, existing)
 
 		// 2) Title rebind: content chapters first, then empty shells, so real
 		// work wins duplicate-title matches.
@@ -422,6 +432,9 @@ func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int 
 				changed = true
 			}
 		}
+		// Recompute the outline-ordered bound ids after rebinding so the
+		// position resync below reflects the repaired bindings.
+		_, _, boundOrder := sanitizeOutlineBindings(acts, existing)
 
 		// 3) Persist the repaired outline, then delete whatever is still
 		// unreferenced (deprecated article-library data).
@@ -449,6 +462,14 @@ func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int 
 			}
 			removed++
 		}
+		// 4) Resync positions to outline order (备忘录 L57). Re-read after the
+		// orphan deletes so the surviving set drives the rewrite.
+		if survivors, serr := s.chapterRepo.ListByNovelID(ctx, n.UserID, n.ID); serr == nil {
+			if rerr := s.resyncChapterPositionsToOutline(ctx, n.UserID, n.ID, boundOrder, survivors); rerr != nil {
+				zap.L().Warn("orphan-chapter cleanup: resync positions failed",
+					zap.Int64("novel_id", n.ID), zap.Error(rerr))
+			}
+		}
 		if removed == 0 {
 			continue
 		}
@@ -462,7 +483,7 @@ func (s *NovelDocService) MigrateCleanupOrphanChapters(ctx context.Context) int 
 		zap.L().Info("orphan-chapter cleanup removed deprecated article-library chapters",
 			zap.Int("deleted", deleted))
 	}
-	return deleted
+	return deleted, nil
 }
 
 // bindChaptersToOutline binds the given chapters into the outline acts and
@@ -590,4 +611,133 @@ func appendChapterNode(acts []map[string]any, ch model.Chapter) []map[string]any
 	nodes := actNodes(last)
 	last["nodes"] = append(nodes, node)
 	return acts
+}
+
+// sanitizeOutlineBindings enforces the one-chapter-per-node invariant (备忘录
+// L57/59: 大纲与章节唯一绑定) and repairs the two corruptions that produced the
+// wrong "第N章" numbering:
+//
+//   - phantom bindings: a node whose chapter_id points at a chapter that no
+//     longer exists (the web DEV-mock create path used to mint Date.now() ids
+//     and save them straight into the outline) — the binding is dropped;
+//   - duplicate bindings: the same chapter bound by several nodes — only the
+//     first node keeps the binding, later ones are cleared.
+//
+// Returns the (possibly mutated) acts, whether anything changed, and the
+// outline-ordered list of still-valid bound chapter ids (acts→nodes array order).
+func sanitizeOutlineBindings(acts []map[string]any, existing map[int64]bool) ([]map[string]any, bool, []int64) {
+	changed := false
+	seen := make(map[int64]bool, len(acts))
+	boundOrder := make([]int64, 0, len(acts))
+	for _, act := range acts {
+		for _, node := range actNodes(act) {
+			if node == nil {
+				continue
+			}
+			idf, ok := node["chapter_id"].(float64)
+			if !ok {
+				continue
+			}
+			id := int64(idf)
+			if !existing[id] || seen[id] {
+				delete(node, "chapter_id")
+				changed = true
+				continue
+			}
+			seen[id] = true
+			boundOrder = append(boundOrder, id)
+		}
+	}
+	return acts, changed, boundOrder
+}
+
+// resyncChapterPositionsToOutline rewrites chapters.position so it always
+// mirrors outline order (备忘录 L57): chapters bound to outline nodes come
+// first in acts→nodes array order, unbound chapters follow in their current
+// order. This is the single fix for the "第0章 / 第19章" misnumbering — the
+// display layer reads position, and position was an ad-hoc auto-increment that
+// drifted from the outline. The write is skipped when positions already match,
+// so ordinary saves don't churn updated_at. chapters must be position-ascending.
+func (s *NovelDocService) resyncChapterPositionsToOutline(
+	ctx context.Context, userID, novelID int64, boundOrder []int64, chapters []model.Chapter,
+) error {
+	if len(chapters) == 0 {
+		return nil
+	}
+	byID := make(map[int64]bool, len(chapters))
+	for _, c := range chapters {
+		byID[c.ID] = true
+	}
+	ordered := make([]int64, 0, len(chapters))
+	placed := make(map[int64]bool, len(chapters))
+	for _, id := range boundOrder {
+		if byID[id] && !placed[id] {
+			ordered = append(ordered, id)
+			placed[id] = true
+		}
+	}
+	for _, c := range chapters {
+		if !placed[c.ID] {
+			ordered = append(ordered, c.ID)
+			placed[c.ID] = true
+		}
+	}
+	// Already in outline order: nothing to do.
+	drifted := false
+	for i := range ordered {
+		if chapters[i].ID != ordered[i] {
+			drifted = true
+			break
+		}
+	}
+	if !drifted {
+		return nil
+	}
+	return s.chapterRepo.ReorderByIDs(ctx, userID, novelID, ordered)
+}
+
+// SyncOutlineChapterOrder enforces the outline↔chapter invariants after a
+// web-panel outline save (备忘录 L57/59): drop phantom / duplicate chapter_id
+// bindings (one chapter per node), persist the repaired outline, then rewrite
+// chapters.position to mirror the outline order so "第N章" numbering stops
+// drifting.
+//
+// It is deliberately a SEPARATE call from UpdateOutline — the whole-novel
+// version restore writes the outline inside a DB transaction and must not have
+// chapter-repo reads / a nested reordering transaction interleaved with it
+// (SQLite shared-cache write lock). The web PUT handler runs it after a
+// committed UpdateOutline, outside any transaction.
+func (s *NovelDocService) SyncOutlineChapterOrder(ctx context.Context, userID, novelID int64) error {
+	if s == nil || s.chapterRepo == nil || s.docRepo == nil {
+		return nil
+	}
+	doc, err := s.docRepo.GetOutline(ctx, userID, novelID)
+	if err != nil {
+		return err
+	}
+	acts, ok := parseOutlineActs(normalizeOutlineActsJSON(json.RawMessage(doc.Acts)))
+	if !ok {
+		return nil
+	}
+	chapters, cerr := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
+	if cerr != nil {
+		return cerr
+	}
+	existing := make(map[int64]bool, len(chapters))
+	for _, ch := range chapters {
+		existing[ch.ID] = true
+	}
+	acts, changed, boundOrder := sanitizeOutlineBindings(acts, existing)
+	if changed {
+		out, merr := json.Marshal(acts)
+		if merr != nil {
+			return merr
+		}
+		if uerr := s.docRepo.UpsertOutline(ctx, &model.NovelOutline{
+			UserID: userID, NovelID: novelID, Acts: datatypes.JSON(out),
+		}); uerr != nil {
+			return uerr
+		}
+	}
+	return s.resyncChapterPositionsToOutline(ctx, userID, novelID, boundOrder, chapters)
 }

@@ -8,6 +8,8 @@ interface ToastItem {
   id: number;
   message: string;
   type: ToastType;
+  /** F2-8：相同文案的合并计数（≥2 时展示 ×N） */
+  repeat?: number;
 }
 
 interface ToastContextValue {
@@ -35,7 +37,18 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const showToast = useCallback((message: string, type: ToastType = 'info') => {
     const id = nextId++;
-    setToasts((prev) => [...prev, { id, message, type }]);
+    setToasts((prev) => {
+      // F2-8：相同文案合并为一条计数提示（多图逐个失败、并发 402 曾纵向
+      // 堆叠遮挡界面）；总数上限 3 条，最旧的先被挤掉。
+      const existing = prev.find((t) => t.message === message);
+      if (existing) {
+        return prev.map((t) =>
+          t.message === message ? { ...t, repeat: (t.repeat ?? 1) + 1 } : t,
+        );
+      }
+      const next = [...prev, { id, message, type }];
+      return next.length > 3 ? next.slice(next.length - 3) : next;
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3000);
@@ -76,6 +89,11 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             >
               {styleMap[t.type].icon}
               {t.message}
+              {(t.repeat ?? 1) > 1 && (
+                <span className="ml-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-neutral-300">
+                  ×{t.repeat}
+                </span>
+              )}
             </div>
           ))}
         </div>,

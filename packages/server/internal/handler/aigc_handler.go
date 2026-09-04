@@ -247,16 +247,22 @@ func (h *AIGCHandler) GenerateImage(c *gin.Context) {
 	if err := h.engine.Submit(c.Request.Context(), task); err != nil {
 		if charged {
 			// Compensating refund: the task was never created, so the user
-			// must not pay for it.
+			// must not pay for it. The refund must outlive the request —
+			// Submit may fail *because* the client went away (cancelled ctx),
+			// in which case a request-bound write would silently drop the
+			// refund and the user would have paid with nothing delivered.
 			refType := model.LedgerRefTypeTask
 			refID := task.ID
 			endpoint := "/api/v1/aigc/generate"
-			if refundErr := h.tokenService.Refund(c.Request.Context(), GetUserID(c), model.ImageGenUnits, service.ConsumeMeta{
+			refundCtx, refundCancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+			refundErr := h.tokenService.Refund(refundCtx, GetUserID(c), model.ImageGenUnits, service.ConsumeMeta{
 				Reason:   model.LedgerReasonRefund,
 				RefType:  &refType,
 				RefID:    &refID,
 				Endpoint: &endpoint,
-			}); refundErr != nil {
+			})
+			refundCancel()
+			if refundErr != nil {
 				h.logger.Error("failed to refund image generation fee",
 					zap.String("task_id", task.ID),
 					zap.Int64("units", model.ImageGenUnits),
@@ -584,7 +590,9 @@ func (h *AIGCHandler) GetAsset(c *gin.Context) {
 		return
 	}
 
-	asset, err := h.assetRepo.GetByID(c.Request.Context(), id)
+	// User-scoped lookup (F1-4): a foreign id degrades to "not found" so
+	// asset enumeration reveals nothing.
+	asset, err := h.assetRepo.GetByUserAndID(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "asset not found"})
 		return

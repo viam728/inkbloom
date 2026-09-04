@@ -262,11 +262,16 @@ const ChapterReader: React.FC<ChapterReaderProps> = ({ chapter, chapters, workId
   // 页面隐藏时立即上报
   useEffect(() => {
     const onHide = () => reportProgress(true);
-    document.addEventListener('visibilitychange', () => {
+    // F2-8：此前只 add 不 remove，每次切章累积一个监听器、重复上报
+    const onVisibility = () => {
       if (document.visibilityState === 'hidden') onHide();
-    });
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onHide);
-    return () => window.removeEventListener('pagehide', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onHide);
+    };
   }, [reportProgress]);
 
   const themeVars: React.CSSProperties = {

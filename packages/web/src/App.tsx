@@ -4,6 +4,7 @@ import AppLayout from '@/components/layout/AppLayout';
 import TopBar from '@/components/layout/TopBar';
 import TaskStatusBar from '@/components/aigc/TaskStatusBar';
 import { ToastProvider } from '@/components/common/Toast';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
 import AuthPage from '@/components/auth/AuthPage';
 import LandingPage from '@/components/landing/LandingPage';
 import LegalPage from '@/components/legal/LegalPage';
@@ -21,6 +22,7 @@ import { useTokenStore } from '@/stores/token-store';
 import { useFlagsStore } from '@/stores/flags-store';
 import { isDesktopShell } from '@/utils/platform';
 import { useUIStore } from '@/stores/ui-store';
+import { flushAllDrafts, hasAnyDraft } from '@/utils/draft-vault';
 
 /** 桌面端匿名本地用户标记（v2 §3.4）：与内嵌 server 的 uid=0 放行对应 */
 const LOCAL_ANON_USER = {
@@ -131,26 +133,54 @@ function App() {
     void useFlagsStore.getState().fetchFlags().catch(() => {});
   }, []);
 
+  // F2-5：全局兜底。beforeunload 在存在未落盘草稿时二次确认；
+  // unhandledrejection/window.onerror 把「点了没反应」的静默异常显性化。
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasAnyDraft()) return;
+      // 草稿兜底层本身在这里落满，用户选择留下后内容也不丢
+      flushAllDrafts();
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    const onUnhandledRejection = (e: PromiseRejectionEvent) => {
+      console.error('[Unhandled Rejection]', e.reason);
+    };
+    const onError = (e: ErrorEvent) => {
+      console.error('[Window Error]', e.message);
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    window.addEventListener('error', onError);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+      window.removeEventListener('error', onError);
+    };
+  }, []);
+
   return (
     <ToastProvider>
-      {(() => {
-        // 法务文档页（v2 §9.2）：/legal/:slug 无需登录，直接渲染
-        const legalMatch = window.location.pathname.match(/^\/legal\/([\w-]+)/);
-        if (legalMatch) {
-          return <LegalPage slug={legalMatch[1]} />;
-        }
-        // 公开阅读页（业务方案 v3 E4，施工任务 A19）：/read/:slug[/:pid]
-        // 免登录，必须在 status 判断之前——未登录读者正是它的用户
-        const readMatch = window.location.pathname.match(/^\/read\/([\w-]+)(?:\/(\d+))?/);
-        if (readMatch) {
-          return <ReaderPage slug={readMatch[1]} chapterId={readMatch[2]} />;
-        }
-        // 发现页 / 社区首页：/discover 匿名可访问（飞轮入口）
-        if (window.location.pathname === '/discover') {
-          return <DiscoverPage />;
-        }
-        return status === 'authed' ? <AuthenticatedApp /> : status === 'guest' ? <GuestApp /> : <BootSplash />;
-      })()}
+      <ErrorBoundary label="应用">
+        {(() => {
+          // 法务文档页（v2 §9.2）：/legal/:slug 无需登录，直接渲染
+          const legalMatch = window.location.pathname.match(/^\/legal\/([\w-]+)/);
+          if (legalMatch) {
+            return <LegalPage slug={legalMatch[1]} />;
+          }
+          // 公开阅读页（业务方案 v3 E4，施工任务 A19）：/read/:slug[/:pid]
+          // 免登录，必须在 status 判断之前——未登录读者正是它的用户
+          const readMatch = window.location.pathname.match(/^\/read\/([\w-]+)(?:\/(\d+))?/);
+          if (readMatch) {
+            return <ReaderPage slug={readMatch[1]} chapterId={readMatch[2]} />;
+          }
+          // 发现页 / 社区首页：/discover 匿名可访问（飞轮入口）
+          if (window.location.pathname === '/discover') {
+            return <DiscoverPage />;
+          }
+          return status === 'authed' ? <AuthenticatedApp /> : status === 'guest' ? <GuestApp /> : <BootSplash />;
+        })()}
+      </ErrorBoundary>
     </ToastProvider>
   );
 }

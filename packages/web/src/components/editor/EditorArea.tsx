@@ -10,7 +10,8 @@ import { useNovelStore } from '@/stores/novel-store';
 import { useEditorStore } from '@/stores/editor-store';
 import { useUIStore } from '@/stores/ui-store';
 import { useStatsStore } from '@/stores/stats-store';
-import { useTabStore, countDraftWords } from '@/stores/tab-store';
+import { useTabStore, countDraftWords, chapterTabKey } from '@/stores/tab-store';
+import { saveDraft, loadDraft } from '@/utils/draft-vault';
 import TipTapEditor from './TipTapEditor';
 import NovelOverview from './NovelOverview';
 import StoryWorkflowPanel from '@/components/story/StoryWorkflowPanel';
@@ -32,6 +33,8 @@ const EditorArea: React.FC = () => {
   const tabs = useTabStore((s) => s.tabs);
   const activeKey = useTabStore((s) => s.activeKey);
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  // F2-4：保存重试耗尽后的常驻横幅开关
+  const offlineUnsaved = useEditorStore((s) => s.offlineUnsaved);
 
   // 写作统计：正增长计入当日仪表盘（以各 tab 自身 wordCount 为基线）
   const addWords = useStatsStore((s) => s.addWords);
@@ -47,7 +50,14 @@ const EditorArea: React.FC = () => {
       timersRef.current.delete(key);
     }
     const tab = useTabStore.getState().tabs.find((t) => t.key === key);
-    if (tab?.kind === 'chapter' && tab.chapterId != null && tab.isDirty && tab.saveStatus !== 'saving') {
+    // loadError（F2-8）：内容可能不完整，禁止把不完整草稿覆盖到服务器
+    if (
+      tab?.kind === 'chapter' &&
+      tab.chapterId != null &&
+      tab.isDirty &&
+      !tab.loadError &&
+      tab.saveStatus !== 'saving'
+    ) {
       void useEditorStore.getState().saveChapter(tab.chapterId, tab.draft);
     }
   }, []);
@@ -60,6 +70,13 @@ const EditorArea: React.FC = () => {
     const existing = st.tabs.find((t) => t.chapterId === currentChapter.id);
     if (!existing) {
       st.openTab(currentChapter.id, currentChapter.title, currentChapter.content || '');
+      // 本地兜底恢复（F2-3）：vault 中存在该章遗留草稿 = 上次保存未成功，
+      // 优先于服务器内容，避免防抖窗口内刷新/断网导致最后输入丢失。
+      const key = chapterTabKey(currentChapter.id);
+      const saved = loadDraft(key);
+      if (saved != null && saved !== (currentChapter.content || '')) {
+        st.updateTab(key, { draft: saved, isDirty: true, wordCount: countDraftWords(saved) });
+      }
       return;
     }
     if (st.activeKey !== existing.key) st.setActive(existing.key);
@@ -92,6 +109,8 @@ const EditorArea: React.FC = () => {
     const key = st.activeKey;
     if (!key) return;
     st.updateTab(key, { draft: html, isDirty: true });
+    // 本地兜底同步写（F2-3）：1s 节流，保存成功后由 saveChapter 清除
+    saveDraft(key, html);
     const prev = timersRef.current.get(key);
     if (prev) clearTimeout(prev);
     timersRef.current.set(
@@ -99,7 +118,13 @@ const EditorArea: React.FC = () => {
       setTimeout(() => {
         timersRef.current.delete(key);
         const tab = useTabStore.getState().tabs.find((t) => t.key === key);
-        if (tab?.kind === 'chapter' && tab.chapterId != null && tab.isDirty && tab.saveStatus !== 'saving') {
+        if (
+          tab?.kind === 'chapter' &&
+          tab.chapterId != null &&
+          tab.isDirty &&
+          !tab.loadError &&
+          tab.saveStatus !== 'saving'
+        ) {
           void useEditorStore.getState().saveChapter(tab.chapterId, tab.draft);
         }
       }, SAVE_DEBOUNCE_MS),
@@ -341,12 +366,46 @@ const EditorArea: React.FC = () => {
       {/* 编辑器 / 中央面板：章节 tab 走单实例 TipTap；panel 类 tab 常驻挂载（hidden 切换）保留编辑状态 */}
       <div className="flex-1 overflow-hidden relative">
         {activeTab.kind === 'chapter' && (
-          <TipTapEditor
-            content={activeTab.draft}
-            onChange={handleChange}
-            onWordCount={handleWordCount}
-            titleSlot={titleSlot}
-          />
+          <>
+            {/* F2-8：正文加载失败警示 —— 内容可能不完整，动笔会覆盖正文 */}
+            {activeTab.loadError && (
+              <div className="flex items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+                <span>章节内容加载失败，当前展示可能不完整。请先重试加载，确认完整后再编辑。</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded border border-amber-400/40 px-2 py-0.5 text-amber-200 hover:bg-amber-400/10"
+                  onClick={() => {
+                    const chapter = useNovelStore.getState().chapters.find(
+                      (c) => c.id === activeTab.chapterId,
+                    );
+                    if (chapter) void useNovelStore.getState().selectChapter(chapter);
+                  }}
+                >
+                  重新加载
+                </button>
+              </div>
+            )}
+            {/* F2-4：保存连续失败且自动重试耗尽后的常驻横幅 */}
+            {offlineUnsaved && (
+              <div className="flex items-center justify-between gap-3 border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+                <span>内容尚未保存到云端（已暂存本地），请检查网络后重试。</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded border border-red-400/40 px-2 py-0.5 text-red-200 hover:bg-red-400/10"
+                  onClick={() => useEditorStore.getState().retryFailedSaves()}
+                >
+                  立即重试
+                </button>
+              </div>
+            )}
+            <TipTapEditor
+              key={activeTab.key}
+              content={activeTab.draft}
+              onChange={handleChange}
+              onWordCount={handleWordCount}
+              titleSlot={titleSlot}
+            />
+          </>
         )}
         {tabs
           .filter((t) => t.kind !== 'chapter')

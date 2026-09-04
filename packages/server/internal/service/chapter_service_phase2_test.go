@@ -91,7 +91,7 @@ func TestAgentGetChapterByTitleTool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed chapter: %v", err)
 	}
-	agent := NewAgentService(nil, cs, nil, nil, "http://127.0.0.1:1", zap.NewNop())
+	agent := NewAgentService(nil, cs, nil, nil, nil, "http://127.0.0.1:1", zap.NewNop())
 
 	// Found.
 	res := agent.executeTool(context.Background(), userID, novelID, agentToolCall{
@@ -138,7 +138,7 @@ func TestAgentCreateChapterDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed chapter: %v", err)
 	}
-	agent := NewAgentService(nil, cs, nil, nil, "http://127.0.0.1:1", zap.NewNop())
+	agent := NewAgentService(nil, cs, nil, nil, nil, "http://127.0.0.1:1", zap.NewNop())
 
 	res := agent.executeTool(context.Background(), userID, novelID, agentToolCall{
 		Name:      "create_chapter",
@@ -187,7 +187,7 @@ func TestAgentWriteChapterMissingChapterFailsFast(t *testing.T) {
 	seedNovel(t, db, userID, novelID)
 	cs := NewChapterService(repository.NewChapterRepository(db), repository.NewNovelRepository(db),
 		cache.NewCacheManager(kvstore.NewMemStore(), zap.NewNop()), nil, config.VersionHistoryConfig{})
-	agent := NewAgentService(nil, cs, nil, nil, "http://127.0.0.1:1", zap.NewNop())
+	agent := NewAgentService(nil, cs, nil, nil, nil, "http://127.0.0.1:1", zap.NewNop())
 
 	res := agent.executeTool(context.Background(), userID, novelID, agentToolCall{
 		Name:      "write_chapter",
@@ -204,7 +204,7 @@ func TestAgentCreateChapterNewTitleStillCreates(t *testing.T) {
 	cs, db := newTestChapterServiceForAgent(t)
 	const userID, novelID = int64(1), int64(54)
 	seedNovel(t, db, userID, novelID)
-	agent := NewAgentService(nil, cs, nil, nil, "http://127.0.0.1:1", zap.NewNop())
+	agent := NewAgentService(nil, cs, nil, nil, nil, "http://127.0.0.1:1", zap.NewNop())
 
 	res := agent.executeTool(context.Background(), userID, novelID, agentToolCall{
 		Name:      "create_chapter",

@@ -10,6 +10,7 @@ import (
 	"github.com/inkbloom/server/internal/config"
 	"github.com/inkbloom/server/internal/handler"
 	"github.com/inkbloom/server/internal/middleware"
+	"github.com/inkbloom/server/internal/pkg/assetguard"
 	"github.com/inkbloom/server/internal/pkg/authtoken"
 	"github.com/inkbloom/server/internal/pkg/signedurl"
 	"github.com/inkbloom/server/internal/pkg/storage"
@@ -91,7 +92,11 @@ type Handlers struct {
 	Writable middleware.WritabilityChecker
 	// Tokens signs/validates JWTs for the AuthJWT middleware.
 	Tokens *authtoken.Manager
-	WSHub  *WSHub
+	// AssetGuard derives per-path ownership for the static /assets/files
+	// route and the /assets/sign issuance endpoint. Required in production:
+	// a nil guard denies every asset request (fail-closed).
+	AssetGuard *assetguard.Guardian
+	WSHub      *WSHub
 	// RateLimiter enforces the site-wide quotas (tech plan v2 §5.1).
 	// Optional: nil disables rate limiting (tests / dev).
 	RateLimiter *middleware.RateLimiter
@@ -141,9 +146,9 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		rel := c.Param("filepath")
 		// C11 (asset auth): a request may hold either a valid signed URL
 		// (uid/sig/exp query, for <img> tags that cannot send a header) or a
-		// valid Bearer access token (for API clients). Anything else is denied
-		// so private media/memo/draft assets are no longer world-readable.
-		if !assetRequestAllowed(c, h.Tokens, rel) {
+		// valid Bearer access token (for API clients). Transport validity
+		// alone is not enough — ownership is re-derived per path (F1-4).
+		if !assetRequestAllowed(c, h.Tokens, h.AssetGuard, rel) {
 			c.String(http.StatusForbidden, "403 forbidden")
 			return
 		}
@@ -324,6 +329,10 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 	// Payment channel callbacks: no AuthJWT (callbacks come from the
 	// payment channel, not the user). Sandbox uses the same entry.
 	if h.Payment != nil {
+		// F4-6: the notify route stays dynamic, but PaymentHandler.Notify
+		// refuses (404) any channel that is not registered with the service,
+		// and fulfillment only happens after the channel signature verifies.
+		// The sandbox channel is only registered in local mode (config wiring).
 		payGroup := engine.Group("/api/v1/payment")
 		{
 			payGroup.POST("/notify/:channel", h.Payment.Notify)
@@ -364,13 +373,21 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 	{
 		// Asset signing (C11): returns a signed URL for a stored asset path so
 		// the frontend can render <img> tags without an Authorization header.
+		// The caller must own the asset (F1-4): a signature only binds
+		// (uid, path), so signing a foreign path would mint a valid URL for
+		// someone else's file.
 		api.GET("/assets/sign", func(c *gin.Context) {
 			path := c.Query("path")
 			if !strings.HasPrefix(path, "/assets/files/") {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "path must start with /assets/files/"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"url": signedurl.SignURL(handler.GetUserID(c), path)})
+			uid := handler.GetUserID(c)
+			if h.AssetGuard == nil || !h.AssetGuard.Owns(c.Request.Context(), uid, path) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"url": signedurl.SignURL(uid, path)})
 		})
 
 		// Subscription & payment (M3 billing, task #39)
@@ -694,12 +711,19 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 
 // assetRequestAllowed reports whether an asset request is authorized for
 // filepath (the /assets/files wildcard value, with its leading slash).
-// It accepts a valid signed URL (uid/sig/exp) or a valid Bearer access token,
-// so private media/memo/draft assets are no longer world-readable (C11).
-func assetRequestAllowed(c *gin.Context, tokens *authtoken.Manager, filepath string) bool {
+// A request may hold either a valid signed URL (uid/sig/exp) or a valid
+// Bearer access token (C11). Both transports only authenticate — a signature
+// binds (uid, path) and a token proves "some logged-in user" — so ownership
+// is additionally re-derived from the path (F1): the requesting uid must own
+// the asset, or the request is denied.
+func assetRequestAllowed(c *gin.Context, tokens *authtoken.Manager, guard *assetguard.Guardian, filepath string) bool {
+	fullPath := "/assets/files" + filepath
 	uid, sig, exp := signedurl.ParseQuery(c.Request.URL.Query())
 	if sig != "" {
-		return signedurl.Verify(uid, "/assets/files"+filepath, sig, exp)
+		if !signedurl.Verify(uid, fullPath, sig, exp) {
+			return false
+		}
+		return ownsAsset(c, guard, uid, fullPath)
 	}
 	if tokens == nil {
 		return false
@@ -708,6 +732,23 @@ func assetRequestAllowed(c *gin.Context, tokens *authtoken.Manager, filepath str
 	if !strings.HasPrefix(auth, "Bearer ") {
 		return false
 	}
-	_, err := tokens.Parse(strings.TrimPrefix(auth, "Bearer "))
-	return err == nil
+	claims, err := tokens.Parse(strings.TrimPrefix(auth, "Bearer "))
+	if err != nil {
+		return false
+	}
+	bearerUID, err := claims.UID()
+	if err != nil {
+		return false
+	}
+	return ownsAsset(c, guard, bearerUID, fullPath)
+}
+
+// ownsAsset consults the assetguard for (uid, path). A nil guard denies
+// everything: production must wire one, tests that hit the static route must
+// construct it explicitly.
+func ownsAsset(c *gin.Context, guard *assetguard.Guardian, uid int64, fullPath string) bool {
+	if guard == nil {
+		return false
+	}
+	return guard.Owns(c.Request.Context(), uid, fullPath)
 }

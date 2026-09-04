@@ -16,6 +16,7 @@ from app.config import settings
 from app.grpc_server.ai_servicer import AIServiceServicer
 from app.grpc_server.generated import ai_service_pb2_grpc
 from app.knowledge.entity_extractor import EntityExtractor
+from app.knowledge.errors import ExtractionError
 from app.knowledge.relation_extractor import RelationExtractor
 from app.knowledge.consistency_checker import ConsistencyChecker
 from app.knowledge.foreshadow_extractor import ForeshadowExtractor
@@ -34,7 +35,16 @@ logger = logging.getLogger(__name__)
 
 def create_grpc_server() -> grpc_aio.Server:
     """Create and configure the gRPC server."""
-    server = grpc_aio.server()
+    # F3-9: bound concurrent RPCs and raise the 4MB default receive limit
+    # (long-chapter ExtractEntities payloads exceeded it with
+    # RESOURCE_EXHAUSTED).
+    server = grpc_aio.server(
+        options=[
+            ("grpc.max_receive_message_length", 32 * 1024 * 1024),
+            ("grpc.max_send_message_length", 32 * 1024 * 1024),
+        ],
+        maximum_concurrent_rpcs=64,
+    )
     servicer = AIServiceServicer()
     ai_service_pb2_grpc.add_AIServiceServicer_to_server(servicer, server)
     server.add_insecure_port(f"[::]:{settings.grpc_port}")
@@ -44,6 +54,10 @@ def create_grpc_server() -> grpc_aio.Server:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage gRPC server lifecycle alongside FastAPI."""
+    # F3-2: refuse to boot with a model/endpoint/key mismatch — a broken
+    # routing config used to surface as 100% runtime failures instead.
+    settings.validate_model_routing()
+
     grpc_server = create_grpc_server()
     await grpc_server.start()
     logger.info("gRPC server started on port %d", settings.grpc_port)
@@ -109,12 +123,30 @@ def _with_identity(messages: list[dict], model: str) -> list[dict]:
 
 
 
+def _sanitize_error(exc: Exception) -> str:
+    """Scrub secrets from upstream exception text before it leaves the
+    process (F3-8): API keys and long opaque tokens never belong in SSE
+    frames or logs."""
+    import re
+
+    text = str(exc)
+    # OpenAI-style keys (sk-…) and bearer-style opaque credentials
+    text = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
+    text = re.sub(r"(?i)(api[_-]?key|authorization|bearer)[=:]\s*\S+", r"\1=***", text)
+    return text[:300]
+
+
 def _sse_stream(messages, model, temperature, max_tokens):
     """Shared SSE generator (tech plan v2 §6.3).
 
     Emits content chunks as `data: {"content": ...}` lines, then a terminal
     usage meta event `data: {"usage": {...}}` right before `[DONE]` so the
     Go proxy can settle token billing against the real upstream usage.
+
+    F3-8: failures emit a dedicated `event: error` frame instead of an
+    `[Error] …` *content* chunk — the old behavior pasted upstream exception
+    text straight into the author's prose and dropped the usage event the
+    billing middleware needs.
     """
     async def generate():
         usage: dict | None = None
@@ -139,8 +171,8 @@ def _sse_stream(messages, model, temperature, max_tokens):
                 yield f"data: {json.dumps({'usage': usage})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:
-            err = json.dumps({"content": f"[Error] {exc}"})
-            yield f"data: {err}\n\n"
+            err = json.dumps({"message": _sanitize_error(exc)})
+            yield f"event: error\ndata: {err}\n\n"
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -156,9 +188,41 @@ app.include_router(create_team_router())
 
 
 @app.get("/health")
+@app.get("/healthz")
 async def health():
-    """Health check endpoint."""
+    """Liveness probe: process is up. No dependency checks — cheap and
+    always green, so the orchestrator never restarts a healthy process."""
     return {"status": "ok"}
+
+
+# F3-8: readiness with a 30s-cached upstream ping. /health used to pass
+# while every LLM call was failing (missing key / wrong endpoint), so the
+# gateway kept routing traffic into a dead service.
+_ready_cache: dict = {"ok": None, "checked_at": 0.0, "detail": ""}
+_READY_TTL_SECONDS = 30.0
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe: LLM credentials are configured and routing validates."""
+    import time
+
+    now = time.monotonic()
+    if now - _ready_cache["checked_at"] > _READY_TTL_SECONDS or _ready_cache["ok"] is None:
+        try:
+            settings.validate_model_routing()
+            _ready_cache["ok"] = True
+            _ready_cache["detail"] = ""
+        except RuntimeError as exc:
+            _ready_cache["ok"] = False
+            _ready_cache["detail"] = str(exc)
+        _ready_cache["checked_at"] = now
+
+    if _ready_cache["ok"]:
+        return {"status": "ready"}
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=503, content={"status": "unready", "detail": _ready_cache["detail"]})
 
 
 @app.post("/api/chat/stream")
@@ -320,7 +384,13 @@ class ForeshadowResolveHTTPRequest(BaseModel):
 
 @app.post("/api/knowledge/extract")
 async def extract_knowledge(request: ExtractHTTPRequest):
-    """Extract entities and relations from text."""
+    """Extract entities and relations from text.
+
+    F3-3: an extraction failure answers `degraded=true` (aligned with the
+    foreshadow endpoints) instead of a 200 with empty lists — the Go side
+    used to treat an LLM outage as "this chapter has no entities" and
+    overwrite the knowledge graph with nothing.
+    """
     try:
         entities = await _entity_extractor.extract(
             text=request.text,
@@ -331,9 +401,23 @@ async def extract_knowledge(request: ExtractHTTPRequest):
             text=request.text,
             entities=entities,
         )
-        return {"entities": entities, "relations": relations}
+        return {"entities": entities, "relations": relations, "degraded": False}
+    except ExtractionError as exc:
+        logger.warning("Knowledge extract degraded: %s", exc)
+        return {
+            "entities": [],
+            "relations": [],
+            "degraded": True,
+            "error": _sanitize_error(exc),
+        }
     except Exception as exc:
-        return {"entities": [], "relations": [], "error": str(exc)}
+        logger.warning("Knowledge extract failed unexpectedly: %s", exc)
+        return {
+            "entities": [],
+            "relations": [],
+            "degraded": True,
+            "error": _sanitize_error(exc),
+        }
 
 
 @app.post("/api/knowledge/check")
@@ -344,9 +428,10 @@ async def check_consistency(request: ConsistencyHTTPRequest):
             text=request.text,
             entities=request.entities,
         )
-        return {"issues": issues}
+        return {"issues": issues, "degraded": False}
     except Exception as exc:
-        return {"issues": [], "error": str(exc)}
+        # F3-3: degraded=true 区分「AI 故障」与「没有一致性问题」，错误文本脱敏
+        return {"issues": [], "degraded": True, "error": _sanitize_error(exc)}
 
 
 @app.post("/api/knowledge/foreshadows/detect")

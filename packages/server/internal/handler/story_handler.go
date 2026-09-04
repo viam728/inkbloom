@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -28,7 +29,7 @@ func (h *StoryHandler) Create(c *gin.Context) {
 	}
 	job, err := h.storySvc.CreateJob(c.Request.Context(), GetUserID(c), &req)
 	if err != nil {
-		if err == service.ErrNotFound {
+		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})
 			return
 		}
@@ -43,7 +44,7 @@ func (h *StoryHandler) Get(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	job, err := h.storySvc.Get(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}
@@ -70,7 +71,7 @@ func (h *StoryHandler) List(c *gin.Context) {
 func (h *StoryHandler) Delete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err := h.storySvc.Delete(c.Request.Context(), GetUserID(c), id); err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}
@@ -89,7 +90,7 @@ func (h *StoryHandler) GenerateStage(c *gin.Context) {
 	}
 	job, err := h.storySvc.GenerateStage(c.Request.Context(), GetUserID(c), id, req.Instruction)
 	if err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}
@@ -109,7 +110,7 @@ func (h *StoryHandler) AdoptChapter(c *gin.Context) {
 	}
 	job, err := h.storySvc.AdoptChapter(c.Request.Context(), GetUserID(c), id, &req)
 	if err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}
@@ -124,7 +125,7 @@ func (h *StoryHandler) AdvanceStage(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	job, err := h.storySvc.AdvanceStage(c.Request.Context(), GetUserID(c), id)
 	if err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}
@@ -145,7 +146,7 @@ func (h *StoryHandler) SetStage(c *gin.Context) {
 	}
 	job, err := h.storySvc.SetStage(c.Request.Context(), GetUserID(c), id, req.Stage)
 	if err != nil {
-		if err == service.ErrStoryJobNotFound {
+		if errors.Is(err, service.ErrStoryJobNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "job not found"})
 			return
 		}

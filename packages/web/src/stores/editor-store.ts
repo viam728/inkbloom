@@ -3,8 +3,14 @@ import apiClient from '@/services/api-client';
 import { setLocalContent } from '@/services/local-backend';
 import { useNovelStore } from './novel-store';
 import { useTabStore, chapterTabKey, type EditorTab } from './tab-store';
+import { dropDraft } from '@/utils/draft-vault';
+import { toast } from '@/components/common/Toast';
 
 const DEV_MOCK = import.meta.env.DEV;
+
+/** 保存失败重试：指数退避基数与最大次数（F2-4） */
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_ATTEMPTS = 5;
 
 interface EditorStore {
   /** 以下四项为当前 active tab 的镜像，由 EditorArea 经 mirrorTab 灌入（供 ReviewPanel 等既有消费者读取） */
@@ -12,6 +18,10 @@ interface EditorStore {
   wordCount: number;
   isDirty: boolean;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  /** 离线未保存横幅：保存连续失败且重试耗尽后置 true，顶部常驻提醒（F2-4） */
+  offlineUnsaved: boolean;
+  /** 手动触发重试（横幅按钮 / 保存失败提示） */
+  retryFailedSaves: () => void;
 
   setContent: (content: string) => void;
   setWordCount: (count: number) => void;
@@ -28,6 +38,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   wordCount: 0,
   isDirty: false,
   saveStatus: 'idle',
+  offlineUnsaved: false,
+
+  retryFailedSaves: () => {
+    set({ offlineUnsaved: false });
+    get().flushDirtyTabs();
+  },
 
   setContent: (content) => {
     set({ content, isDirty: true });
@@ -49,12 +65,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (isActive) set({ saveStatus: 'saving' });
     try {
       await apiClient.put(`/chapters/${chapterId}`, { content: body }) as any;
+      dropDraft(tabKey);
       useTabStore.getState().updateTab(tabKey, { isDirty: false, saveStatus: 'saved' });
-      if (useTabStore.getState().activeKey === tabKey) set({ saveStatus: 'saved', isDirty: false });
-      // 刷新章节列表以更新字数等
-      const currentNovel = useNovelStore.getState().currentNovel;
-      if (currentNovel) {
-        await useNovelStore.getState().fetchChapters(currentNovel.id);
+      if (useTabStore.getState().activeKey === tabKey) {
+        set({ saveStatus: 'saved', isDirty: false, offlineUnsaved: false });
+      }
+      // F2-7：不再全量 fetchChapters（连续写作时每 2s 重拉整份列表）。
+      // 字数本地更新到章节列表；列表的权威刷新交给按需路径。
+      const wordCount = useTabStore.getState().tabs.find((t) => t.key === tabKey)?.wordCount;
+      if (wordCount != null) {
+        useNovelStore.getState().updateChapterWordCount(chapterId, wordCount);
       }
       // 通知主动提示条刷新：刚写完，伏笔的超期状态可能刚变化（业务方案 v3 A15）
       window.dispatchEvent(
@@ -65,11 +85,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       if (DEV_MOCK) {
         // 后端不可用：降级本地保存，保持无感
         setLocalContent(chapterId, body);
+        dropDraft(tabKey);
         useTabStore.getState().updateTab(tabKey, { isDirty: false, saveStatus: 'saved' });
         if (useTabStore.getState().activeKey === tabKey) set({ saveStatus: 'saved', isDirty: false });
       } else {
         useTabStore.getState().updateTab(tabKey, { saveStatus: 'error' });
         if (useTabStore.getState().activeKey === tabKey) set({ saveStatus: 'error' });
+        // F2-4：失败可感知 + 指数退避自动重试；草稿仍在本地兜底层
+        toast.show('保存失败，正在自动重试…（内容已暂存本地）', 'error');
+        scheduleSaveRetry(chapterId, body);
       }
     }
   },
@@ -96,3 +120,39 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
   },
 }));
+
+/** 活跃的重试计时器：tabKey → timer（重试成功/新保存启动时清除） */
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * F2-4：保存失败后的指数退避重试（1s/2s/4s/8s/16s，上限 5 次）。
+ * 重试期间用户继续输入会触发新的正常保存并重置 saveStatus，旧重试
+ * 到点后看到 tab 已非 error / 已保存便自动退避。
+ */
+function scheduleSaveRetry(chapterId: number, content: string): void {
+  const tabKey = chapterTabKey(chapterId);
+  const prev = retryTimers.get(tabKey);
+  if (prev) clearTimeout(prev);
+
+  let attempt = 0;
+  const attemptOnce = () => {
+    attempt += 1;
+    const tab = useTabStore.getState().tabs.find((t) => t.key === tabKey);
+    // 已被新保存接管或已保存成功：放弃这轮重试
+    if (!tab || tab.saveStatus !== 'error') {
+      retryTimers.delete(tabKey);
+      return;
+    }
+    void useEditorStore.getState().saveChapter(chapterId, content).then(() => {
+      const after = useTabStore.getState().tabs.find((t) => t.key === tabKey);
+      if (after?.saveStatus === 'error' && attempt < RETRY_MAX_ATTEMPTS) {
+        retryTimers.set(tabKey, setTimeout(attemptOnce, RETRY_BASE_MS * 2 ** attempt));
+      } else if (after?.saveStatus === 'error') {
+        // 重试耗尽：常驻横幅接管（F2-4），直到用户手动重试或保存成功
+        useEditorStore.setState({ offlineUnsaved: true });
+        retryTimers.delete(tabKey);
+      }
+    });
+  };
+  retryTimers.set(tabKey, setTimeout(attemptOnce, RETRY_BASE_MS));
+}

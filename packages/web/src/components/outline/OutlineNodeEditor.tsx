@@ -10,13 +10,14 @@ import {
   type OutlineStatus,
 } from '@/stores/outline-store';
 import { usePublishStore } from '@/stores/publish-store';
-import { useTabStore } from '@/stores/tab-store';
-import { expandOutlineToDraft } from '@/services/outline-client';
+import { useTabStore, chapterTabKey } from '@/stores/tab-store';
+import { useEditorStore } from '@/stores/editor-store';
+import { saveOutline } from '@/services/outline-client';
+import { agentGenerate } from '@/services/agent-client';
 import { trashNode } from '@/services/trash-client';
 import { resolveSceneModel } from '@/stores/ai-store';
 import { useToast } from '@/components/common/Toast';
 import TipTapEditor from '@/components/editor/TipTapEditor';
-import { htmlToPlainText } from '@/utils/html';
 import DraftPreviewModal from './DraftPreviewModal';
 
 /** 旧纯文本 summary 迁移为编辑器 HTML（幂等：已是 HTML 则原样返回） */
@@ -138,18 +139,24 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
     }
 
     try {
-      const text = await expandOutlineToDraft(
-        {
-          outlineTitle: titleDraft.trim() || '未命名章节',
-          summary: htmlToPlainText(summaryDraft),
-          memoryContext: refs,
-        },
-        resolveSceneModel('expand'),
-      );
+      // 备忘录 L61 修复：扩写走带完整上下文（大纲结构 / 前文 / 记忆 / 伏笔）的
+      // Agent 生成管线（scene=chapter），而非无上下文的轻量端点；失败如实报错，
+      // 不再静默回退本地 mock 模板（此前用户拿到的「AI 初稿」其实是假草稿）。
+      // 先落盘大纲，确保 Agent 从 DB 读到最新节点概要。
+      const latestActs = useOutlineStore.getState().byNovel[novelId];
+      if (latestActs) await saveOutline(novelId, latestActs).catch(() => {});
+      const res = await agentGenerate({
+        novel_id: novelId,
+        scene: 'chapter',
+        node_id: nodeId,
+        instruction:
+          '请基于该要点的标题与梗概、它在大纲中的位置、前文与既有设定，撰写本章完整正文。',
+        model: resolveSceneModel('expand'),
+      });
       setDraftRefs(refs);
-      setDraft(text);
-    } catch {
-      showToast('扩写失败，请重试', 'error');
+      setDraft(res.content);
+    } catch (e) {
+      showToast(`扩写失败：${e instanceof Error ? e.message : '请重试'}`, 'error');
       setExpandTarget(null);
     }
   };
@@ -172,19 +179,31 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
     setWriting(true);
     try {
       const title = expandTarget.title || '未命名章节';
-      const insertAt = computeInsertAt();
-      const chapter = await createChapter({ novel_id: novelId, title, content: draft }, insertAt);
-      updateNode(novelId, actId, nodeId, {
-        chapter_id: chapter.id,
-        status: 'drafting',
-        memory_refs: draftRefs,
-      });
-      useNovelStore.setState({ currentChapter: { ...chapter, content: draft } });
-      showToast(`初稿已写入章节「${title}」（第 ${insertAt + 1} 章）`, 'success');
+      // 备忘录 L57/59：一个要点唯一绑定一个章节。已有有效绑定时，扩写覆盖其
+      // 编辑版本正文，绝不重复建章（此前无条件 createChapter 造成同名重复章节）。
+      const linked = node?.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
+      if (linked) {
+        await useEditorStore.getState().saveChapter(linked.id, draft);
+        updateNode(novelId, actId, nodeId, { status: 'drafting', memory_refs: draftRefs });
+        useNovelStore.setState({ currentChapter: { ...linked, content: draft } });
+        const tab = useTabStore.getState().tabs.find((t) => t.key === chapterTabKey(linked.id));
+        if (tab) useTabStore.getState().updateTab(tab.key, { draft, isDirty: false, saveStatus: 'saved' });
+        showToast(`初稿已覆盖更新章节「${title}」`, 'success');
+      } else {
+        const insertAt = computeInsertAt();
+        const chapter = await createChapter({ novel_id: novelId, title, content: draft }, insertAt);
+        updateNode(novelId, actId, nodeId, {
+          chapter_id: chapter.id,
+          status: 'drafting',
+          memory_refs: draftRefs,
+        });
+        useNovelStore.setState({ currentChapter: { ...chapter, content: draft } });
+        showToast(`初稿已写入章节「${title}」（第 ${insertAt + 1} 章）`, 'success');
+      }
       setExpandTarget(null);
       setDraft(null);
     } catch {
-      showToast('后端未连接，无法创建章节，可先复制初稿', 'error');
+      showToast('后端未连接，无法保存章节，可先复制初稿', 'error');
     } finally {
       setWriting(false);
     }

@@ -129,6 +129,44 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   const variantRef = useRef<EditorVariant>(variant);
   variantRef.current = variant;
 
+  // ── F2-7：HTML/字数同步节流 ──────────────────────────────────────────
+  // getHTML + 两次全文正则是每次按键最贵的操作，节流为 300ms trailing；
+  // 卸载 / 切 tab（重挂载）时 flush，保证草稿不滞后于最后一次输入。
+  const HTML_SYNC_THROTTLE_MS = 300;
+  const htmlSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onWordCountRef = useRef(onWordCount);
+  onWordCountRef.current = onWordCount;
+
+  const flushHtmlSync = useCallback(() => {
+    if (htmlSyncTimerRef.current) {
+      clearTimeout(htmlSyncTimerRef.current);
+      htmlSyncTimerRef.current = null;
+    }
+    const ed = editorInstanceRef.current;
+    if (!ed || ed.isDestroyed) return;
+    const html = ed.getHTML();
+    onChangeRef.current(html);
+    const text = ed.state.doc.textContent;
+    const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
+    onWordCountRef.current?.(chineseChars + englishWords);
+  }, []);
+
+  const scheduleHtmlSync = useCallback(() => {
+    if (htmlSyncTimerRef.current) clearTimeout(htmlSyncTimerRef.current);
+    htmlSyncTimerRef.current = setTimeout(flushHtmlSync, HTML_SYNC_THROTTLE_MS);
+  }, [flushHtmlSync]);
+
+  // 重挂载（章节切换 re-key）前 flush 未落网的 HTML，再清节流器
+  useEffect(
+    () => () => {
+      flushHtmlSync();
+    },
+    [flushHtmlSync],
+  );
+
   /** 图片文件 → 图床上传 → 成功后在光标处插入（绝不插入无效 src 或 base64） */
   const uploadAndInsertImages = async (files: File[]) => {
     if (files.length === 0) return;
@@ -158,6 +196,9 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   const characters: Array<{ name: string; id: number }> = (currentNovel as any)?.characters ?? [];
 
   const editor = useEditor({
+    // F2-7：输入不再触发 React 重渲染（宿主通过 onChange/refs 拿数据），
+    // 万字长文的每次按键不再重绘整棵编辑器树
+    shouldRerenderOnTransaction: false,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
@@ -175,14 +216,10 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     ],
     content: content || '',
     onUpdate: ({ editor: ed }) => {
-      const html = ed.getHTML();
-      onChange(html);
-
-      // Word count
-      const text = ed.state.doc.textContent;
-      const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-      const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
-      onWordCount?.(chineseChars + englishWords);
+      // F2-7：getHTML + 全文正则统计是每次按键最贵的两步。HTML 走 300ms
+      // trailing 节流（卸载/切 tab 时 flush）；字数用文档 size 增量近似，
+      // 不再每次全文跑两遍正则。mention/slash 检测必须即时，保持原样。
+      scheduleHtmlSync();
 
       // Check for @ mention trigger（仅小说模式，plain 禁用）
       const { state } = ed;
@@ -367,6 +404,10 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     if (currentHtml === content) return;
     if (content !== '') {
       editor.commands.setContent(content);
+      // F2-1 双保险：外部换绑内容后清空撤销栈，杜绝「在 B 章 Ctrl+Z 倒回
+      // A 章全文」——宿主已按 chapter-{id} re-key，此行防御未来 key 被移除
+      // （旧版 TipTap 无 clearHistory 命令时静默跳过，re-key 兜底仍生效）
+      (editor.commands as unknown as { clearHistory?: () => void }).clearHistory?.();
       return;
     }
     // 空内容同步：宿主传入 '' 但编辑器非空 —— 发生于按 id re-key 重挂载后宿主状态
@@ -376,6 +417,7 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
     // 反向回写宿主、误触发防抖保存与字数统计。
     if (editor.state.doc.textContent.trim().length > 0) {
       editor.commands.setContent('');
+      (editor.commands as unknown as { clearHistory?: () => void }).clearHistory?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, editor]);

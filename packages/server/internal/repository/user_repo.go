@@ -19,8 +19,9 @@ type UserRepository interface {
 	UpdateStatus(ctx context.Context, id int64, status int16) error
 	// UpdateRole sets the account role (admin.phones promotion, task #49).
 	UpdateRole(ctx context.Context, id int64, role int16) error
-	// EnsureDemoUser creates the demo account (fixed id=1) when absent.
-	EnsureDemoUser(ctx context.Context, phone, nickname, passwordHash string) error
+	// EnsureDemoUser creates the demo account (fixed id=1) when absent, with
+	// the given status so it can be seeded already locked.
+	EnsureDemoUser(ctx context.Context, phone, nickname, passwordHash string, status int16) error
 }
 
 // userRepository is the GORM implementation of UserRepository.
@@ -77,10 +78,11 @@ func (r *userRepository) UpdateRole(ctx context.Context, id int64, role int16) e
 		Update("role", role).Error
 }
 
-// EnsureDemoUser seeds the demo account with a fixed id=1 (used by task #33
-// to backfill legacy data ownership). The argon2id hash carries a random
-// salt, so the seed must be computed in Go rather than in SQL.
-func (r *userRepository) EnsureDemoUser(ctx context.Context, phone, nickname, passwordHash string) error {
+// EnsureDemoUser seeds the demo account with a fixed id=1 (backfill target of
+// migrations/010). The argon2id hash carries a random salt, so the seed must
+// be computed in Go rather than in SQL. status lets the caller create the
+// account already locked when it is only meant to own legacy data.
+func (r *userRepository) EnsureDemoUser(ctx context.Context, phone, nickname, passwordHash string, status int16) error {
 	existing, err := r.GetByPhone(ctx, phone)
 	if err != nil {
 		return err
@@ -97,7 +99,7 @@ func (r *userRepository) EnsureDemoUser(ctx context.Context, phone, nickname, pa
 		Phone:             &phone,
 		PasswordHash:      &passwordHash,
 		Nickname:          nickname,
-		Status:            model.UserStatusActive,
+		Status:            status,
 		Role:              model.RoleUser,
 		RegisteredChannel: "sms",
 		LastLoginAt:       &now,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkbloom/server/internal/dto"
+	"github.com/inkbloom/server/internal/repository"
 	"github.com/inkbloom/server/internal/service"
 )
 
@@ -40,6 +41,12 @@ func (h *AdminHandler) ListUsers(c *gin.Context) {
 
 	data, err := h.adminService.ListUsers(c.Request.Context(), search, status, page, size)
 	if err != nil {
+		// A malformed ?status= value is a client mistake, not a server fault
+		// (F1-7): map it to 400 so the back-office shows a usable message.
+		if errors.Is(err, repository.ErrInvalidStatusFilter) {
+			c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "status 取值无效，应为整数或 active/disabled/all"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}

@@ -39,6 +39,64 @@ type Config struct {
 	ContentSafety ContentSafetyConfig `mapstructure:"contentsafety"`
 	// VersionHistory tunes the E1 chapter snapshot engine (business plan v3).
 	VersionHistory VersionHistoryConfig `mapstructure:"version_history"`
+	// SMS selects the verification-code channel (F4-1/F4-2).
+	SMS SMSConfig `mapstructure:"sms"`
+	// Payment carries the real-channel credentials (F4-1/F4-4/F4-5). Keys
+	// are injected through the environment only, never yaml.
+	Payment PaymentConfig `mapstructure:"payment"`
+}
+
+// SMSConfig selects and configures the verification-code channel.
+type SMSConfig struct {
+	// Provider selects dev (default: code logged WITHOUT content) | aliyun
+	// | tencent. Cloud production must not stay on dev.
+	Provider string           `mapstructure:"provider"`
+	Aliyun   AliyunSMSConfig  `mapstructure:"aliyun"`
+	Tencent  TencentSMSConfig `mapstructure:"tencent"`
+}
+
+// AliyunSMSConfig maps the dysmsapi credentials.
+type AliyunSMSConfig struct {
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	SignName        string `mapstructure:"sign_name"`
+	TemplateCode    string `mapstructure:"template_code"`
+}
+
+// TencentSMSConfig maps the TC3 credentials.
+type TencentSMSConfig struct {
+	SecretID   string `mapstructure:"secret_id"`
+	SecretKey  string `mapstructure:"secret_key"`
+	SDKAppID   string `mapstructure:"sdk_app_id"`
+	SignName   string `mapstructure:"sign_name"`
+	TemplateID string `mapstructure:"template_id"`
+}
+
+// PaymentConfig gates the real payment channels (F4-4/F4-5). Empty/Disabled
+// means the channel is not registered and its notify route stays closed.
+type PaymentConfig struct {
+	Alipay AlipayPaymentConfig `mapstructure:"alipay"`
+	Wechat WechatPaymentConfig `mapstructure:"wechat"`
+}
+
+// AlipayPaymentConfig carries the open-platform credentials.
+type AlipayPaymentConfig struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	AppID      string `mapstructure:"app_id"`
+	PrivateKey string `mapstructure:"private_key"` // env INKBLOOM_ALIPAY_PRIVATE_KEY
+	PublicKey  string `mapstructure:"public_key"`  // env INKBLOOM_ALIPAY_PUBLIC_KEY
+	NotifyURL  string `mapstructure:"notify_url"`
+}
+
+// WechatPaymentConfig carries the merchant APIv3 credentials.
+type WechatPaymentConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	AppID        string `mapstructure:"app_id"`
+	MchID        string `mapstructure:"mch_id"`
+	CertSerialNo string `mapstructure:"cert_serial_no"`
+	PrivateKey   string `mapstructure:"private_key"` // env INKBLOOM_WECHAT_PRIVATE_KEY
+	APIv3Key     string `mapstructure:"apiv3_key"`   // env INKBLOOM_WECHAT_APIV3_KEY
+	NotifyURL    string `mapstructure:"notify_url"`
 }
 
 // VersionHistoryConfig tunes the automatic chapter snapshot engine (E1, A03).
@@ -75,7 +133,7 @@ type ServerConfig struct {
 	// falls back to the built-in dev origins (localhost/127.0.0.1 dev ports
 	// + the desktop loopback). Production must set this explicitly, e.g. via
 	// INKBLOOM_SERVER_CORS_ORIGINS="https://app.example.com,https://www.example.com".
-	CORSOrigins     []string      `mapstructure:"cors_origins"`
+	CORSOrigins []string `mapstructure:"cors_origins"`
 	// DataRoot is the root directory for all local-mode data (SQLite file,
 	// asset/portrait files, backups). Defaults to ./inkbloom-data; the
 	// desktop app passes %APPDATA%/InkBloom. Ignored in cloud mode.
@@ -248,9 +306,28 @@ func Load() (*Config, error) {
 		cfg.Server.CORSOrigins = origins
 	}
 
+	// Admin phone whitelist: same comma-separated env override pattern.
+	// The whitelist ships empty (F1); operators set it per deployment.
+	if raw := os.Getenv("INKBLOOM_ADMIN_PHONES"); raw != "" {
+		parts := strings.Split(raw, ",")
+		phones := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				phones = append(phones, p)
+			}
+		}
+		cfg.Admin.Phones = phones
+	}
+
 	// Embedded mode must never expose the static-token backdoor.
 	if cfg.IsLocal() {
 		cfg.Auth.LegacyToken = false
+		// The demo account is the only seed target for legacy data; in local
+		// single-user mode it stays usable, everywhere else it is locked.
+		// F4-6: the sandbox payment channel is likewise local-only — leaving
+		// it open in cloud mode would hand out free subscriptions.
+		cfg.Payment.Alipay.Enabled = false
+		cfg.Payment.Wechat.Enabled = false
 	}
 
 	// Cloud mode must never run with the placeholder JWT secret (v2 §5.2).

@@ -23,6 +23,15 @@ bin/
 vendor/
 tmp/
 
+# Local databases (smoke/dev artifacts must never be committed, F1-8)
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / tooling local artifacts (code-graph index, editor task configs)
+.codegraph/
+.arts/
+
 # Python
 __pycache__/
 *.py[cod]

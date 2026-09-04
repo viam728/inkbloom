@@ -169,7 +169,7 @@ const WorkStatsPanel: React.FC<{ workId: number }> = ({ workId }) => {
       {stats.chapters.length > 0 && (
         <div className="space-y-1">
           <p className="text-[10px] text-neutral-500">每章阅读人数（点击展开情绪曲线）</p>
-          {stats.chapters.map((c) => {
+          {stats.chapters.map((c, idx) => {
             const expanded = expandedPid === c.chapter_id;
             return (
               <div key={c.chapter_id} className="rounded-lg bg-white/3 border border-white/5">
@@ -183,7 +183,7 @@ const WorkStatsPanel: React.FC<{ workId: number }> = ({ workId }) => {
                     className={`text-neutral-500 transition-transform ${expanded ? 'rotate-90' : ''}`}
                   />
                   <span className="text-[11px] text-neutral-400 w-14 truncate shrink-0">
-                    第{c.position}章
+                    第{idx + 1}章
                   </span>
                   <span className="flex-1 min-w-0 text-[11px] text-neutral-300 truncate text-left">
                     {c.title}

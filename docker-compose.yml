@@ -61,7 +61,11 @@ services:
       - INKBLOOM_NATS_URL=nats://nats:4222
       - INKBLOOM_AI_SERVICE_URL=http://ai-service:8100
       - INKBLOOM_SERVER_MODE=release
-      - INKBLOOM_AUTH_TOKEN=inkbloom-dev-token
+      # Cloud mode refuses an empty/placeholder JWT secret (config.go) — the
+      # variable is mandatory; generate one with: openssl rand -hex 32
+      - INKBLOOM_JWT_SECRET=${INKBLOOM_JWT_SECRET:?set INKBLOOM_JWT_SECRET in .env}
+      # Admin promotion whitelist (empty = none). Never ship a demo phone.
+      - INKBLOOM_ADMIN_PHONES=${INKBLOOM_ADMIN_PHONES:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +93,12 @@ services:
       - INKBLOOM_GRPC_PORT=50051
       - INKBLOOM_HTTP_PORT=8100
       - INKBLOOM_GO_SERVICE_URL=http://server:8080
+      # LLM credentials come from .env (not committed). The default model is
+      # glm-4.5-air — without a GLM key every default-model request would hit
+      # the DeepSeek endpoint and fail (F3-2 validates this at startup).
+      - INKBLOOM_GLM_API_KEY=${INKBLOOM_GLM_API_KEY:-}
+      - INKBLOOM_DEEPSEEK_API_KEY=${INKBLOOM_DEEPSEEK_API_KEY:-}
+      - INKBLOOM_AI_BASE_URL=${INKBLOOM_AI_BASE_URL:-}
     depends_on:
       - server
     healthcheck:

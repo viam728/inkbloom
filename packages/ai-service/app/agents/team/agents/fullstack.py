@@ -42,31 +42,15 @@ class FullstackAgent(BaseAgent):
     async def execute(self, task: TaskCard) -> TaskCard:
         """Execute implementation tasks.
 
-        In production this would invoke the Kimi-for-Coding API with:
-          - Task description and acceptance criteria
-          - Relevant code context (affected files, key interfaces)
-          - Existing patterns to follow
-
-        Current implementation is a stub that simulates execution.
+        F3-1: no real Kimi-for-Coding wiring yet. The stub used to fabricate
+        an "Implemented …" DONE summary with zero artifacts behind it; it
+        now fails the task so callers never mistake simulation for delivery.
         """
-        self.logger.info("FullstackAgent executing: %s", task.to_summary())
-
-        # Simulate implementation work
-        files = task.context.affected_files
-        result = (
-            f"Implemented {task.title}; "
-            f"touched {len(files)} file(s): {', '.join(files) if files else 'none'}"
-        )
-
+        self.logger.info("FullstackAgent refusing stub execution: %s", task.to_summary())
         return task.update_status(
-            status=TaskStatus.DONE,
+            status=TaskStatus.FAILED,
             assigned_agent=self.capabilities.name,
-            result_summary=result,
-            verification_report={
-                "files_modified": files,
-                "tests_written": task.deliverables.tests,
-                "docs_written": task.deliverables.documentation,
-            },
+            result_summary="agent not implemented: implementation LLM wiring pending (F3-1)",
         )
 
     async def validate(self, task: TaskCard) -> dict[str, Any]:

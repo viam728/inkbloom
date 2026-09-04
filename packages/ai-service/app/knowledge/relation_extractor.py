@@ -6,6 +6,7 @@ from typing import Any
 
 from app.llm.base import BaseLLMProvider
 from app.config import settings
+from app.knowledge.errors import ExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,9 @@ class RelationExtractor:
 
         except json.JSONDecodeError as e:
             logger.error("Failed to parse relation JSON: %s, content: %s", e, result.content[:200])
-            return []
+            raise ExtractionError(f"relation extraction: unparseable LLM output: {e}") from e
+        except ExtractionError:
+            raise
         except Exception as e:
             logger.error("Relation extraction failed: %s", e)
-            return []
+            raise ExtractionError(f"relation extraction failed: {e}") from e

@@ -235,15 +235,30 @@ const HistoryPanel: React.FC = () => {
         <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
           {versions.map((v) => {
             const meta = KIND_META[v.kind] ?? KIND_META.auto;
+            // 发布版本条目：发布时写入的 milestone（label 形如「发布《…》第N章」）。
+            // 在版本历史里单独高亮，让作者一眼区分「读者当前看到的版本」。
+            const isPublished =
+              v.kind === 'milestone' && !!v.label && v.label.startsWith('发布《');
             return (
               <div
                 key={v.id}
-                className="group flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/4 transition-colors"
+                className={`group flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors ${
+                  isPublished ? 'bg-sky-500/8 ring-1 ring-sky-500/25' : 'hover:bg-white/4'
+                }`}
               >
-                <div className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${meta.dot}`} />
+                <div
+                  className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
+                    isPublished ? 'bg-sky-400' : meta.dot
+                  }`}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className={`text-xs font-medium ${meta.text}`}>{meta.label}</span>
+                    {isPublished && (
+                      <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/25">
+                        发布版
+                      </span>
+                    )}
                     {v.label && (
                       <span className="text-xs text-neutral-300 truncate">{v.label}</span>
                     )}

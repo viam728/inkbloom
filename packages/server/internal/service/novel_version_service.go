@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/inkbloom/server/internal/dto"
@@ -12,6 +13,7 @@ import (
 	"github.com/inkbloom/server/internal/repository"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // Restore modes (Agent safety work Q3).
@@ -46,16 +48,21 @@ type NovelVersionService struct {
 	chapterRepo repository.ChapterRepository
 	docSvc      *NovelDocService
 	versionRepo repository.NovelVersionRepository
+	// db powers the transactional restore (F1-7): chapters, outline and
+	// memory must move together, a partial restore is a corrupt book.
+	db *gorm.DB
 }
 
-// NewNovelVersionService creates a new NovelVersionService.
+// NewNovelVersionService creates a new NovelVersionService. db is required
+// for the transactional restore path; a nil db makes Restore fail closed.
 func NewNovelVersionService(
 	nr repository.NovelRepository,
 	cr repository.ChapterRepository,
 	docSvc *NovelDocService,
 	vr repository.NovelVersionRepository,
+	db *gorm.DB,
 ) *NovelVersionService {
-	return &NovelVersionService{novelRepo: nr, chapterRepo: cr, docSvc: docSvc, versionRepo: vr}
+	return &NovelVersionService{novelRepo: nr, chapterRepo: cr, docSvc: docSvc, versionRepo: vr, db: db}
 }
 
 // CreateMilestone writes an explicit whole-novel checkpoint and returns its
@@ -199,80 +206,95 @@ func (s *NovelVersionService) Restore(ctx context.Context, userID, novelID, vers
 	// 1. Checkpoint what is about to be overwritten (best-effort).
 	res.CheckpointID = s.checkpoint(ctx, userID, novelID)
 
-	// 2. Chapters.
-	current, err := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
-	if err != nil {
-		return nil, err
+	if s.db == nil {
+		return nil, fmt.Errorf("novel version service: database handle not wired")
 	}
-	byID := make(map[int64]*model.Chapter, len(current))
-	for i := range current {
-		byID[current[i].ID] = &current[i]
-	}
-	inBundle := make(map[int64]struct{}, len(snap.Chapters))
-	for _, bc := range snap.Chapters {
-		inBundle[bc.ID] = struct{}{}
-		if cur, ok := byID[bc.ID]; ok {
-			applySnapshotChapter(cur, &bc)
-			if err := s.chapterRepo.Update(ctx, userID, cur); err != nil {
-				zap.L().Error("novel version: chapter restore failed",
-					zap.Int64("chapter_id", bc.ID), zap.Error(err))
-				return nil, err
+
+	// 2–5. Apply the restore atomically (F1-7): chapters (update / recreate /
+	// delete), outline, memory and the word-count refresh all run inside one
+	// transaction. A mid-restore failure used to strand the book half-restored
+	// ("chapters rolled back, outline not"); now it either lands whole or not
+	// at all — and res stays untouched on failure so the caller learns of the
+	// failure before any partial counters leak out.
+	txErr := s.db.Transaction(func(tx *gorm.DB) error {
+		txChapters := repository.NewChapterRepository(tx)
+		txDocs := s.docSvc.WithDocRepo(repository.NewNovelDocRepository(tx))
+
+		current, err := s.chapterRepo.ListByNovelID(ctx, userID, novelID)
+		if err != nil {
+			return err
+		}
+		byID := make(map[int64]*model.Chapter, len(current))
+		for i := range current {
+			byID[current[i].ID] = &current[i]
+		}
+		inBundle := make(map[int64]struct{}, len(snap.Chapters))
+
+		// 2. Chapters present in the snapshot.
+		for _, bc := range snap.Chapters {
+			inBundle[bc.ID] = struct{}{}
+			if cur, ok := byID[bc.ID]; ok {
+				applySnapshotChapter(cur, &bc)
+				if err := txChapters.Update(ctx, userID, cur); err != nil {
+					zap.L().Error("novel version: chapter restore failed",
+						zap.Int64("chapter_id", bc.ID), zap.Error(err))
+					return err
+				}
+				res.Updated++
+				continue
 			}
-			res.Updated++
-			continue
+			res.Missing++
+			if !full {
+				continue
+			}
+			if err := recreateChapter(ctx, txChapters, userID, novelID, &bc); err != nil {
+				return err
+			}
+			res.Created++
 		}
-		res.Missing++
-		if !full {
-			continue
-		}
-		if err := s.recreateChapter(ctx, userID, novelID, &bc); err != nil {
-			return nil, err
-		}
-		res.Created++
-	}
 
-	// 3. Chapters written after the snapshot.
-	for i := range current {
-		if _, ok := inBundle[current[i].ID]; ok {
-			continue
+		// 3. Chapters written after the snapshot.
+		for i := range current {
+			if _, ok := inBundle[current[i].ID]; ok {
+				continue
+			}
+			res.Extra++
+			if !full {
+				continue
+			}
+			if err := txChapters.Delete(ctx, userID, current[i].ID); err != nil {
+				zap.L().Error("novel version: extra chapter delete failed",
+					zap.Int64("chapter_id", current[i].ID), zap.Error(err))
+				return err
+			}
+			res.Deleted++
 		}
-		res.Extra++
-		if !full {
-			continue
-		}
-		if err := s.chapterRepo.Delete(ctx, userID, current[i].ID); err != nil {
-			zap.L().Error("novel version: extra chapter delete failed",
-				zap.Int64("chapter_id", current[i].ID), zap.Error(err))
-			return nil, err
-		}
-		res.Deleted++
-	}
 
-	// 4. Outline and memory: wholesale replacement in both modes.
-	acts := snap.Outline.Acts
-	if len(acts) == 0 {
-		acts = emptyJSONArray
-	}
-	if _, err := s.docSvc.UpdateOutline(ctx, userID, novelID, acts, nil); err != nil {
-		zap.L().Error("novel version: outline restore failed",
-			zap.Int64("novel_id", novelID), zap.Error(err))
-		return nil, err
-	}
-	items := snap.Memory.Items
-	if len(items) == 0 {
-		items = emptyJSONArray
-	}
-	if _, err := s.docSvc.UpdateMemory(ctx, userID, novelID, items, nil); err != nil {
-		zap.L().Error("novel version: memory restore failed",
-			zap.Int64("novel_id", novelID), zap.Error(err))
-		return nil, err
-	}
+		// 4. Outline and memory: wholesale replacement in both modes.
+		acts := snap.Outline.Acts
+		if len(acts) == 0 {
+			acts = emptyJSONArray
+		}
+		if _, err := txDocs.UpdateOutline(ctx, userID, novelID, acts, nil); err != nil {
+			zap.L().Error("novel version: outline restore failed",
+				zap.Int64("novel_id", novelID), zap.Error(err))
+			return err
+		}
+		items := snap.Memory.Items
+		if len(items) == 0 {
+			items = emptyJSONArray
+		}
+		if _, err := txDocs.UpdateMemory(ctx, userID, novelID, items, nil); err != nil {
+			zap.L().Error("novel version: memory restore failed",
+				zap.Int64("novel_id", novelID), zap.Error(err))
+			return err
+		}
 
-	// 5. Same post-write bookkeeping as ChapterService.UpdateChapter: the
-	// aggregated counter must follow the restored text.
-	if err := s.chapterRepo.RefreshNovelWordCount(ctx, userID, novelID); err != nil {
-		zap.L().Warn("novel version: word count refresh failed after restore",
-			zap.Int64("novel_id", novelID), zap.Error(err))
+		// 5. Same post-write bookkeeping as ChapterService.UpdateChapter.
+		return txChapters.RefreshNovelWordCount(ctx, userID, novelID)
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
 	return res, nil
 }
@@ -323,18 +345,21 @@ func (s *NovelVersionService) checkpoint(ctx context.Context, userID, novelID in
 // Postgres enforces a partial unique index on (novel_id, position), which a
 // chapter created after the deletion can already occupy, so a collision falls
 // back to appending at the end (retry once, mirroring ChapterService).
-func (s *NovelVersionService) recreateChapter(ctx context.Context, userID, novelID int64, bc *dto.NovelSnapshotChapter) error {
+// recreateChapter re-inserts a snapshot chapter under its original id. The
+// repo is a parameter so the restore transaction can pass its tx-bound
+// instance (F1-7).
+func recreateChapter(ctx context.Context, chapters repository.ChapterRepository, userID, novelID int64, bc *dto.NovelSnapshotChapter) error {
 	chapter := snapshotChapter(bc, userID, novelID)
-	err := s.chapterRepo.UpsertWithID(ctx, userID, chapter)
+	err := chapters.UpsertWithID(ctx, userID, chapter)
 	if isUniqueViolation(err) {
-		maxPos, perr := s.chapterRepo.GetMaxPosition(ctx, userID, novelID)
+		maxPos, perr := chapters.GetMaxPosition(ctx, userID, novelID)
 		if perr != nil {
 			return perr
 		}
 		zap.L().Warn("novel version: snapshot position taken, appending restored chapter at the end",
 			zap.Int64("chapter_id", bc.ID), zap.Int("position", bc.Position))
 		chapter.Position = maxPos + 1
-		return s.chapterRepo.UpsertWithID(ctx, userID, chapter)
+		return chapters.UpsertWithID(ctx, userID, chapter)
 	}
 	if err != nil {
 		zap.L().Error("novel version: recreate chapter failed",

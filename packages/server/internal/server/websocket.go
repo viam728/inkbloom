@@ -47,8 +47,10 @@ type WSClient struct {
 }
 
 // WSHub manages WebSocket client connections and message broadcasting.
+// Multiple concurrent connections per user are supported (several browser
+// tabs, desktop + web): clients are grouped per userID, never overwritten.
 type WSHub struct {
-	clients    map[string]*WSClient
+	clients    map[string]map[*WSClient]struct{}
 	register   chan *WSClient
 	unregister chan *WSClient
 	broadcast  chan WSMessage
@@ -72,7 +74,7 @@ type WSHub struct {
 // NewWSHub creates a new WSHub instance.
 func NewWSHub(logger *zap.Logger) *WSHub {
 	return &WSHub{
-		clients:    make(map[string]*WSClient),
+		clients:    make(map[string]map[*WSClient]struct{}),
 		register:   make(chan *WSClient),
 		unregister: make(chan *WSClient),
 		broadcast:  make(chan WSMessage, sendBufferSize),
@@ -86,8 +88,10 @@ func (h *WSHub) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			h.mu.Lock()
-			for id, client := range h.clients {
-				close(client.send)
+			for id, set := range h.clients {
+				for client := range set {
+					close(client.send)
+				}
 				delete(h.clients, id)
 			}
 			h.mu.Unlock()
@@ -95,36 +99,62 @@ func (h *WSHub) Run(ctx context.Context) {
 
 		case client := <-h.register:
 			h.mu.Lock()
-			h.clients[client.userID] = client
+			if h.clients[client.userID] == nil {
+				h.clients[client.userID] = make(map[*WSClient]struct{})
+			}
+			h.clients[client.userID][client] = struct{}{}
+			total := h.totalClientsLocked()
 			h.mu.Unlock()
 			h.logger.Info("WebSocket client registered", zap.String("userID", client.userID),
-				zap.Int("total", len(h.clients)))
+				zap.Int("total", total))
 
 		case client := <-h.unregister:
+			// Only the exact client instance leaving is torn down. A stale
+			// unregister (e.g. a replaced connection's read pump exiting
+			// late) must never close a newer connection's channel — doing
+			// so used to panic SendToUser with "send on closed channel".
 			h.mu.Lock()
-			if _, ok := h.clients[client.userID]; ok {
-				delete(h.clients, client.userID)
-				close(client.send)
+			if set, ok := h.clients[client.userID]; ok {
+				if _, live := set[client]; live {
+					delete(set, client)
+					close(client.send)
+				}
+				if len(set) == 0 {
+					delete(h.clients, client.userID)
+				}
 			}
+			total := h.totalClientsLocked()
 			h.mu.Unlock()
 			h.logger.Info("WebSocket client unregistered", zap.String("userID", client.userID),
-				zap.Int("total", len(h.clients)))
+				zap.Int("total", total))
 
 		case msg := <-h.broadcast:
 			h.mu.RLock()
-			for _, client := range h.clients {
-				select {
-				case client.send <- msg:
-				default:
-					// Client is slow; drop and unregister
-					go func(c *WSClient) {
-						h.unregister <- c
-					}(client)
+			for _, set := range h.clients {
+				for client := range set {
+					select {
+					case client.send <- msg:
+					default:
+						// Client is slow; drop and unregister
+						go func(c *WSClient) {
+							h.unregister <- c
+						}(client)
+					}
 				}
 			}
 			h.mu.RUnlock()
 		}
 	}
+}
+
+// totalClientsLocked counts live connections; callers must hold h.mu (any
+// flavor) — it never takes the lock itself.
+func (h *WSHub) totalClientsLocked() int {
+	n := 0
+	for _, set := range h.clients {
+		n += len(set)
+	}
+	return n
 }
 
 // SetAuthenticator installs the token validator (JWT access token) used by
@@ -245,18 +275,31 @@ func (h *WSHub) Broadcast(msg WSMessage) {
 	h.broadcast <- msg
 }
 
-// SendToUser sends a message to a specific user.
+// SendToUser sends a message to every live connection of the user (all tabs
+// and devices). The set is copied under RLock before sending: pushing into a
+// full buffer while holding RLock would deadlock against unregister.
 func (h *WSHub) SendToUser(userID string, msg WSMessage) {
 	h.mu.RLock()
-	client, ok := h.clients[userID]
-	h.mu.RUnlock()
+	set, ok := h.clients[userID]
 	if !ok {
+		h.mu.RUnlock()
 		return
 	}
-	select {
-	case client.send <- msg:
-	default:
-		// Client buffer full; skip
+	targets := make([]*WSClient, 0, len(set))
+	for client := range set {
+		targets = append(targets, client)
+	}
+	h.mu.RUnlock()
+
+	dropped := false
+	for _, client := range targets {
+		select {
+		case client.send <- msg:
+		default:
+			dropped = true
+		}
+	}
+	if dropped {
 		h.logger.Warn("Client send buffer full, dropping message",
 			zap.String("userID", userID), zap.String("type", msg.Type))
 	}

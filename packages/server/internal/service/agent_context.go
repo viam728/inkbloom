@@ -59,6 +59,8 @@ type AgentGeneratePayload struct {
 	Scene       string           `json:"scene"`
 	Instruction string           `json:"instruction"`
 	Context     AgentContextData `json:"context"`
+	// Model is the caller-selected model (empty → ai-service default).
+	Model string `json:"model,omitempty"`
 }
 
 // AgentContextData carries the assembled novel context.

@@ -40,7 +40,7 @@ func newTestNovelVersionService(t *testing.T) (*NovelVersionService, *gorm.DB) {
 	novelRepo := repository.NewNovelRepository(db)
 	chapterRepo := repository.NewChapterRepository(db)
 	docSvc := NewNovelDocService(novelRepo, repository.NewNovelDocRepository(db), chapterRepo, nil)
-	return NewNovelVersionService(novelRepo, chapterRepo, docSvc, repository.NewNovelVersionRepository(db)), db
+	return NewNovelVersionService(novelRepo, chapterRepo, docSvc, repository.NewNovelVersionRepository(db), db), db
 }
 
 // seedNovelVersionChapter inserts a chapter with an explicit id so tests can

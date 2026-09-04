@@ -26,11 +26,10 @@ type CreateOrderResponse struct {
 	AmountCents int    `json:"amount_cents"`
 	Channel     string `json:"channel"`
 	Status      string `json:"status"` // created | paid
-}
-
-// NotifyRequest is the payload of POST /api/v1/payment/notify/:channel.
-type NotifyRequest struct {
-	OutTradeNo string `json:"out_trade_no" binding:"required"`
+	// Pay artefacts for real channels (F4-6): QR content or redirect target.
+	// Sandbox orders leave both empty (already paid on creation).
+	CodeURL string `json:"code_url,omitempty"`
+	PayURL  string `json:"pay_url,omitempty"`
 }
 
 // OrderDTO is one entry of the order list contract.

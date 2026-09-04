@@ -30,7 +30,10 @@ services:
       - INKBLOOM_NATS_URL=nats://nats:4222
       - INKBLOOM_AI_SERVICE_URL=http://ai-service:8100
       - INKBLOOM_SERVER_MODE=debug
-      - INKBLOOM_AUTH_TOKEN=inkbloom-dev-token
+      # Compose runs in cloud mode (INKBLOOM_MODE is unset), so the JWT
+      # secret is mandatory. Generate one: openssl rand -hex 32
+      - INKBLOOM_JWT_SECRET=${INKBLOOM_JWT_SECRET:?set INKBLOOM_JWT_SECRET in .env}
+      - INKBLOOM_ADMIN_PHONES=${INKBLOOM_ADMIN_PHONES:-}
       - INKBLOOM_LOG_LEVEL=debug
     # Override entrypoint to use go run for hot reload
     command: [ "go", "run", "./cmd/server" ]
@@ -54,6 +57,9 @@ services:
       - INKBLOOM_GRPC_PORT=50051
       - INKBLOOM_HTTP_PORT=8100
       - INKBLOOM_GO_SERVICE_URL=http://server:8080
+      - INKBLOOM_GLM_API_KEY=${INKBLOOM_GLM_API_KEY:-}
+      - INKBLOOM_DEEPSEEK_API_KEY=${INKBLOOM_DEEPSEEK_API_KEY:-}
+      - INKBLOOM_AI_BASE_URL=${INKBLOOM_AI_BASE_URL:-}
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')" ]
       interval: 15s

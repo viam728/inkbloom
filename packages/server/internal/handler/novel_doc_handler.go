@@ -70,6 +70,14 @@ func (h *NovelDocHandler) UpdateOutline(c *gin.Context) {
 		h.writeError(c, "update outline failed", novelID, err)
 		return
 	}
+	// 备忘录 L57/59: after a committed web-panel outline save, enforce the
+	// outline↔chapter invariants (drop phantom / duplicate bindings, one chapter
+	// per node) and resync chapters.position to the outline order. Best-effort:
+	// a sync failure must not fail the save the user already committed.
+	if serr := h.docService.SyncOutlineChapterOrder(c.Request.Context(), GetUserID(c), novelID); serr != nil {
+		zap.L().Warn("outline chapter-order sync failed",
+			zap.Int64("novel_id", novelID), zap.Error(serr))
+	}
 	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: gin.H{"version": version}})
 }
 

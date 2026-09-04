@@ -67,6 +67,9 @@ class AgentGenerateRequest(BaseModel):
     scene: str
     instruction: str = ""
     context: AgentContext
+    # Caller-selected model (empty → settings.default_model). Threaded to the
+    # orchestrator so scene-model config applies to agent generation too.
+    model: str | None = None
 
 
 class AgentGenerateResponse(BaseModel):

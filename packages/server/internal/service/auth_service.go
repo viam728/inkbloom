@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,11 +26,13 @@ const (
 	smsRateTTL = 60 * time.Second  // per-phone send frequency control
 )
 
-// Demo account seeded at startup (backfill target of task #33).
+// Demo account seeded at startup (backfill target of migrations/010:
+// every business row carries user_id DEFAULT 1). The account must exist so
+// legacy data has an owner, but it must never be loggable — there is no
+// password constant on purpose.
 const (
 	DemoUserPhone    = "13800000000"
 	DemoUserNickname = "本地数据用户"
-	DemoUserPassword = "inkbloom123"
 )
 
 // Sentinel errors surfaced by AuthService (mapped to HTTP codes in the handler).
@@ -429,14 +432,52 @@ func (s *AuthService) CancelDeregistration(ctx context.Context, uid int64) error
 
 // ── Demo account ───────────────────────────────────────────────────────────
 
-// EnsureDemoUser seeds the id=1 demo account (phone 13800000000 /
-// password inkbloom123) used by task #33 for legacy data backfill.
-func (s *AuthService) EnsureDemoUser(ctx context.Context) error {
-	hash, err := password.Hash(DemoUserPassword)
+// EnsureDemoUser seeds the id=1 demo account that owns pre-isolation legacy
+// data (migrations/010 backfills every row to user_id = 1). Ownership is the
+// only reason this account exists, so it is created with a random, never
+// logged password and — when disableLogin is true (every mode except local) —
+// immediately locked.
+//
+// Installs seeded by older builds carry the well-known "inkbloom123"
+// password; those accounts are locked on first startup under this build
+// rather than left loggable.
+func (s *AuthService) EnsureDemoUser(ctx context.Context, disableLogin bool) error {
+	existing, err := s.users.GetByPhone(ctx, DemoUserPhone)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if !disableLogin || existing.Status == model.UserStatusDisabled {
+			return nil
+		}
+		// Legacy seed with a public password: lock it down now.
+		if err := s.users.UpdateStatus(ctx, existing.ID, model.UserStatusDisabled); err != nil {
+			return fmt.Errorf("locking legacy demo account: %w", err)
+		}
+		s.logger.Warn("demo account disabled: it owns legacy data and is not meant to be logged into",
+			zap.Int64("user_id", existing.ID))
+		return nil
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Errorf("generating demo password: %w", err)
+	}
+	hash, err := password.Hash(hex.EncodeToString(buf))
 	if err != nil {
 		return fmt.Errorf("hashing demo password: %w", err)
 	}
-	return s.users.EnsureDemoUser(ctx, DemoUserPhone, DemoUserNickname, hash)
+
+	status := model.UserStatusActive
+	if disableLogin {
+		status = model.UserStatusDisabled
+	}
+	if err := s.users.EnsureDemoUser(ctx, DemoUserPhone, DemoUserNickname, hash, status); err != nil {
+		return err
+	}
+	s.logger.Info("demo account seeded", zap.String("phone", DemoUserPhone),
+		zap.Bool("login_disabled", disableLogin))
+	return nil
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

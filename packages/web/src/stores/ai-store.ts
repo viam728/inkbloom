@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { streamInline, streamRewrite } from '@/services/sse-client';
 import { agentChat, buildUserContent } from '@/services/agent-chat-client';
 import { useNovelStore } from '@/stores/novel-store';
+import { toast } from '@/components/common/Toast';
 import type { AIMessage, AgentCard, ChatAttachment, RewriteAction } from '@/types';
 
 interface RewriteResult {
@@ -23,6 +24,10 @@ const LS_MSG_PREFIX = 'inkbloom:ai:msg:';
 
 // agentAbort 是当前进行中 Agent 请求的中止控制器：停止按钮据此取消网络请求。
 let agentAbort: AbortController | null = null;
+// F2-6：inline / rewrite 各自的中止控制器与耗时展示计时器
+let inlineAbort: AbortController | null = null;
+let rewriteAbort: AbortController | null = null;
+let agentElapsedTimer: ReturnType<typeof setInterval> | null = null;
 
 function loadSessions(): AISession[] {
   try {
@@ -108,6 +113,9 @@ interface AIStore {
   rewriteResult: RewriteResult | null;
   showDiffViewer: boolean;
   isRewriteStreaming: boolean;
+
+  /** F2-6：Agent 非流式调用已用时（秒），配合「正在撰写…」缓解黑盒等待 */
+  agentElapsedSec: number;
 
     sendMessage: (content: string, attachments?: ChatAttachment[]) => Promise<void>;
   clearMessages: () => void;
@@ -216,6 +224,8 @@ export const useAIStore = create<AIStore>((set, get) => ({
   showDiffViewer: false,
   isRewriteStreaming: false,
 
+  agentElapsedSec: 0,
+
     sendMessage: async (content: string, attachments?: ChatAttachment[]) => {
     const { messages, sessions, currentSessionId } = get();
 
@@ -249,6 +259,14 @@ export const useAIStore = create<AIStore>((set, get) => ({
     // C8 停止中断：AbortController 使「停止」按钮可取消进行中的请求。
     const controller = new AbortController();
     agentAbort = controller;
+
+    // F2-6：非流式 Agent 调用常达 30s+，逐秒暴露已用时长，缓解黑盒等待
+    const startedAt = Date.now();
+    set({ agentElapsedSec: 0 });
+    if (agentElapsedTimer) clearInterval(agentElapsedTimer);
+    agentElapsedTimer = setInterval(() => {
+      set({ agentElapsedSec: Math.floor((Date.now() - startedAt) / 1000) });
+    }, 1000);
 
     try {
       const currentNovelId = useNovelStore.getState().currentNovel?.id ?? 0;
@@ -306,6 +324,11 @@ export const useAIStore = create<AIStore>((set, get) => ({
       }));
     } finally {
       if (agentAbort === controller) agentAbort = null;
+      if (agentElapsedTimer) {
+        clearInterval(agentElapsedTimer);
+        agentElapsedTimer = null;
+      }
+      set({ agentElapsedSec: 0 });
     }
   },
 
@@ -368,6 +391,11 @@ export const useAIStore = create<AIStore>((set, get) => ({
   },
 
   stopStreaming: () => {
+    // F2-6：真正中断在途请求（此前仅翻转 UI 标志，连接继续占用）
+    inlineAbort?.abort();
+    inlineAbort = null;
+    rewriteAbort?.abort();
+    rewriteAbort = null;
     set({ isStreaming: false, isInlineStreaming: false, isRewriteStreaming: false });
   },
 
@@ -376,6 +404,9 @@ export const useAIStore = create<AIStore>((set, get) => ({
     set({ isInlineStreaming: true, inlineSuggestion: null });
 
     let accumulated = '';
+    // F2-6：可中断 + 错误不再静默（catch 曾一闪即灭，用户无从得知）
+    const controller = new AbortController();
+    inlineAbort = controller;
 
     try {
       await streamInline(
@@ -391,10 +422,21 @@ export const useAIStore = create<AIStore>((set, get) => ({
         () => {
           set({ isInlineStreaming: false });
         },
-        resolveSceneModel('inline'),
+        {
+          model: resolveSceneModel('inline'),
+          signal: controller.signal,
+          onError: (message) => {
+            toast.show(`${message}，可按 Ctrl+Space 重试`, 'error');
+          },
+        },
       );
-    } catch {
+    } catch (e) {
+      if ((e as Error)?.name !== 'AbortError') {
+        toast.show('续写请求失败，请按 Ctrl+Space 重试', 'error');
+      }
       set({ isInlineStreaming: false });
+    } finally {
+      if (inlineAbort === controller) inlineAbort = null;
     }
   },
 
@@ -407,6 +449,8 @@ export const useAIStore = create<AIStore>((set, get) => ({
     set({ isRewriteStreaming: true, rewriteResult: null, showDiffViewer: false });
 
     let accumulated = '';
+    const controller = new AbortController();
+    rewriteAbort = controller;
 
     try {
       await streamRewrite(
@@ -421,10 +465,21 @@ export const useAIStore = create<AIStore>((set, get) => ({
         () => {
           set({ isRewriteStreaming: false, showDiffViewer: true });
         },
-        resolveSceneModel('rewrite'),
+        {
+          model: resolveSceneModel('rewrite'),
+          signal: controller.signal,
+          onError: (message) => {
+            toast.show(`${message}，可重新发起改写`, 'error');
+          },
+        },
       );
-    } catch {
+    } catch (e) {
+      if ((e as Error)?.name !== 'AbortError') {
+        toast.show('改写请求失败，请重试', 'error');
+      }
       set({ isRewriteStreaming: false });
+    } finally {
+      if (rewriteAbort === controller) rewriteAbort = null;
     }
   },
 

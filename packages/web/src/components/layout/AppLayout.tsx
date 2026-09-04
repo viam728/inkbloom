@@ -108,12 +108,13 @@ const AppLayout: React.FC = () => {
       if (!mod) return;
       const key = e.key.toLowerCase();
 
-      // 编辑区/输入框内时，避免与编辑器内置快捷键（如 Ctrl+B 加粗）冲突
+      // F2-8（X-9）：编辑区/输入框内时，全部布局快捷键让位给编辑器内置快捷键
+      // （此前仅 Ctrl+B 判断，Ctrl+I 会同时切斜体与分析面板、Ctrl+J/K 同理冲突）
       const target = e.target as HTMLElement;
       const inEditable = !!target?.closest?.('[contenteditable="true"], input, textarea');
+      if (inEditable) return;
 
       if (key === 'b' && !e.shiftKey) {
-        if (inEditable) return;
         e.preventDefault();
         toggleLeft();
       } else if (key === 'j') {

@@ -22,6 +22,9 @@ class LLMResponse:
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # F3-7/F3-9：实际生效的模型名（fallback 命中时与请求的 model 不同），
+    # 计费台账据此记录真实模型，避免账单失真。
+    model: str = ""
 
 
 class BaseLLMProvider(ABC):
