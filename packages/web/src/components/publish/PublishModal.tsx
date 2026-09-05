@@ -49,9 +49,23 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     () => new Map((publishState?.chapters ?? []).map((c) => [c.chapter_id, c])),
     [publishState?.chapters],
   );
-  /** 未发布章节：可勾选发布的范围（已发布的需先取消发布） */
-  const unpublishedChapters = useMemo(
-    () => orderedChapters.filter((c) => !pubByChapterId.has(c.id)),
+  /** 已发布章节的前沿：第一个未发布章节的下标（其之前全部已发布）。
+   *  连续发布规则：第 n 章可发布 ⟺ 大纲序 1..n-1 章已全部发布（从第1章起连续）。 */
+  const frontierIdx = useMemo(() => {
+    let i = 0;
+    while (i < orderedChapters.length && pubByChapterId.has(orderedChapters[i].id)) i++;
+    return i;
+  }, [orderedChapters, pubByChapterId]);
+
+  /** 当前可勾选发布的章节：未发布且处于连续前沿内（第 n 章 ⟺ 1..n-1 已发布） */
+  const selectableChapters = useMemo(
+    () => orderedChapters.filter((c, i) => !pubByChapterId.has(c.id) && i <= frontierIdx),
+    [orderedChapters, pubByChapterId, frontierIdx],
+  );
+
+  /** 某章之后（大纲序）是否还有已发布章节：取消发布必须从最后一章起依次进行 */
+  const hasLaterPublished = useCallback(
+    (idx: number) => orderedChapters.slice(idx + 1).some((c) => pubByChapterId.has(c.id)),
     [orderedChapters, pubByChapterId],
   );
 
@@ -139,30 +153,19 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
     const done: Awaited<ReturnType<typeof publishChapter>>[] = [];
     const failed: { id: number; title: string; message: string }[] = [];
-    // 备忘录 L61：发布 = 推送全书世界线，只推「从第1章开始」的大纲连续前缀。
-    // 沿大纲顺序逐要点检查，一旦出现未成稿（未绑定有效章节）的要点即断线，
-    // 之后的所有章节都不推送；勾选中不在前缀内的章节跳过并明确反馈。
-    const pushable = new Set<number>();
-    {
-      let broken = false;
-      for (const act of outlineActs ?? []) {
-        if (broken) break;
-        for (const n of act.nodes) {
-          const ch = n.chapter_id != null ? orderedChapters.find((c) => c.id === n.chapter_id) : undefined;
-          if (!ch) {
-            broken = true;
-            break;
-          }
-          pushable.add(ch.id);
-        }
-      }
-    }
+    // 连续发布规则：第 n 章可发布 ⟺ 大纲序 1..n-1 章已全部发布。
+    // 用「实时已发布集合」逐章推进：勾选章节按大纲序串行发布，
+    // 前一章发布成功后即并入集合，后面相邻章才具备发布条件。
+    const publishedLive = new Set(pubByChapterId.keys());
     // 按大纲顺序依次发布（勾选集合按 orderedChapters 展示序展开）。
     // 逐章串行 + 单章失败不中断整批：失败的章节收集后汇总提示，成功的照常入库。
-    for (const ch of orderedChapters) {
+    for (let i = 0; i < orderedChapters.length; i++) {
+      const ch = orderedChapters[i];
       if (!selected.has(ch.id)) continue;
-      if (!pushable.has(ch.id)) {
-        failed.push({ id: ch.id, title: ch.title, message: '不在连续前缀内（世界线须从第1章起连续）' });
+      const allPrevPublished = orderedChapters.slice(0, i).every((c) => publishedLive.has(c.id));
+      if (!allPrevPublished) {
+        publishedLive.delete(ch.id);
+        failed.push({ id: ch.id, title: ch.title, message: '不在连续前缀内（须从第1章起依次发布）' });
         continue;
       }
       try {
@@ -201,7 +204,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     } finally {
       setPublishing(false);
     }
-  }, [published, currentNovel, selected, orderedChapters, outlineActs, useSchedule, scheduledAt, syncOutlineStatus]);
+  }, [published, currentNovel, selected, orderedChapters, pubByChapterId, useSchedule, scheduledAt, syncOutlineStatus]);
 
   /** 取消发布单章：系统移除公开快照；与写作/完成态解耦，不回改节点状态 */
   const handleUnpublishChapter = useCallback(
@@ -408,13 +411,14 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                   <button
                     type="button"
                     onClick={() => {
-                      if (selected.size === unpublishedChapters.length) setSelected(new Set());
-                      else setSelected(new Set(unpublishedChapters.map((c) => c.id)));
+                      const selectable = selectableChapters;
+                      if (selected.size === selectable.length) setSelected(new Set());
+                      else setSelected(new Set(selectable.map((c) => c.id)));
                     }}
-                    disabled={unpublishedChapters.length === 0}
+                    disabled={selectableChapters.length === 0}
                     className="text-[10px] text-brand-400 hover:text-brand-300 disabled:opacity-40 disabled:pointer-events-none"
                   >
-                    {selected.size === unpublishedChapters.length && unpublishedChapters.length > 0
+                    {selected.size === selectableChapters.length && selectableChapters.length > 0
                       ? '取消全选'
                       : '全选未发布'}
                   </button>
@@ -478,6 +482,11 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                             <button
                               type="button"
                               onClick={async () => {
+                                // 取消发布必须从最后一章起：后面还有已发布章节则阻断
+                                if (hasLaterPublished(idx)) {
+                                  toast.show('后面的章节仍在发布中，需先从最后一章起依次取消发布', 'error');
+                                  return;
+                                }
                                 if (
                                   await confirmDialog({
                                     title: '取消发布',
@@ -488,8 +497,13 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                                   void handleUnpublishChapter(ch.id, pub.id);
                                 }
                               }}
-                              title="取消发布该章（读者将不可见）"
-                              className="p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                              disabled={hasLaterPublished(idx)}
+                              title={
+                                hasLaterPublished(idx)
+                                  ? '后面的章节仍在发布中，需先从最后一章起依次取消发布'
+                                  : '取消发布该章（读者将不可见）'
+                              }
+                              className="p-1 rounded text-neutral-600 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:pointer-events-none transition-colors"
                             >
                               <EyeOff size={11} />
                             </button>

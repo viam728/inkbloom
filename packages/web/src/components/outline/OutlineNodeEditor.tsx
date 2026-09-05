@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowUp, ArrowDown, Trash2, Sparkles, FileText } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import {
   useOutlineStore,
   OUTLINE_STATUS_LABELS,
-  WRITABLE_OUTLINE_STATUSES,
+  toggleWritingStatus,
+  sortChaptersByOutline,
   type OutlineNode,
   type OutlineStatus,
 } from '@/stores/outline-store';
+import { usePublishStore } from '@/stores/publish-store';
+import { publishChapter, unpublishChapter } from '@/services/reader-client';
 import { useTabStore, chapterTabKey } from '@/stores/tab-store';
 import { useEditorStore } from '@/stores/editor-store';
 import { useToast } from '@/components/common/Toast';
@@ -36,6 +39,13 @@ const STATUS_CHIP: Record<OutlineStatus, string> = {
   drafting: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
   done: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
   published: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
+};
+
+/** 写作状态点配色（黄=写作中 绿=已完成），与大纲列表/工具栏一致 */
+const STATUS_DOT: Record<OutlineStatus, string> = {
+  drafting: 'bg-amber-400',
+  done: 'bg-emerald-400',
+  published: 'bg-sky-400',
 };
 
 interface OutlineNodeEditorProps {
@@ -217,6 +227,94 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
     useTabStore.getState().closeTab(tabKey);
   };
 
+  // ── 发布 / 取消发布二合一控制（节点页右侧） ────────────────────────────
+  // 发布态以 published_chapters 表为系统事实（publish-store 缓存）。
+  // 规则：第 n 章可发布 ⟺ 大纲序 1..n-1 章已全部发布（从第1章起连续）；
+  // 取消发布 ⟺ 其后没有已发布章节（只能从最后一章起依次取消）。
+  const publishState = usePublishStore((s) => (novelId ? s.byNovel[novelId] : undefined));
+  const publishedWork = publishState?.work ?? null;
+  const pubByChapterId = useMemo(
+    () => new Map((publishState?.chapters ?? []).map((c) => [c.chapter_id, c])),
+    [publishState?.chapters],
+  );
+  const orderedChapters = useMemo(
+    () => sortChaptersByOutline(chapters, acts),
+    [chapters, acts],
+  );
+  const [publishing, setPublishing] = useState(false);
+
+  // 打开节点页即拉取发布状态（系统事实）
+  useEffect(() => {
+    if (novelId) void usePublishStore.getState().load(novelId);
+  }, [novelId]);
+
+  const chapterIdx = node?.chapter_id != null ? orderedChapters.findIndex((c) => c.id === node.chapter_id) : -1;
+  const isChapterPublished = node?.chapter_id != null && pubByChapterId.has(node.chapter_id);
+  const allPrevPublished =
+    chapterIdx >= 0 && orderedChapters.slice(0, chapterIdx).every((c) => pubByChapterId.has(c.id));
+  const hasLaterPublished =
+    chapterIdx >= 0 && orderedChapters.slice(chapterIdx + 1).some((c) => pubByChapterId.has(c.id));
+
+  /** 发布控制按钮的禁用原因（可发布/可取消时返回 null） */
+  const publishBlockReason = (): string | null => {
+    if (!node?.chapter_id) return '该要点尚未绑定正文章节，请先创建正文';
+    if (!publishedWork) return '请先在作品概览页「发布管理」中发布作品';
+    if (!isChapterPublished && !allPrevPublished) return '发布须从第1章起连续，请先发布前面的章节';
+    if (isChapterPublished && hasLaterPublished) return '后面的章节仍在发布中，需先从最后一章起依次取消发布';
+    return null;
+  };
+
+  const handleTogglePublish = async () => {
+    if (!novelId || !node) return;
+    const blocked = publishBlockReason();
+    if (blocked) {
+      showToast(blocked, 'error');
+      return;
+    }
+    const ch = orderedChapters.find((c) => c.id === node.chapter_id);
+    if (!ch) {
+      showToast('未在大纲序中找到该章节', 'error');
+      return;
+    }
+    if (!isChapterPublished) {
+      const ok = await confirmDialog({
+        title: '发布章节',
+        message: `将向读者发布「${ch.title}」，确定发布？`,
+      });
+      if (!ok) return;
+      setPublishing(true);
+      try {
+        const done = await publishChapter(publishedWork!.id, { chapter_id: ch.id });
+        await usePublishStore.getState().markPublished(novelId, [done]);
+        // 发布只写完成标记（写作态），与发布态解耦（备忘录 L61）
+        commitNodeEdit({ status: 'done' });
+        showToast('已发布，读者即刻可读', 'success');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : '发布失败', 'error');
+      } finally {
+        setPublishing(false);
+      }
+    } else {
+      const ok = await confirmDialog({
+        title: '取消发布',
+        message: `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
+        danger: true,
+      });
+      if (!ok) return;
+      setPublishing(true);
+      try {
+        const pid = pubByChapterId.get(ch.id)!.id;
+        await unpublishChapter(pid);
+        await usePublishStore.getState().markUnpublished(novelId, ch.id);
+        showToast('已取消发布该章', 'info');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : '取消发布失败', 'error');
+      } finally {
+        setPublishing(false);
+      }
+    }
+  };
+
   if (!node) {
     // 大纲未加载 → 加载中态；加载完成仍无此要点 → 确实不存在/已删除
     if (!outlineLoaded) {
@@ -262,23 +360,45 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
             <FileText size={12} />
             {node.chapter_id ? '打开正文' : '写正文'}
           </button>
-          {/* 状态标记：写作两态（写作中/已完成），与发布态解耦（备忘录 L61）；
-              发布只写完成标记，不再锁定状态位。旧 published 态按已完成展示。 */}
+          {/* 写作状态二合一（备忘录 L61）：单按钮点击即切换 写作中 ↔ 已完成，
+              无确认提示；发布态解耦，旧 published 态按已完成展示。 */}
           <span className="text-[11px] text-neutral-500 ml-1 mr-0.5">状态</span>
-          {WRITABLE_OUTLINE_STATUSES.map((s) => (
-            <button
-              key={s}
-              onClick={() => commitNodeEdit({ status: s })}
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
-                (node.status === 'published' ? 'done' : node.status) === s
-                  ? STATUS_CHIP[s]
-                  : 'bg-white/4 text-neutral-500 border-white/8 hover:text-neutral-300'
+          <button
+            type="button"
+            onClick={() => commitNodeEdit({ status: toggleWritingStatus(node.status) })}
+            title="点击切换写作状态（写作中 ↔ 已完成）"
+            className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+              STATUS_CHIP[node.status === 'published' ? 'done' : node.status]
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                STATUS_DOT[node.status === 'published' ? 'done' : node.status]
               }`}
-            >
-              {OUTLINE_STATUS_LABELS[s]}
-            </button>
-          ))}
+            />
+            {OUTLINE_STATUS_LABELS[node.status === 'published' ? 'done' : node.status]}
+          </button>
           <div className="flex-1" />
+          {/* 发布 / 取消发布二合一控制（节点页右侧）：带确认弹窗；
+              可发布 ⟺ 前面章节已全部发布（从第1章起连续），取消 ⟺ 其后无已发布章节 */}
+          <button
+            type="button"
+            onClick={() => void handleTogglePublish()}
+            disabled={publishing}
+            title={publishBlockReason() ?? (isChapterPublished ? '点击取消发布该章' : '点击发布该章给读者')}
+            className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-50 ${
+              isChapterPublished
+                ? 'bg-sky-500/12 text-sky-300 border-sky-500/25 hover:bg-sky-500/25'
+                : 'bg-white/4 text-neutral-500 border-white/8 hover:text-neutral-300'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isChapterPublished ? 'bg-sky-400' : 'bg-neutral-600'
+              }`}
+            />
+            {isChapterPublished ? '已发布' : '未发布'}
+          </button>
           <span className="text-[10px] text-neutral-600 tabular-nums">
             {(nodeIdx >= 0 ? nodeIdx + 1 : '-')}/{nodeCount}
           </span>
