@@ -124,7 +124,7 @@ const TopSearch: React.FC = () => {
 };
 
 /**
- * 全局顶栏（约 44px）：左区 Logo + 创作场景切换 → 中区居中搜索 → 右区最大化 + UserMenu。
+ * 全局顶栏（约 44px）：左区 Logo + AI 标 + 社区入口 → 中区居中搜索 → 右区创作场景切换 + 最大化 + UserMenu。
  * 左右两区等宽，中区因此真正居中。
  * 专注模式下整体隐藏；随记模式同样挂载（MemoPad 内部重复元素已移除）。
  */
@@ -141,7 +141,7 @@ const TopBar: React.FC = () => {
   // 可分配，实际表现是紧贴左侧元素、视觉偏左。
   return (
     <div className="relative z-30 shrink-0 h-11 flex items-center gap-3 px-3 border-b border-white/6 bg-surface-1/80 backdrop-blur">
-      {/* 左区：Logo + 创作场景切换 */}
+      {/* 左区：Logo + AI 标 + 社区入口 */}
       <div className="flex-1 flex items-center gap-3 min-w-0">
         <div className="flex items-center gap-2 shrink-0">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center text-[15px] shadow-lg shadow-indigo-500/20">
@@ -156,29 +156,29 @@ const TopBar: React.FC = () => {
           </span>
         </div>
 
-        {/* 创作场景切换：平铺分段控件（原下拉会被顶栏层级遮蔽） */}
-        <div className="shrink-0">
-          <RoleSwitcher />
-        </div>
+        {/* 社区入口：公开发现页（AI 标右侧） */}
+        <a
+          href="/discover"
+          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-neutral-400 hover:text-neutral-100 hover:bg-white/8 transition-colors"
+          title="浏览社区作品"
+        >
+          <Globe size={14} />
+          社区
+        </a>
       </div>
 
-      {/* 社区入口：公开发现页 */}
-      <a
-        href="/discover"
-        className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-neutral-400 hover:text-neutral-100 hover:bg-white/8 transition-colors"
-        title="浏览社区作品"
-      >
-        <Globe size={14} />
-        社区
-      </a>
-
-      {/* 中区：居中搜索（宽度随视口收敛，避免与左右区挤压） */}
-      <div className="shrink-0 w-[min(480px,38vw)]">
+      {/* 中区：居中搜索（缩短 1/4：480→360 / 38vw→28.5vw） */}
+      <div className="shrink-0 w-[min(360px,28.5vw)]">
         <TopSearch />
       </div>
 
-      {/* 右区：最大化 + 用户入口 */}
+      {/* 右区：创作场景切换 + 最大化 + 用户入口 */}
       <div className="flex-1 flex items-center justify-end gap-2 min-w-0">
+        {/* 创作场景切换：平铺分段控件（移至右区，最大化按钮左侧） */}
+        <div className="shrink-0">
+          <RoleSwitcher />
+        </div>
+
         {/* 编辑区最大化/还原（随记模式无侧栏，不参与） */}
         {role !== 'memo' && (
           <button

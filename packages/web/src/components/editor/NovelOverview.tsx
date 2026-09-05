@@ -11,12 +11,18 @@ import WorkStatsPanel from '@/components/publish/WorkStatsPanel';
 import WorldTreePanel from '@/components/branch/WorldTreePanel';
 
 /**
- * 作品概览页（简介页）：选中作品后中央编辑区显示（无打开章节时）。
+ * 作品概览页（全书首页）：以可关闭 Home tab 形式驻留中央标签栏，每部作品一个 tab。
  * 作品元信息 + 发布入口（发布操作与读者数据看板的唯一入口）+ 世界线入口 + 删除入口。
  * 发布按钮从编辑器工具栏迁移至此；读者数据看板从发布弹窗分离至此。
  */
-const NovelOverview: React.FC = () => {
-    const { currentNovel, chapters, deleteNovel } = useNovelStore();
+interface NovelOverviewProps {
+    /** 概览归属作品 id（tab meta 传入，不依赖 currentNovel，支持多作品首页并存） */
+    novelId: number;
+}
+const NovelOverview: React.FC<NovelOverviewProps> = ({ novelId }) => {
+    const { novels, chapters, deleteNovel } = useNovelStore();
+    // 激活首页 tab 时 EditorArea 已联动 selectNovel，可见 tab 的 chapters 即本书章节
+    const currentNovel = novels.find((n) => n.id === novelId) ?? null;
     const { showToast } = useToast();
     const [deleteConfirm, setDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -123,7 +129,8 @@ const NovelOverview: React.FC = () => {
                     </p>
                 </div>
 
-                {/* 操作区：发布入口从编辑器工具栏迁移至此；世界线管理全书分支 */}
+                {/* 操作区：发布入口从编辑器工具栏迁移至此；世界线管理全书分支；
+                    AI 起稿靠右、置于「全本版本」左侧（备忘录 L61） */}
                 <div className="flex items-center gap-2 flex-wrap">
                     <button
                         onClick={handleNewChapter}
@@ -131,13 +138,13 @@ const NovelOverview: React.FC = () => {
                     >
                         <PenLine size={14} /> 新建章节
                     </button>
+                    <div className="flex-1" />
                     <button
                         onClick={() => window.dispatchEvent(new CustomEvent('inkbloom:open-story-workflow'))}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600/15 hover:bg-violet-600/25 text-violet-300 text-sm font-medium transition-all"
                     >
                         <Wand2 size={14} /> AI 起稿
                     </button>
-                    <div className="flex-1" />
                     <button
                         onClick={() => useUIStore.getState().setNovelVersionOpen(true)}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600/15 hover:bg-amber-600/25 text-amber-300 text-sm font-medium transition-all"

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BookOpen, Library, Maximize2, Plus, PenLine } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useUIStore } from '@/stores/ui-store';
+import { useTabStore, overviewTabKey } from '@/stores/tab-store';
 import type { Novel } from '@/types';
 import LibraryExpandedView from './LibraryExpandedView';
 
@@ -39,7 +40,10 @@ const WorksBar: React.FC = () => {
 
   const selectAndGoOverview = (novel: Novel) => {
     selectNovel(novel);
-    useUIStore.getState().setCenterTab('overview');
+    // 全书首页 = 可关闭的 Home tab（每部作品一个）；点击当前书即聚焦其首页
+    useTabStore
+      .getState()
+      .openPanelTab(overviewTabKey(novel.id), novel.title, 'overview', { novelId: novel.id });
   };
 
   const chipBase =

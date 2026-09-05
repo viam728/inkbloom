@@ -80,6 +80,8 @@ interface OutlineState {
   removeAct: (novelId: number, actId: string) => void;
   moveAct: (novelId: number, actId: string, dir: -1 | 1) => void;
   addNode: (novelId: number, actId: string) => OutlineNode;
+  /** 幕内按位置插入新要点（index 越界自动收敛到首/尾）；省略号菜单「上/下方添加」用 */
+  addNodeAt: (novelId: number, actId: string, index: number) => OutlineNode;
   updateNode: (novelId: number, actId: string, nodeId: string, patch: Partial<OutlineNode>) => void;
   removeNode: (novelId: number, actId: string, nodeId: string) => void;
   moveNode: (novelId: number, actId: string, nodeId: string, dir: -1 | 1) => void;
@@ -176,6 +178,25 @@ export const useOutlineStore = create<OutlineState>((set, get) => ({
     };
     commit(set, get, novelId, (acts) =>
       acts.map((a) => (a.id === actId ? { ...a, nodes: [...a.nodes, node] } : a)),
+    );
+    return node;
+  },
+
+  addNodeAt: (novelId, actId, index) => {
+    const node: OutlineNode = {
+      id: crypto.randomUUID(),
+      title: '',
+      summary: '',
+      status: 'drafting',
+    };
+    commit(set, get, novelId, (acts) =>
+      acts.map((a) => {
+        if (a.id !== actId) return a;
+        const nodes = [...a.nodes];
+        const at = Math.max(0, Math.min(index, nodes.length));
+        nodes.splice(at, 0, node);
+        return { ...a, nodes };
+      }),
     );
     return node;
   },

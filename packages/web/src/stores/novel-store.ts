@@ -14,7 +14,7 @@ import {
 } from '@/services/local-backend';
 import type { Novel, Chapter } from '@/types';
 import type { CreateNovelRequest, UpdateNovelRequest, CreateChapterRequest } from '@/types';
-import { useTabStore, chapterTabKey, countDraftWords } from './tab-store';
+import { useTabStore, chapterTabKey, countDraftWords, overviewTabKey } from './tab-store';
 import { useEditorStore } from './editor-store';
 import { useOutlineStore, sortChaptersByOutline } from './outline-store';
 
@@ -70,8 +70,12 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       if (lastId && !get().currentNovel) {
         const nid = Number(lastId);
         const restored = novels.find((n) => n.id === nid);
-        if (restored) void get().selectNovel(restored);
-        else localStorage.removeItem('inkbloom:currentNovelId');
+        if (restored) {
+          void get().selectNovel(restored).then(() => {
+            // 恢复作品后重新打开其全书首页 Home tab（原「刷新回到概览」行为）
+            useTabStore.getState().openPanelTab(overviewTabKey(restored.id), restored.title, 'overview', { novelId: restored.id });
+          });
+        } else localStorage.removeItem('inkbloom:currentNovelId');
       }
     } catch (e) {
       console.error('fetchNovels failed', e);
@@ -122,6 +126,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       chapters: s.currentNovel?.id === id ? [] : s.chapters,
       currentChapter: s.currentNovel?.id === id ? null : s.currentChapter,
     }));
+    // 关闭该书的全书首页 Home tab（无论从何处删除）
+    useTabStore.getState().closeTab(overviewTabKey(id));
   },
 
   selectNovel: async (novel) => {

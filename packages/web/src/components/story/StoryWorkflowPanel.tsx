@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, X } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
-import { useUIStore } from '@/stores/ui-store';
+import { useTabStore, overviewTabKey } from '@/stores/tab-store';
 import { STORY_STAGE_LABELS } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
 import { generateStoryOverview } from '@/services/ai-actions-client';
@@ -119,13 +119,17 @@ const OverviewFieldRow: React.FC<{
 };
 
 /**
- * Agent 全本创作工作流面板。
+ * Agent 全本创作工作流面板（AI 起稿 Home tab，可关闭）。
  *
  * 从一句话创意出发，驱动 story_jobs 状态机逐步生成：
  *   创意 → 大纲 → 分章 → 成稿（逐章预览/采纳）→ 校验 → 定稿。
  * AI 产物先进 stage_payload（预览态），作者点「采纳」才写入真实章节。
  */
-const StoryWorkflowPanel: React.FC = () => {
+interface StoryWorkflowPanelProps {
+  /** 所属 Home tab key：关闭/返回按钮直接关闭该 tab */
+  tabKey?: string;
+}
+const StoryWorkflowPanel: React.FC<StoryWorkflowPanelProps> = ({ tabKey }) => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const createNovel = useNovelStore((s) => s.createNovel);
   const selectNovel = useNovelStore((s) => s.selectNovel);
@@ -601,7 +605,16 @@ const StoryWorkflowPanel: React.FC = () => {
 
   const stageIndex = activeJob ? STAGE_ORDER.indexOf(activeJob.stage) : -1;
 
-  const backToOverview = () => useUIStore.getState().setCenterTab('overview');
+  // 返回作品概览：打开当前作品的首页 Home tab 并关闭本页；无当前作品则仅关闭本页
+  const backToOverview = () => {
+    const st = useTabStore.getState();
+    if (currentNovel) {
+      st.openPanelTab(overviewTabKey(currentNovel.id), currentNovel.title, 'overview', {
+        novelId: currentNovel.id,
+      });
+    }
+    if (tabKey) st.closeTab(tabKey);
+  };
 
   return (
     <div className="flex-1 flex items-center justify-center bg-surface-0 relative overflow-hidden">
@@ -631,7 +644,7 @@ const StoryWorkflowPanel: React.FC = () => {
             )}
             <button
               type="button"
-              onClick={backToOverview}
+              onClick={() => tabKey && useTabStore.getState().closeTab(tabKey)}
               title="关闭 AI 起稿页"
               className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-100 hover:bg-white/10 transition-colors"
             >

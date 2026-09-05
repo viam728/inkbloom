@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { useTabStore, overviewTabKey } from '@/stores/tab-store';
 
 export interface PaletteItem {
   id: string;
@@ -204,7 +205,8 @@ export function useCommandItems(query: string): PaletteItem[] {
       keywords: 'novel 小说 作品',
       action: () => {
         selectNovel(n);
-        useUIStore.getState().setCenterTab('overview');
+        // 全书首页 = 可关闭 Home tab
+        useTabStore.getState().openPanelTab(overviewTabKey(n.id), n.title, 'overview', { novelId: n.id });
       },
     }));
 
