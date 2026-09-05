@@ -5,12 +5,14 @@ import {
   CloudUpload,
   AlertCircle,
   X,
+  Home,
+  Wand2,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useEditorStore } from '@/stores/editor-store';
 import { useUIStore } from '@/stores/ui-store';
 import { useStatsStore } from '@/stores/stats-store';
-import { useTabStore, countDraftWords, chapterTabKey } from '@/stores/tab-store';
+import { useTabStore, countDraftWords, chapterTabKey, STORY_TAB_KEY, type EditorTab } from '@/stores/tab-store';
 import { useOutlineStore, type OutlineNode } from '@/stores/outline-store';
 import { useChapterDraft } from '@/hooks/useChapterDraft';
 import { putAutoSnapshot } from '@/utils/temp-branch';
@@ -38,7 +40,6 @@ const EditorArea: React.FC = () => {
   const currentChapter = useNovelStore((s) => s.currentChapter);
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const focusMode = useUIStore((s) => s.focusMode);
-  const centerTab = useUIStore((s) => s.centerTab);
   const tabs = useTabStore((s) => s.tabs);
   const activeKey = useTabStore((s) => s.activeKey);
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
@@ -201,9 +202,12 @@ const EditorArea: React.FC = () => {
     useEditorStore.getState().mirrorTab(activeTab && activeTab.kind === 'chapter' ? activeTab : null);
   }, [activeTab]);
 
-  // 中央起稿窗口：概览页「AI 起稿」按钮 / 作品列表入口派发此事件 → 切到中央 story 视图
+  // 中央起稿窗口：概览页「AI 起稿」按钮 / 作品列表入口派发此事件 → 打开可关闭的 story Home tab
   useEffect(() => {
-    const openStory = () => useUIStore.getState().setCenterTab('story');
+    const openStory = () =>
+      useTabStore
+        .getState()
+        .openPanelTab(STORY_TAB_KEY, 'AI 起稿', 'story', {});
     window.addEventListener('inkbloom:open-story-workflow', openStory);
     return () => window.removeEventListener('inkbloom:open-story-workflow', openStory);
   }, []);
@@ -250,6 +254,22 @@ const EditorArea: React.FC = () => {
     [addWords],
   );
 
+  /**
+   * 激活 overview 首页 tab 时联动选中对应作品（点击当前书 → 首页语义）。
+   * 返回 true 表示已接管激活（异步 selectNovel 完成后再 setActive），调用方应提前 return。
+   */
+  const syncNovelForOverview = useCallback((tab: EditorTab): boolean => {
+    if (tab.kind !== 'overview') return false;
+    const novelId = tab.meta?.novelId;
+    if (novelId == null) return false;
+    const ns = useNovelStore.getState();
+    if (ns.currentNovel?.id === novelId) return false;
+    const novel = ns.novels.find((n) => n.id === novelId);
+    if (!novel) return false;
+    void ns.selectNovel(novel).then(() => useTabStore.getState().setActive(tab.key));
+    return true;
+  }, []);
+
   /** 切换 tab：章节 tab 先 flush 并经 selectChapter 同步 currentChapter；panel 类 tab 仅激活 */
   const handleSwitch = useCallback(
     (key: string) => {
@@ -258,6 +278,8 @@ const EditorArea: React.FC = () => {
       if (st.activeKey) flushTab(st.activeKey);
       const tab = st.tabs.find((t) => t.key === key);
       if (!tab) return;
+      // 全书首页 tab：激活时联动选中对应作品
+      if (syncNovelForOverview(tab)) return;
       if (tab.kind !== 'chapter' || tab.chapterId == null) {
         st.setActive(key);
         return;
@@ -266,7 +288,7 @@ const EditorArea: React.FC = () => {
       if (chapter) void useNovelStore.getState().selectChapter(chapter);
       else st.setActive(key);
     },
-    [flushTab],
+    [flushTab, syncNovelForOverview],
   );
 
   /** 关闭 tab：章节 tab flush 并让 currentChapter 跟随新激活项；panel 类 tab 直接关闭 */
@@ -283,12 +305,14 @@ const EditorArea: React.FC = () => {
         useNovelStore.setState({ currentChapter: null });
         return;
       }
+      // 关闭后露出的首页 tab：同样联动选书
+      if (syncNovelForOverview(next)) return;
       // panel 类 tab 激活时保持 currentChapter 不动（回到章节 tab 时再同步）
       if (next.kind !== 'chapter' || next.chapterId == null) return;
       const chapter = useNovelStore.getState().chapters.find((c) => c.id === next.chapterId);
       if (chapter) void useNovelStore.getState().selectChapter(chapter);
     },
-    [flushTab],
+    [flushTab, syncNovelForOverview],
   );
 
   // 组件卸载：flush 全部未落盘计时器
@@ -322,14 +346,26 @@ const EditorArea: React.FC = () => {
   const [titleEditing, setTitleEditing] = useState(false);
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /** 提交标题：tab-store + novel-store（章节列表/currentChapter）三处一致（仅章节 tab） */
+  /** 提交标题：tab-store + novel-store（章节列表/currentChapter）三处一致（仅章节 tab）；
+   *  并反向同步大纲要点标题（要点 ↔ 章节标题双向一致） */
   const commitTitle = useCallback((value: string) => {
     const st = useTabStore.getState();
     const tab = st.tabs.find((t) => t.key === st.activeKey);
     const title = value.trim();
     if (!tab || tab.kind !== 'chapter' || tab.chapterId == null || !title || title === tab.title) return;
     st.renameTab(tab.key, title);
+    const novelId = useNovelStore.getState().currentNovel?.id;
     void useNovelStore.getState().renameChapter(tab.chapterId, title).catch(() => undefined);
+    // 反向同步：找到绑定该章节的大纲要点，要点标题跟随章节标题
+    if (novelId != null) {
+      const acts = useOutlineStore.getState().byNovel[novelId];
+      for (const act of acts ?? []) {
+        const bound = act.nodes.find((n) => n.chapter_id === tab.chapterId);
+        if (bound && bound.title !== title) {
+          useOutlineStore.getState().updateNode(novelId, act.id, bound.id, { title });
+        }
+      }
+    }
   }, []);
 
   const handleTitleChange = (value: string) => {
@@ -385,16 +421,8 @@ const EditorArea: React.FC = () => {
       />
     ) : undefined;
 
-  // 中央编辑区视图（无打开章节时）：story=AI 起稿中央窗口，overview=作品概览，均无则欢迎页
+  // 无任何 tab 时显示欢迎页；全书首页 / AI 起稿已改为可关闭的 Home tab
   if (!activeTab) {
-    // 中央起稿窗口（合并「创建作品 + AI 全本创作」，不再常驻右侧栏）
-    if (centerTab === 'story') {
-      return <StoryWorkflowPanel />;
-    }
-    // 选中作品 → 显示作品概览；未选作品 → 欢迎页
-    if (currentNovel) {
-      return <NovelOverview />;
-    }
     return (
       <div className="flex-1 flex items-center justify-center bg-surface-0 relative overflow-hidden">
         {/* 背景光晕 */}
@@ -475,6 +503,9 @@ const EditorArea: React.FC = () => {
                 {active && (
                   <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-gradient-to-r from-indigo-400 to-pink-400 pointer-events-none" />
                 )}
+                {/* Home 类 tab（全书首页 / AI 起稿）图标区分 */}
+                {tab.kind === 'overview' && <Home size={11} className="shrink-0 text-brand-300" />}
+                {tab.kind === 'story' && <Wand2 size={11} className="shrink-0 text-violet-300" />}
                 <span className="truncate">{tab.title}</span>
                 <span className="relative shrink-0 w-4 h-4 flex items-center justify-center">
                   {showSaving ? (
@@ -557,6 +588,10 @@ const EditorArea: React.FC = () => {
                 <OutlineNodeEditor tabKey={t.key} actId={t.meta.actId} nodeId={t.meta.nodeId} />
               ) : t.kind === 'memory' ? (
                 <MemoryEditorPanel tabKey={t.key} meta={t.meta ?? {}} />
+              ) : t.kind === 'overview' && t.meta?.novelId != null ? (
+                <NovelOverview novelId={t.meta.novelId} />
+              ) : t.kind === 'story' ? (
+                <StoryWorkflowPanel tabKey={t.key} />
               ) : null}
             </div>
           ))}

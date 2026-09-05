@@ -102,11 +102,25 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
 
   const commitNodeEdit = (patch?: Partial<OutlineNode>) => {
     if (!novelId || !node) return;
+    const nextTitle = titleDraft.trim();
+    const titleChanged = !!nextTitle && nextTitle !== node.title;
     updateNode(novelId, actId, node.id, {
-      title: titleDraft.trim(),
+      title: nextTitle,
       summary: summaryDraft.trim(),
       ...patch,
     });
+    // 标题双向同步（要点 ↔ 章节）：要点标题变更时同步绑定章节的标题，
+    // 章节列表 / 中央 tab 标签 / currentChapter 由 renameChapter 联动刷新
+    if (titleChanged && node.chapter_id != null) {
+      void useNovelStore
+        .getState()
+        .renameChapter(node.chapter_id, nextTitle)
+        .catch(() => undefined);
+      const tk = chapterTabKey(node.chapter_id);
+      if (useTabStore.getState().tabs.some((t) => t.key === tk)) {
+        useTabStore.getState().renameTab(tk, nextTitle);
+      }
+    }
   };
 
   // ── 大纲 → 成稿：AI 扩写（自 OutlinePanel 迁入） ─────────────────────
