@@ -41,19 +41,20 @@ const STATUS_DOT: Record<OutlineStatus, string> = {
 
 /**
  * 顺序标签（备忘录 L61）：绑定大纲次序、不写入标题文本；点击循环三种渲染：
- * 第一章（中文，默认）/ 1（数字）/ 不含文字的节点标（无文字小标记）。
- * 节点用「章」、幕用「幕」后缀，共享同一模式。
+ * 第一卷/章（中文，默认）/ 1（数字）/ 不含文字的节点标（无文字小标记）。
+ * 节点用「章」、卷用「卷」后缀；章标与卷标渲染模式相互独立（各自持久化）。
  * 字体用 font-display 衬线体区分右侧正文文本；渲染模式仅存浏览器（zustand persist / localStorage），
  * 是大纲次序的衍生展示，不入服务器。
- * variant：act 幕标题头用加粗+更大字号，node 章节点用常规规格。
+ * variant：act 卷标题头用加粗+更大字号，node 章节点用常规规格。
  */
-const OrderTag: React.FC<{ index: number; suffix: '章' | '幕'; variant?: 'act' | 'node' }> = ({
+const OrderTag: React.FC<{ index: number; suffix: '章' | '卷'; variant?: 'act' | 'node' }> = ({
   index,
   suffix,
   variant = 'node',
 }) => {
-  const mode = useUIStore((s) => s.outlineNumMode);
-  const cycle = useUIStore((s) => s.cycleOutlineNumMode);
+  // 卷标与章标模式独立：act 读/循环 actNumMode，node 读/循环 outlineNumMode
+  const mode = useUIStore((s) => (variant === 'act' ? s.actNumMode : s.outlineNumMode));
+  const cycle = useUIStore((s) => (variant === 'act' ? s.cycleActNumMode : s.cycleOutlineNumMode));
   // 兼容：旧持久化残留的 'hidden' 视作 blank
   const m: 'cn' | 'num' | 'blank' = (mode as string) === 'hidden' ? 'blank' : mode;
   const tone =
@@ -67,7 +68,7 @@ const OrderTag: React.FC<{ index: number; suffix: '章' | '幕'; variant?: 'act'
         e.stopPropagation();
         cycle();
       }}
-      title={`顺序标签（绑定大纲次序，点击切换渲染：第一章 / 1 / 无文字节点标）`}
+      title={`顺序标签（绑定大纲次序，点击切换渲染：第${suffix === '卷' ? '一卷' : '一章'} / 1 / 无文字节点标；卷标与章标独立切换）`}
       aria-label={`第${index}${suffix}`}
       className={`shrink-0 rounded-md transition-colors ${
         m === 'blank'
@@ -402,14 +403,14 @@ const OutlinePanel: React.FC = () => {
             <p className="text-xs text-neutral-500 mb-3 leading-relaxed">
               还没有大纲。
               <br />
-              从「第一幕」开始规划你的故事结构
+              从「第一卷」开始规划你的故事结构
             </p>
             <button
               onClick={handleAddAct}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-brand-600 to-fuchsia-600 hover:from-brand-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-brand-600/20"
             >
               <Plus size={13} />
-              创建第一幕
+              创建第一卷
             </button>
           </div>
         )}
@@ -465,7 +466,7 @@ const OutlinePanel: React.FC = () => {
                 setEditingAct(null);
               }
             }}
-            placeholder="幕标题（如：第一幕 · 雨夜来信）"
+            placeholder="卷标题（如：第一卷 · 雨夜来信）"
             autoFocus
             className="w-full px-3.5 py-2.5 rounded-lg bg-white/5 text-sm text-neutral-100 border border-white/10 placeholder-neutral-500 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all"
           />
@@ -563,7 +564,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
           className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
         >
           {/* 幕顺序标签（绑定大纲次序，点击循环 第一章/X/隐藏；加粗+大字号变体） */}
-          <OrderTag index={actNo} suffix="幕" variant="act" />
+          <OrderTag index={actNo} suffix="卷" variant="act" />
           <span className="text-xs font-semibold text-neutral-200 truncate">{act.title}</span>
           <span className="text-[10px] text-neutral-600 shrink-0">{act.nodes.length} 章</span>
         </button>
@@ -713,7 +714,6 @@ const NodeCard: React.FC<NodeCardProps> = ({
       <div className="flex items-center gap-1.5">
         {/* 章节顺序标签（绑定大纲次序，点击循环 第一章/1/隐藏） */}
         <OrderTag index={orderIndex} suffix="章" />
-        <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${STATUS_DOT[writingStatus] ?? STATUS_DOT.drafting}`} />
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
@@ -791,6 +791,10 @@ const NodeCard: React.FC<NodeCardProps> = ({
         >
           <FileText size={11} />
           {node.chapter_id ? '正文' : '写正文'}
+          {/* 写作状态点（右靠）：绿=已完成 黄=写作中 */}
+          <span
+            className={`shrink-0 w-1.5 h-1.5 rounded-full ${STATUS_DOT[writingStatus] ?? STATUS_DOT.drafting}`}
+          />
         </button>
       </div>
       {/* 节点简介不再预览在大纲面板节点元素（备忘录 L61）；梗概在要点编辑器内查看 */}

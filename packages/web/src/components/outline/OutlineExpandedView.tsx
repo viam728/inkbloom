@@ -53,7 +53,7 @@ const OutlineExpandedView: React.FC<OutlineExpandedViewProps> = ({
           <p className="text-xs text-neutral-500 leading-relaxed">
             还没有大纲。
             <br />
-            回到面板从「第一幕」开始规划你的故事结构
+            回到面板从「第一卷」开始规划你的故事结构
           </p>
         </div>
       ) : (

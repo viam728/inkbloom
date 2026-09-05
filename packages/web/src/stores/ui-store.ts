@@ -63,6 +63,8 @@ interface UIState {
   insightView: 'rhythm' | 'dashboard' | 'inspiration';
   /** 大纲顺序标签渲染模式：第一章(cn，默认) / 1(num) / 不含文字的节点标(blank)，点击循环 */
   outlineNumMode: OutlineNumMode;
+  /** 卷标（幕标题头）顺序标签渲染模式：与章标独立切换 */
+  actNumMode: OutlineNumMode;
   subscriptionOpen: boolean;
   tokenOpen: boolean;
   dataOpen: boolean;
@@ -99,6 +101,8 @@ interface UIState {
   setInsightView: (view: 'rhythm' | 'dashboard' | 'inspiration') => void;
   /** 循环大纲顺序标签渲染：cn → num → blank → cn */
   cycleOutlineNumMode: () => void;
+  /** 循环卷标（幕标题头）顺序标签渲染：与章标独立 */
+  cycleActNumMode: () => void;
   setSubscriptionOpen: (open: boolean) => void;
   setTokenOpen: (open: boolean) => void;
   setDataOpen: (open: boolean) => void;
@@ -130,6 +134,7 @@ export const useUIStore = create<UIState>()(
       inspirationOpen: false,
       insightView: 'dashboard',
       outlineNumMode: 'cn',
+      actNumMode: 'cn',
       subscriptionOpen: false,
       tokenOpen: false,
       dataOpen: false,
@@ -181,6 +186,11 @@ export const useUIStore = create<UIState>()(
           outlineNumMode:
             s.outlineNumMode === 'cn' ? 'num' : s.outlineNumMode === 'num' ? 'blank' : 'cn',
         })),
+      cycleActNumMode: () =>
+        set((s) => ({
+          actNumMode:
+            s.actNumMode === 'cn' ? 'num' : s.actNumMode === 'num' ? 'blank' : 'cn',
+        })),
       setSubscriptionOpen: (open) => set({ subscriptionOpen: open }),
       setTokenOpen: (open) => set({ tokenOpen: open }),
       setDataOpen: (open) => set({ dataOpen: open }),
@@ -196,6 +206,7 @@ export const useUIStore = create<UIState>()(
       migrate: (persisted: unknown) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
         if (p.outlineNumMode === 'hidden') p.outlineNumMode = 'blank';
+        if (p.actNumMode === 'hidden') p.actNumMode = 'blank';
         return p as never;
       },
       partialize: (s) => ({
@@ -212,6 +223,8 @@ export const useUIStore = create<UIState>()(
         activeRightTab: s.activeRightTab,
         // 大纲顺序标签渲染模式：持久化（备忘录 L61 顺序标签三态切换）
         outlineNumMode: s.outlineNumMode,
+        // 卷标（幕标题头）渲染模式：与章标独立持久化
+        actNumMode: s.actNumMode,
         // 主动提示开关：持久化，关闭后不再打扰（业务方案 v3 A15）
         hintBarEnabled: s.hintBarEnabled,
       }),
