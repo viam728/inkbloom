@@ -133,7 +133,7 @@ export const useUIStore = create<UIState>()(
       dashboardOpen: false,
       inspirationOpen: false,
       insightView: 'dashboard',
-      outlineNumMode: 'cn',
+      outlineNumMode: 'num',
       actNumMode: 'cn',
       subscriptionOpen: false,
       tokenOpen: false,
