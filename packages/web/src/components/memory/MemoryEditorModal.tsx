@@ -2,18 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
 import Modal from '@/components/common/Modal';
 import TipTapEditor from '@/components/editor/TipTapEditor';
+import AigcCard from '@/components/ai/AigcCard';
 import { useToast } from '@/components/common/Toast';
 import { GROUP_CONFIG, GROUP_ORDER, MEMORY_TAB_META, type MemoryTab } from './memory-config';
 import { parseTags, formatTags } from '@/utils/tags';
 import { escapeHtml } from '@/utils/html';
 import { useOutlineStore, type OutlineAct } from '@/stores/outline-store';
-import type {
-  MemoryItem,
-  MemoryPortrait,
-  MemoryRelation,
-  MemoryType,
+import {
+  normalizeAccess,
+  type MemoryAccess,
+  type MemoryAccessMode,
+  type MemoryItem,
+  type MemoryPortrait,
+  type MemoryRelation,
+  type MemoryType,
 } from '@/stores/memory-store';
-import { agentGenerate, generatePortraitImage, uploadPortrait } from '@/services/agent-client';
+import { uploadPortrait } from '@/services/agent-client';
 
 /** 提交载荷：不含 id / 时间戳（由 store 生成） */
 export type MemoryEditorPayload = Omit<MemoryItem, 'id' | 'created_at' | 'updated_at'>;
@@ -181,6 +185,34 @@ const RelationRow: React.FC<{
   );
 };
 
+/** 权限模式选项行（单选语义；软闸/硬闸分组渲染） */
+const AccessGateOption: React.FC<{
+  active: boolean;
+  label: string;
+  desc: string;
+  onClick: () => void;
+}> = ({ active, label, desc, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+      active ? 'bg-brand-600/20 border-brand-500/40' : 'bg-white/4 border-white/8 hover:bg-white/8'
+    }`}
+  >
+    <span
+      className={`mt-0.5 w-3 h-3 rounded-full border shrink-0 flex items-center justify-center ${
+        active ? 'border-brand-400' : 'border-neutral-600'
+      }`}
+    >
+      {active && <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />}
+    </span>
+    <span className="flex flex-col min-w-0">
+      <span className={`text-[11px] ${active ? 'text-brand-200' : 'text-neutral-300'}`}>{label}</span>
+      <span className="text-[10px] text-neutral-600 leading-relaxed">{desc}</span>
+    </span>
+  </button>
+);
+
 /**
  * 记忆条目编辑器内容（四 Tab：基本资料 / 人物关系 / 详情 / 立绘，按分组声明渲染）：
  * 详情 Tab 内置 AIGC（agent/generate）预览插入与「一键加载基本资料」；
@@ -207,16 +239,17 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
   const [fields, setFields] = useState<Record<string, string>>({});
   const [tagsRaw, setTagsRaw] = useState('');
   const [pinned, setPinned] = useState(false);
-  const [aiVisible, setAiVisible] = useState(true);
-  const [limitVisible, setLimitVisible] = useState(false);
-  const [visibleChapters, setVisibleChapters] = useState<Set<string>>(new Set());
+  /** AI 访问闸门（3 软闸 + 3 硬闸），'default' = 全部关闭；仅 novel scope 显示 */
+  const [accessMode, setAccessMode] = useState<MemoryAccessMode | 'default'>('default');
+  /** restricted_*：解锁章（单选，大纲节点 id） */
+  const [unlockId, setUnlockId] = useState('');
+  /** partial_*：章节集合（多选，大纲节点 id） */
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [relations, setRelations] = useState<MemoryRelation[]>([]);
   const [portraits, setPortraits] = useState<MemoryPortrait[]>([]);
   const [editorFocused, setEditorFocused] = useState(false);
-  const [aigcLoading, setAigcLoading] = useState(false);
   const [aigcPreview, setAigcPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [aiPortraitLoading, setAiPortraitLoading] = useState(false);
   const [previewPortrait, setPreviewPortrait] = useState<MemoryPortrait | null>(null);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -233,13 +266,14 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
     setFields({ ...(item?.fields ?? {}) });
     setTagsRaw(formatTags(item?.tags ?? []));
     setPinned(!!item?.pinned);
-    setAiVisible(item?.ai_visible !== false);
-    setVisibleChapters(new Set(item?.visible_chapters ?? []));
-    setLimitVisible((item?.visible_chapters?.length ?? 0) > 0);
+    // 旧字段（ai_visible / visible_chapters）经 normalizeAccess 迁移后读取
+    const acc = item ? normalizeAccess(item) : undefined;
+    setAccessMode(acc?.mode ?? 'default');
+    setUnlockId(acc?.unlock_chapter_id ?? '');
+    setVisibleIds(new Set(acc?.visible_chapter_ids ?? []));
     setRelations((item?.relations ?? []).map((r) => ({ ...r })));
     setPortraits((item?.portraits ?? []).map((p) => ({ ...p })));
     setEditorFocused(false);
-    setAigcLoading(false);
     setAigcPreview(null);
     setPreviewPortrait(null);
     setSaving(false);
@@ -255,21 +289,19 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
   const showVisibility = scope === 'novel' && novelId !== undefined;
 
   const allNodeIds = useMemo(() => new Set(acts.flatMap((a) => a.nodes.map((n) => n.id))), [acts]);
-  /** 已选但不在当前大纲中的节点 id */
-  const staleIds = useMemo(
-    () => [...visibleChapters].filter((id) => !allNodeIds.has(id)),
-    [visibleChapters, allNodeIds],
-  );
+  /** 已选但不在当前大纲中的节点 id（解锁章 + 可见章集合合并展示） */
+  const staleIds = useMemo(() => {
+    const picked = [unlockId, ...visibleIds].filter((id) => id && !allNodeIds.has(id));
+    return [...new Set(picked)];
+  }, [unlockId, visibleIds, allNodeIds]);
   const hasOutline = acts.some((a) => a.nodes.length > 0);
 
-  /** 关系目标候选：同库其他条目 */
-  const relationCandidates = useMemo(
-    () => allItems.filter((i) => i.id !== item?.id),
-    [allItems, item?.id],
-  );
+  /** 当前模式是否需要单选解锁章 / 多选章节集合 */
+  const needUnlock = accessMode.startsWith('restricted_');
+  const needVisibleSet = accessMode.startsWith('partial_');
 
-  const toggleNode = (nodeId: string) =>
-    setVisibleChapters((prev) => {
+  const toggleVisibleNode = (nodeId: string) =>
+    setVisibleIds((prev) => {
       const next = new Set(prev);
       if (next.has(nodeId)) {
         next.delete(nodeId);
@@ -278,6 +310,12 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
       }
       return next;
     });
+
+  /** 关系目标候选：同库其他条目 */
+  const relationCandidates = useMemo(
+    () => allItems.filter((i) => i.id !== item?.id),
+    [allItems, item?.id],
+  );
 
   /** 切换分组：目标分组不支持当前 Tab 时回退到基本资料 */
   const handleTypeChange = (t: MemoryType) => {
@@ -304,32 +342,69 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
     dispatchInsert(parts.join(''));
   };
 
-  /** AIGC：场景化 Agent 生成，scene 按分组映射；media scope 传 novel_id=0 由 agent-client 处理语义 */
-  const handleAIGC = async () => {
-    if (aigcLoading) return;
-    setAigcLoading(true);
-    try {
-      const instruction = [
-        `条目：${name.trim() || '（未命名）'}`,
-        ...cfg.fields.map((f) => {
-          const v = (fields[f.key] ?? '').trim();
-          return v ? `${f.label}：${v}` : '';
-        }),
-      ]
-        .filter(Boolean)
-        .join('\n');
-      const res = await agentGenerate({
-        novel_id: scope === 'novel' ? (novelId ?? 0) : 0,
-        scene: type,
-        item_id: item?.id,
-        instruction,
-      });
-      setAigcPreview(res.content);
-    } catch {
-      showToast('AIGC 生成失败，请稍后重试', 'error');
-    } finally {
-      setAigcLoading(false);
+  /** AIGC 公共上下文：条目名 + 已填引导字段（各卡 buildInstruction 复用） */
+  const aigcContext = () =>
+    [
+      `条目：${name.trim() || '（未命名）'}`,
+      ...cfg.fields.map((f) => {
+        const v = (fields[f.key] ?? '').trim();
+        return v ? `${f.label}：${v}` : '';
+      }),
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+  /** 详情正文纯文本摘录（表单 ↔ 详情相互拉取：表单卡参考详情，详情卡参考表单已含 aigcContext） */
+  const detailExcerpt = () => {
+    const text = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return text ? text.slice(0, 600) : '';
+  };
+
+  /** 表单卡产物 → 引导字段：识别「字段名：内容」行回填；识别失败则退入详情预览 */
+  const applyFieldsFromAI = (text: string) => {
+    const byLabel = new Map(cfg.fields.map((f) => [f.label, f.key]));
+    const next = { ...fields };
+    let hit = 0;
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim().replace(/^[-*•\d.、\s]+/, '');
+      const m = line.match(/^([^：:]{1,12})[：:](.+)$/);
+      if (!m) continue;
+      const key = byLabel.get(m[1].trim());
+      if (key && m[2].trim()) {
+        next[key] = m[2].trim();
+        hit += 1;
+      }
     }
+    if (hit === 0) {
+      setAigcPreview(text);
+      showToast('未能识别出「字段名：内容」行，已放入详情预览', 'info');
+      return;
+    }
+    setFields(next);
+    showToast(`已填入 ${hit} 项基本资料`, 'success');
+  };
+
+  /** 关系卡产物 → 关系行：识别「目标 | 关系 | 备注」行追加 */
+  const applyRelationsFromAI = (text: string) => {
+    const rows = text
+      .split('\n')
+      .map((l) => l.trim().replace(/^[-*•\d.、\s]+/, ''))
+      .filter(Boolean)
+      .map((line) => line.split(/[|｜]/).map((s) => s.trim().replace(/^["「『]|["」』]$/g, '')))
+      .filter((parts) => parts.length >= 2 && parts[0] && parts[1])
+      .map((parts) => ({
+        id: crypto.randomUUID(),
+        target_name: parts[0],
+        relation: parts[1],
+        bond: 50,
+        note: parts[2] || undefined,
+      }));
+    if (rows.length === 0) {
+      showToast('未能识别关系（需「目标 | 关系 | 备注」逐行输出）', 'error');
+      return;
+    }
+    setRelations((prev) => [...prev, ...rows]);
+    showToast(`已添加 ${rows.length} 条关系`, 'success');
   };
 
   /** 上传立绘：按 scope 调对应端点，成功后追加 portraits 草稿 */
@@ -358,31 +433,19 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
     }
   };
 
-  /** AI 生成立绘：外貌特征拼上下文 → /aigc/prompt → /aigc/generate → 轮询任务结果 */
-  const handleAiPortrait = async () => {
-    if (aiPortraitLoading) return;
-    setAiPortraitLoading(true);
-    try {
-      const appearance =
-        (fields['appearance'] ?? '').trim() || (fields['brief'] ?? '').trim() || name.trim();
-      const contextText = `角色立绘：${name.trim() || '未命名'}。外貌特征：${appearance}`;
-      const res = await generatePortraitImage(contextText, scope === 'novel' ? (novelId ?? 0) : 0);
-      setPortraits((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          url: res.url,
-          thumb_url: res.thumb_url,
-          source: 'ai',
-          created_at: new Date().toISOString(),
-        },
-      ]);
-      showToast('AI 立绘已生成', 'success');
-    } catch {
-      showToast('AI 绘图服务暂不可用', 'error');
-    } finally {
-      setAiPortraitLoading(false);
-    }
+  /** 立绘卡产物 → 追加 AI 立绘引用（thumb 缺省用原图） */
+  const applyPortraitFromAI = (url: string) => {
+    setPortraits((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        url,
+        thumb_url: url,
+        source: 'ai',
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    showToast('AI 立绘已生成', 'success');
   };
 
   const removePortrait = (id: string) => setPortraits((prev) => prev.filter((p) => p.id !== id));
@@ -405,15 +468,21 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
         tags: parseTags(tagsRaw),
         pinned,
         fields: cleanFields,
-        ai_visible: aiVisible,
         relations: cleanRelations,
         portraits,
       };
-      if (showVisibility) {
-        // 限制可见性关闭 → 空数组 = 全部章节可见；开启 → 提交所选（过滤已失效 id）
-        payload.visible_chapters = limitVisible
-          ? [...visibleChapters].filter((id) => allNodeIds.has(id))
-          : [];
+      // AI 访问闸门（novel scope）：模式 + 章节参数；过滤已失效节点 id。
+      // 旧字段（ai_visible / visible_chapters）自此不再写入。
+      if (showVisibility || scope === 'media') {
+        if (accessMode !== 'default') {
+          const acc: MemoryAccess = { mode: accessMode };
+          if (accessMode.startsWith('restricted_')) {
+            if (unlockId && allNodeIds.has(unlockId)) acc.unlock_chapter_id = unlockId;
+          } else if (accessMode.startsWith('partial_')) {
+            acc.visible_chapter_ids = [...visibleIds].filter((id) => allNodeIds.has(id));
+          }
+          payload.ai_access = acc;
+        }
       }
       await onSubmit(payload);
       onClose();
@@ -487,6 +556,26 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
             </div>
             <p className="text-[11px] text-neutral-600 -mt-1.5">{cfg.description}</p>
 
+            {/* AIGC 配置卡（备忘录 L61）：表单 ↔ 详情相互拉取，产物按「字段名：内容」回填表单 */}
+            <AigcCard
+              novelId={scope === 'novel' ? (novelId ?? 0) : 0}
+              scene={type}
+              itemId={item?.id}
+              taskLabel={`AIGC · 填写${cfg.label}`}
+              hint="AI 补全引导字段（输出「字段名：内容」自动回填表单），并参考详情正文"
+              buildInstruction={(extra) =>
+                [
+                  aigcContext(),
+                  detailExcerpt() ? `详情正文（供参考拉取信息）：${detailExcerpt()}` : '',
+                  `请补全以上引导字段，逐行输出「字段名：内容」格式（字段名必须取自：${cfg.fields.map((f) => f.label).join('、')}），不要输出其他内容。`,
+                  extra ? `附加要求：${extra}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              }
+              onApply={applyFieldsFromAI}
+            />
+
             {/* 标题 */}
             <input
               value={name}
@@ -530,28 +619,82 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
                 <Switch checked={pinned} onChange={setPinned} />
                 置顶（排最前，AI 优先携带）
               </label>
-              <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
-                <Switch checked={aiVisible} onChange={setAiVisible} />
-                AI 可见（注入上下文）
-              </label>
             </div>
 
-            {/* 限制可见性：仅 novel scope */}
-            {showVisibility && (
-              <div className="flex flex-col gap-1.5 rounded-lg border border-white/8 bg-white/3 p-3">
-                <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
-                  <Switch checked={limitVisible} onChange={setLimitVisible} />
-                  限制 AI 可见性（章节解锁后才注入上下文）
-                </label>
-                {limitVisible && (
+            {/* AI 访问权限：3 软闸 + 3 硬闸，默认全部关闭（备忘录）。 */}
+            {(showVisibility || scope === 'media') && (
+              <div className="flex flex-col gap-2 rounded-lg border border-white/8 bg-white/3 p-3">
+                <span className="text-[11px] text-neutral-500">AI 访问权限（六种闸门默认关闭，单选）</span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <AccessGateOption
+                    active={accessMode === 'default'}
+                    label="不限制（默认）"
+                    desc="AI 正常读取本条目"
+                    onClick={() => setAccessMode('default')}
+                  />
+                  <AccessGateOption
+                    active={accessMode === 'ignore'}
+                    label="AI 全局忽略"
+                    desc="软闸：注入但要求忽略，除非指令明确提及"
+                    onClick={() => setAccessMode('ignore')}
+                  />
+                  {showVisibility && (
+                    <AccessGateOption
+                      active={accessMode === 'restricted_visible'}
+                      label="AI 限制可见"
+                      desc="软闸：选 1 章解锁；此前不可剧透，仅可伏笔铺垫"
+                      onClick={() => setAccessMode('restricted_visible')}
+                    />
+                  )}
+                  {showVisibility && (
+                    <AccessGateOption
+                      active={accessMode === 'partial_visible'}
+                      label="AI 局部可见"
+                      desc="软闸：多选可见章；其余不可剧透，仅可伏笔铺垫"
+                      onClick={() => setAccessMode('partial_visible')}
+                    />
+                  )}
+                  <AccessGateOption
+                    active={accessMode === 'disabled'}
+                    label="AI 全局禁用"
+                    desc="硬闸：任何情况都不注入本条目"
+                    onClick={() => setAccessMode('disabled')}
+                  />
+                  {showVisibility && (
+                    <AccessGateOption
+                      active={accessMode === 'restricted_disabled'}
+                      label="AI 限制禁用"
+                      desc="硬闸：选 1 章，该章及以后才注入"
+                      onClick={() => setAccessMode('restricted_disabled')}
+                    />
+                  )}
+                  {showVisibility && (
+                    <AccessGateOption
+                      active={accessMode === 'partial_disabled'}
+                      label="AI 局部禁用"
+                      desc="硬闸：仅选中章注入，其余不注入"
+                      onClick={() => setAccessMode('partial_disabled')}
+                    />
+                  )}
+                </div>
+
+                {/* 章节选择：restricted_* 单选解锁章；partial_* 多选可见章 */}
+                {showVisibility && (needUnlock || needVisibleSet) && (
                   <>
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] text-neutral-500">
-                        所选章节任一完成后对 AI 解锁（不选 = 始终不可见）
+                        {needUnlock
+                          ? accessMode.endsWith('_visible')
+                            ? '选择解锁章：该章及以后对 AI 可见；此前视为不可见，仅可伏笔/隐晦线索'
+                            : '选择解锁章：该章及以后才注入；此前不注入'
+                          : accessMode.endsWith('_visible')
+                            ? '勾选可见章：仅这些章节可见；其余仅可伏笔/隐晦线索'
+                            : '勾选注入章：仅这些章节注入'}
+                        （不选 = 始终受限）
                       </span>
-                      {visibleChapters.size > 0 && (
+                      {needVisibleSet && visibleIds.size > 0 && (
                         <button
-                          onClick={() => setVisibleChapters(new Set())}
+                          onClick={() => setVisibleIds(new Set())}
                           className="text-[10px] text-neutral-600 hover:text-neutral-300 transition-colors"
                         >
                           清空选择
@@ -571,11 +714,15 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
                               <div className="text-[10px] text-neutral-600 mb-1">{act.title}</div>
                               <div className="flex flex-wrap gap-1">
                                 {act.nodes.map((node) => {
-                                  const active = visibleChapters.has(node.id);
+                                  const active = needUnlock ? unlockId === node.id : visibleIds.has(node.id);
                                   return (
                                     <button
                                       key={node.id}
-                                      onClick={() => toggleNode(node.id)}
+                                      onClick={() =>
+                                        needUnlock
+                                          ? setUnlockId(unlockId === node.id ? '' : node.id)
+                                          : toggleVisibleNode(node.id)
+                                      }
                                       className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
                                         active
                                           ? 'bg-brand-600/25 text-brand-300 border-brand-500/40'
@@ -597,7 +744,10 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
                         {staleIds.map((id) => (
                           <button
                             key={id}
-                            onClick={() => toggleNode(id)}
+                            onClick={() => {
+                              if (id === unlockId) setUnlockId('');
+                              else setVisibleIds((prev) => new Set([...prev].filter((x) => x !== id)));
+                            }}
                             title="点击清除该失效关联"
                             className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-colors line-through"
                           >
@@ -616,6 +766,28 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
         {/* ── 人物关系 Tab ─────────────────────────────────────── */}
         {tab === 'relations' && !editorFocused && (
           <div className="flex flex-col gap-2">
+            {/* AIGC 配置卡：基于条目与同库条目生成关系网，逐行「目标 | 关系 | 备注」自动追加 */}
+            <AigcCard
+              novelId={scope === 'novel' ? (novelId ?? 0) : 0}
+              scene="character"
+              itemId={item?.id}
+              taskLabel="AIGC · 梳理人物关系"
+              hint="AI 生成关系网（逐行「目标 | 关系 | 备注」自动追加为关系条目）"
+              buildInstruction={(extra) =>
+                [
+                  aigcContext(),
+                  relations.length
+                    ? `已有关系：${relations.map((r) => `${r.target_name}（${r.relation}）`).join('；')}`
+                    : '',
+                  `同库其他条目：${relationCandidates.map((c) => c.name).join('、') || '（无）'}`,
+                  '请生成人物关系，逐行输出「目标 | 关系 | 备注（可空）」格式，不要输出其他内容。',
+                  extra ? `附加要求：${extra}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              }
+              onApply={applyRelationsFromAI}
+            />
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-neutral-500">
                 与其他条目或角色的关系（随保存一起提交）
@@ -676,29 +848,48 @@ const MemoryEditorContent: React.FC<MemoryEditorContentProps> = ({
                 focusable
                 focused={editorFocused}
                 onToggleFocus={() => setEditorFocused((v) => !v)}
-                onAIGC={handleAIGC}
-                aigcLoading={aigcLoading}
                 insertTarget={instanceKey}
+                aigcSlot={
+                  /* AIGC 配置卡（备忘录 L61）：基于基本资料生成详情正文，预览后插入光标处 */
+                  <AigcCard
+                    novelId={scope === 'novel' ? (novelId ?? 0) : 0}
+                    scene={type}
+                    itemId={item?.id}
+                    taskLabel={`AIGC · ${cfg.label}详情`}
+                    hint="基于基本资料与线索库生成详情正文，预览后插入"
+                    buildInstruction={(extra) =>
+                      `${aigcContext()}${extra ? `\n附加要求：${extra}` : ''}`
+                    }
+                    onApply={(c) => setAigcPreview(c)}
+                  />
+                }
               />
             </div>
           </div>
         )}
 
-        {/* ── 立绘 Tab：图片墙 + 上传 + AI 生成 ────────────────── */}
+        {/* ── 立绘 Tab：AIGC 配置卡（图片工作流） + 上传 + 图片墙 ─ */}
         {tab === 'portrait' && !editorFocused && (
           <div className="flex flex-col gap-3">
+            <AigcCard
+              novelId={scope === 'novel' ? (novelId ?? 0) : 0}
+              scene="character"
+              taskLabel="AIGC · 立绘"
+              hint="基于「外貌特征」字段自动拼 Prompt 生成角色立绘"
+              mode="image"
+              buildInstruction={(extra) => {
+                const appearance =
+                  (fields['appearance'] ?? '').trim() ||
+                  (fields['brief'] ?? '').trim() ||
+                  name.trim();
+                return `角色立绘：${name.trim() || '未命名'}。外貌特征：${appearance}${extra ? `。${extra}` : ''}`;
+              }}
+              onApply={applyPortraitFromAI}
+            />
             <div className="flex items-center gap-2">
               <button onClick={() => fileRef.current?.click()} disabled={uploading} className={ghostBtnCls}>
                 {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                 {uploading ? '上传中…' : '上传立绘'}
-              </button>
-              <button onClick={handleAiPortrait} disabled={aiPortraitLoading} className={ghostBtnCls}>
-                {aiPortraitLoading ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <Sparkles size={12} className="text-fuchsia-300" />
-                )}
-                {aiPortraitLoading ? '生成中…' : 'AI 生成立绘'}
               </button>
               <span className="text-[10px] text-neutral-600">
                 AI 生成基于「外貌特征」字段自动拼 Prompt

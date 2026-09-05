@@ -92,8 +92,6 @@ func (h *ChapterHandler) GetChapterContent(c *gin.Context) {
 }
 
 // ReorderChapters handles PUT /api/v1/novels/:id/chapters/order
-// Request body: { ordered_ids: number[] } — full chapter id list in the
-// desired order; positions are rewritten to 0..n-1 (idempotent).
 func (h *ChapterHandler) ReorderChapters(c *gin.Context) {
 	novelID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

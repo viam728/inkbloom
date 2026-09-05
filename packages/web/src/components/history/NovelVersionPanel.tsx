@@ -22,7 +22,7 @@ import { toast } from '@/components/common/Toast';
 /**
  * 整本里程碑快照（Agent safety work Q3）
  *
- * 入口：编辑器工具栏「整本版本」按钮 → ui-store.novelVersionOpen。
+ * 入口：全书概览页操作区「全本版本」按钮 → ui-store.novelVersionOpen（备忘录 L61 迁移）。
  * 对象：当前选中的作品（novel-store.currentNovel），与章节版本历史互补。
  */
 

@@ -25,6 +25,29 @@ export interface MemoryPortrait {
   created_at: string;
 }
 
+/**
+ * AI 访问闸门模式（备忘录：3 软闸 + 3 硬闸）。
+ * 软闸：条目仍注入上下文，附带约束指令（ignore 忽略除非明确提及；
+ *       restricted/partial 在不可见位置只允许伏笔、隐晦线索铺垫）。
+ * 硬闸：位置不符直接不注入（绝不进上下文，绝对的防剧透保证）。
+ */
+export type MemoryAccessMode =
+  | 'ignore'
+  | 'restricted_visible'
+  | 'partial_visible'
+  | 'disabled'
+  | 'restricted_disabled'
+  | 'partial_disabled';
+
+/** AI 访问闸门配置；缺省 = 无限制（六种闸门全部关闭） */
+export interface MemoryAccess {
+  mode: MemoryAccessMode;
+  /** restricted_*：解锁章（大纲节点 id），该章及以后可见/注入 */
+  unlock_chapter_id?: string;
+  /** partial_*：精确章节集合（大纲节点 id） */
+  visible_chapter_ids?: string[];
+}
+
 export interface MemoryItem {
   id: string;
   type: MemoryType;
@@ -35,10 +58,12 @@ export interface MemoryItem {
   pinned?: boolean;
   /** 分组引导字段值（如人物卡的外表/性格/动机等），键为字段 id */
   fields?: Record<string, string>;
-  /** 是否注入 AI 上下文，缺省视为 true */
+  /** 是否注入 AI 上下文，缺省视为 true（旧字段，读取时迁移进 ai_access） */
   ai_visible?: boolean;
-  /** 可见的大纲节点 id，空/缺省 = 全部章节可见 */
+  /** 可见的大纲节点 id，空/缺省 = 全部章节可见（旧章节锁，读取时迁移进 ai_access） */
   visible_chapters?: string[];
+  /** AI 访问闸门（3 软闸 + 3 硬闸），缺省 = 无限制 */
+  ai_access?: MemoryAccess;
   /** 组内排序（reorderItems 写入） */
   order?: number;
   /** 人物关系（仅人物卡使用，其他分组缺省） */
@@ -88,6 +113,22 @@ function legacySort(items: MemoryItem[]): MemoryItem[] {
 const MEMORY_TYPES: MemoryType[] = ['character', 'setting', 'summary', 'inspiration'];
 
 /**
+ * 旧字段迁移（幂等）：ai_visible=false → disabled 硬闸；非空 visible_chapters →
+ * partial_visible（旧"任一完成即全局解锁"语义收紧为按写作位置求值）。已有
+ * ai_access 的条目原样保留——与新字段并存的旧字段不再生效。
+ */
+export function normalizeAccess(
+  i: Pick<MemoryItem, 'ai_access' | 'ai_visible' | 'visible_chapters'>,
+): MemoryAccess | undefined {
+  if (i.ai_access?.mode) return i.ai_access;
+  if (i.ai_visible === false) return { mode: 'disabled' };
+  if (i.visible_chapters?.length) {
+    return { mode: 'partial_visible', visible_chapter_ids: [...i.visible_chapters] };
+  }
+  return undefined;
+}
+
+/**
  * 归一化记忆条目（幂等）：
  * 1. 补齐遗留/外部导入数据缺失的必备字段（id / type / name / tags）：
  *    后端 media_memory 等存储可能只含 name+content（如 per-user 改造前的全局遗留行），
@@ -102,6 +143,7 @@ export function normalizeMemoryItems(items: MemoryItem[]): MemoryItem[] {
     type: MEMORY_TYPES.includes(i.type) ? i.type : 'character',
     name: i.name ?? '',
     tags: Array.isArray(i.tags) ? i.tags : [],
+    ai_access: normalizeAccess(i),
   }));
   const withHtml = withRequired.map((i) => {
     const c = i.content ?? '';

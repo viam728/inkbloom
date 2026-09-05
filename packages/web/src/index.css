@@ -275,3 +275,18 @@ body.resizing * {
   background: rgba(255, 255, 255, 0.8) !important;
   border-color: rgba(0, 0, 0, 0.08) !important;
 }
+
+/* ── VSCode 式左右分屏对比：行内 token 二级高亮（DiffViewer） ── */
+.diff-word-changed {
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.diff-line.bg-\[\#3a1d1d\] .diff-word-changed,
+div[class*='bg-[#3a1d1d]'] .diff-word-changed {
+  background: rgba(248, 81, 73, 0.32);
+  color: #ffb3ad;
+}
+div[class*='bg-[#1d2a1d]'] .diff-word-changed {
+  background: rgba(63, 185, 80, 0.3);
+  color: #b3f5b8;
+}

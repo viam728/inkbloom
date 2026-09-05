@@ -592,6 +592,22 @@ func (s *AgentService) loadAgentOutlineActs(ctx context.Context, userID, novelID
 	return acts
 }
 
+// outlineNodeIDForChapter returns the outline node id bound to chapterID,
+// or nil when the chapter is unbound (or the outline is absent/malformed).
+// This is the writing position for the memory access gates.
+func (s *AgentService) outlineNodeIDForChapter(ctx context.Context, userID, novelID, chapterID int64) *string {
+	cid := strconv.FormatInt(chapterID, 10)
+	for _, act := range s.loadAgentOutlineActs(ctx, userID, novelID) {
+		for _, node := range act.Nodes {
+			if node.ChapterID != nil && *node.ChapterID == cid {
+				id := node.ID
+				return &id
+			}
+		}
+	}
+	return nil
+}
+
 // writeChapter generates chapter body via the chapter agent scene and saves it.
 // mode selects replace (default, whole-chapter rewrite), append (continue and
 // append after existing text) or merge (expand/rewrite a fuller version on top
@@ -638,7 +654,11 @@ func (s *AgentService) writeChapter(ctx context.Context, userID, novelID, chapte
 		}
 	}
 
-	payload, err := s.agentContext.BuildAgentContext(ctx, userID, novelID, "chapter", nil, nil, instruction)
+	// 解析章节绑定的大纲节点（备忘录 L59：章节=大纲要点），作为写作位置
+	// 传入上下文组装——记忆访问闸门（3 软闸 + 3 硬闸）按该位置求值；
+	// 未绑定大纲的章节传 nil，位置型闸门按保守策略（fail-closed）处理。
+	nodeID := s.outlineNodeIDForChapter(ctx, userID, novelID, chapterID)
+	payload, err := s.agentContext.BuildAgentContext(ctx, userID, novelID, "chapter", nil, nodeID, instruction, nil)
 	if err != nil {
 		return `{"error":"构建上下文失败"}`
 	}

@@ -33,6 +33,10 @@ type PublishedRepository interface {
 	ChapterByPublishedID(ctx context.Context, userID, pid int64) (*model.PublishedChapter, error)
 	// ChapterByDraftID returns the published copy of a draft chapter, if any.
 	ChapterByDraftID(ctx context.Context, userID, workID, chapterID int64) (*model.PublishedChapter, error)
+	// ChapterPublishedByChapterID resolves the published copy of a chapter
+	// across all of the author's works (version panel / rollback need the
+	// published body without knowing the workID).
+	ChapterPublishedByChapterID(ctx context.Context, userID, chapterID int64) (*model.PublishedChapter, error)
 	ListChaptersByWork(ctx context.Context, userID, workID int64) ([]model.PublishedChapter, error)
 	UpsertChapter(ctx context.Context, userID int64, c *model.PublishedChapter) error
 	DeleteChapter(ctx context.Context, userID, pid int64) error
@@ -198,6 +202,19 @@ func (r *publishedRepository) ChapterByDraftID(ctx context.Context, userID, work
 	var c model.PublishedChapter
 	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).
 		Where("work_id = ? AND chapter_id = ?", workID, chapterID).First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (r *publishedRepository) ChapterPublishedByChapterID(ctx context.Context, userID, chapterID int64) (*model.PublishedChapter, error) {
+	var c model.PublishedChapter
+	err := r.db.WithContext(ctx).Scopes(scope.ForUser(userID)).
+		Where("chapter_id = ?", chapterID).First(&c).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

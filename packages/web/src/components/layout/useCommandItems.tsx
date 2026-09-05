@@ -42,7 +42,6 @@ export function useCommandItems(query: string): PaletteItem[] {
   const toggleAnalysis = useUIStore((s) => s.toggleAnalysis);
   const setShortcutsOpen = useUIStore((s) => s.setShortcutsOpen);
   const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
-  const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
   const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
   const setActiveRightTab = useUIStore((s) => s.setActiveRightTab);
   const setRole = useUIStore((s) => s.setRole);
@@ -52,6 +51,18 @@ export function useCommandItems(query: string): PaletteItem[] {
 
   return useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
+
+    /** 洞察三件套入口：右侧板「洞察」Tab 深链；随记模式无右侧板，保留仪表盘/灵感包弹窗 */
+    const openInsight = (view: 'rhythm' | 'dashboard' | 'inspiration') => {
+      if (useUIStore.getState().role === 'memo') {
+        if (view === 'dashboard') setDashboardOpen(true);
+        if (view === 'inspiration') setInspirationOpen(true);
+        return;
+      }
+      useUIStore.getState().setInsightView(view);
+      setActiveRightTab('insight');
+      if (useUIStore.getState().rightCollapsed) toggleRight();
+    };
 
     const actions: PaletteItem[] = [
       {
@@ -108,21 +119,21 @@ export function useCommandItems(query: string): PaletteItem[] {
         icon: <BarChart3 size={15} className="text-emerald-400" />,
         title: '打开写作仪表盘',
         keywords: 'dashboard stats 统计 热力图 目标',
-        action: () => setDashboardOpen(true),
+        action: () => openInsight('dashboard'),
       },
       {
         id: 'act-rhythm',
         icon: <Activity size={15} className="text-indigo-400" />,
         title: '查看剧情节奏图',
         keywords: 'rhythm 节奏 张力',
-        action: () => setRhythmOpen(true),
+        action: () => openInsight('rhythm'),
       },
       {
         id: 'act-inspiration',
         icon: <Lightbulb size={15} className="text-amber-400" />,
         title: '打开灵感急救包',
         keywords: 'inspiration 灵感 卡文',
-        action: () => setInspirationOpen(true),
+        action: () => openInsight('inspiration'),
       },
       {
         id: 'act-gallery',
@@ -212,5 +223,5 @@ export function useCommandItems(query: string): PaletteItem[] {
       (item) =>
         item.title.toLowerCase().includes(q) || item.keywords?.toLowerCase().includes(q),
     );
-  }, [query, novels, chapters, selectNovel, selectChapter, toggleFocusMode, toggleLeft, toggleRight, toggleAnalysis, setShortcutsOpen, setDashboardOpen, setRhythmOpen, setInspirationOpen, setActiveRightTab, setRole, setLeftTab]);
+  }, [query, novels, chapters, selectNovel, selectChapter, toggleFocusMode, toggleLeft, toggleRight, toggleAnalysis, setShortcutsOpen, setDashboardOpen, setInspirationOpen, setActiveRightTab, setRole, setLeftTab]);
 }

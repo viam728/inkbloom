@@ -13,44 +13,26 @@ import {
 import { useNovelStore } from '@/stores/novel-store';
 import {
   useOutlineStore,
-  OUTLINE_STATUS_LABELS,
-  toggleWritingStatus,
   type OutlineAct,
   type OutlineNode,
   type OutlineStatus,
 } from '@/stores/outline-store';
-import { trashNode } from '@/services/trash-client';
-import { useTrashStore } from '@/stores/trash-store';
 import { usePublishStore } from '@/stores/publish-store';
 import { useTabStore } from '@/stores/tab-store';
 import { useToast } from '@/components/common/Toast';
 import Modal from '@/components/common/Modal';
 import { htmlToPlainText } from '@/utils/html';
+import VersionCompare from '@/components/history/VersionCompare';
 import OutlineExpandedView from './OutlineExpandedView';
-import TrashModal from './TrashModal';
 
 /** 稳定引用的空数组，避免 selector 每次返回新引用导致无限渲染 */
 const EMPTY_ACTS: OutlineAct[] = [];
 
-const STATUS_CONFIG: Record<
-  OutlineStatus,
-  { dot: string; text: string; chip: string }
-> = {
-  drafting: {
-    dot: 'bg-amber-400',
-    text: 'text-amber-400',
-    chip: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
-  },
-  done: {
-    dot: 'bg-emerald-400',
-    text: 'text-emerald-400',
-    chip: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
-  },
-  published: {
-    dot: 'bg-sky-400',
-    text: 'text-sky-400',
-    chip: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
-  },
+/** 写作状态圆点（展示用）：发布态解耦后，列表只呈现写作中/已完成 */
+const STATUS_DOT: Record<OutlineStatus, string> = {
+  drafting: 'bg-amber-400',
+  done: 'bg-emerald-400',
+  published: 'bg-emerald-400',
 };
 
 /** 结构化创作面板：大纲（幕 → 章节要点）→ AI 扩写 → 成稿章节。
@@ -58,8 +40,7 @@ const STATUS_CONFIG: Record<
 const OutlinePanel: React.FC = () => {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const chapters = useNovelStore((s) => s.chapters);
-  const { createChapter, selectChapter, fetchChapters } = useNovelStore();
-  const loadTrash = useTrashStore((s) => s.load);
+  const { createChapter, selectChapter, fetchChapters, deleteChapter } = useNovelStore();
 
   const acts = useOutlineStore((s) =>
     currentNovel ? s.byNovel[currentNovel.id] ?? EMPTY_ACTS : EMPTY_ACTS,
@@ -77,7 +58,6 @@ const OutlinePanel: React.FC = () => {
 
   const [collapsedActs, setCollapsedActs] = useState<Set<string>>(new Set());
   const [expandedOpen, setExpandedOpen] = useState(false);
-  const [trashOpen, setTrashOpen] = useState(false);
 
   // ── 幕重命名弹窗 ─────────────────────────────────────────────────────
   const [editingAct, setEditingAct] = useState<OutlineAct | null>(null);
@@ -93,6 +73,11 @@ const OutlinePanel: React.FC = () => {
     () => new Set((pubChapters ?? []).map((c) => c.chapter_id)),
     [pubChapters],
   );
+
+  // ── 发布版 vs 编辑版对比 / 回滚（小飞机入口，备忘录 L61） ────────────
+  // 打开共享 VersionCompare：左发布副本、右草稿工作区；回滚前自动把当前
+  // 草稿压入浏览器临时分支（可撤销）。
+  const [compareChapterId, setCompareChapterId] = useState<number | null>(null);
 
   useEffect(() => {
     if (novelId) {
@@ -180,14 +165,14 @@ const OutlinePanel: React.FC = () => {
     }
   };
 
-  /** 删除幕（垃圾桶）：幕下全部要点逐个进桶，再移除空幕 */
+  /** 删除幕：幕下全部要点与绑定章节直接删除（无回收站，删除前确认），再移除空幕 */
   const handleRemoveAct = async (act: OutlineAct) => {
     if (!novelId) return;
     const boundCount = act.nodes.filter((n) => n.chapter_id).length;
     if (
       act.nodes.length > 0 &&
       !window.confirm(
-        `「${act.title || '未命名幕'}」下 ${act.nodes.length} 个要点${boundCount ? `（含 ${boundCount} 章正文）` : ''}将全部移入回收站，可随时恢复，确定？`,
+        `「${act.title || '未命名幕'}」下 ${act.nodes.length} 个要点${boundCount ? `（含 ${boundCount} 章正文）` : ''}将被永久删除，无法恢复，确定？`,
       )
     ) {
       return;
@@ -195,7 +180,7 @@ const OutlinePanel: React.FC = () => {
     let failed = false;
     for (const n of act.nodes) {
       try {
-        await trashNode(novelId, act.id, n.id);
+        if (n.chapter_id) await deleteChapter(n.chapter_id);
       } catch {
         failed = true;
         break;
@@ -204,19 +189,12 @@ const OutlinePanel: React.FC = () => {
     if (!failed) {
       // 空幕从本地移除并 PUT（loadOutline 已同步到服务端最新 version）
       removeAct(novelId, act.id);
-      showToast('幕已删除，要点移入回收站', 'info');
+      showToast('幕及要点已删除', 'info');
     } else {
-      showToast('部分要点删除失败', 'error');
+      showToast('部分章节删除失败', 'error');
     }
     await loadOutline(novelId);
     await fetchChapters(novelId);
-  };
-
-  /** 节点卡两态切换：写作中 ↔ 已完成（已发布节点由系统管理，按钮禁用） */
-  const handleToggleNodeStatus = (actId: string, node: OutlineNode) => {
-    if (!novelId || node.status === 'published') return;
-    if (node.chapter_id != null && publishedChapterIds.has(node.chapter_id)) return;
-    updateNode(novelId, actId, node.id, { status: toggleWritingStatus(node.status) });
   };
 
   // ── 空态与进度 ────────────────────────────────────────────────────────
@@ -260,16 +238,6 @@ const OutlinePanel: React.FC = () => {
             <span className="text-[10px] text-neutral-500 tabular-nums">
               {doneNodes}/{totalNodes} 章完成 · {progress}%
             </span>
-            <button
-              onClick={() => {
-                setTrashOpen(true);
-                if (novelId) loadTrash(novelId);
-              }}
-              title="回收站"
-              className="p-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-white/8 transition-colors"
-            >
-              <Trash2 size={12} />
-            </button>
             <button
               onClick={() => setExpandedOpen(true)}
               title="大纲管理 · 展开视图"
@@ -321,7 +289,7 @@ const OutlinePanel: React.FC = () => {
             onAddNode={() => handleAddNode(act.id)}
             onEditNode={(node) => openNodeEditor(act.id, node)}
             onOpenBody={(node) => handleOpenBody(act.id, node)}
-            onToggleNodeStatus={(node) => handleToggleNodeStatus(act.id, node)}
+            onCompare={(chapterId) => setCompareChapterId(chapterId)}
           />
         ))}
 
@@ -391,18 +359,12 @@ const OutlinePanel: React.FC = () => {
         }}
       />
 
-      {/* 回收站：恢复时重选幕间归属 */}
-      {currentNovel && (
-        <TrashModal
-          open={trashOpen}
-          novelId={currentNovel.id}
-          acts={acts}
-          onClose={() => setTrashOpen(false)}
-          onRestored={async () => {
-            if (!novelId) return;
-            await loadOutline(novelId);
-            await fetchChapters(novelId);
-          }}
+      {/* 发布版 vs 编辑版对比 / 回滚（VSCode 左右分屏，portal 到 body 不被遮挡） */}
+      {compareChapterId !== null && (
+        <VersionCompare
+          open
+          chapterId={compareChapterId}
+          onClose={() => setCompareChapterId(null)}
         />
       )}
     </div>
@@ -421,7 +383,8 @@ interface ActBlockProps {
   onAddNode: () => void;
   onEditNode: (node: OutlineNode) => void;
   onOpenBody: (node: OutlineNode) => void;
-  onToggleNodeStatus: (node: OutlineNode) => void;
+  /** 小飞机入口：已发布章节点击后打开 发布版 vs 编辑版 对比/回滚 */
+  onCompare: (chapterId: number) => void;
 }
 
 const ActBlock: React.FC<ActBlockProps> = ({
@@ -434,7 +397,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
   onAddNode,
   onEditNode,
   onOpenBody,
-  onToggleNodeStatus,
+  onCompare,
 }) => {
   return (
     <div className="mb-2">
@@ -500,7 +463,7 @@ const ActBlock: React.FC<ActBlockProps> = ({
               publishedIds={publishedIds}
               onEdit={() => onEditNode(node)}
               onOpenBody={() => onOpenBody(node)}
-              onToggleStatus={() => onToggleNodeStatus(node)}
+              onCompare={onCompare}
             />
           ))}
         </div>
@@ -509,55 +472,45 @@ const ActBlock: React.FC<ActBlockProps> = ({
   );
 };
 
-// ── 章节要点卡片（点击打开中央要点编辑 tab，状态标签为两态切换按钮） ─────
+// ── 章节要点卡片（点击打开中央要点编辑 tab；小飞机 = 发布/对比统一入口） ──
 interface NodeCardProps {
   node: OutlineNode;
   publishedIds: Set<number>;
   onEdit: () => void;
   onOpenBody: () => void;
-  onToggleStatus: () => void;
+  onCompare: (chapterId: number) => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenBody, onToggleStatus }) => {
+const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenBody, onCompare }) => {
   const hasBody = Boolean(node.chapter_id);
-  // 已发布 = 系统事实（published_chapters）或节点状态标记，二者任一即视为已发布
-  const isPublished =
-    node.status === 'published' || (node.chapter_id != null && publishedIds.has(node.chapter_id));
-  // 写作状态 chip 恒为两态（写作中/已完成）：已发布由独立图标承担，不挤占状态位
-  const writingStatus: OutlineStatus = isPublished || node.status === 'published' ? 'done' : node.status;
-  const status = STATUS_CONFIG[writingStatus] ?? STATUS_CONFIG.drafting;
+  // 已发布 = 系统事实（published_chapters 表），与写作/完成态解耦（备忘录 L61）
+  const isPublished = node.chapter_id != null && publishedIds.has(node.chapter_id);
+  // 写作状态圆点恒为两态展示（写作中/已完成）
+  const writingStatus: OutlineStatus = node.status === 'published' ? 'done' : node.status;
   return (
     <div
       onClick={onEdit}
       className="group relative px-3 py-2 rounded-lg bg-surface-2 border border-white/6 hover:border-brand-500/30 cursor-pointer transition-all"
     >
       <div className="flex items-center gap-2">
-        <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${status.dot}`} />
+        <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${STATUS_DOT[writingStatus] ?? STATUS_DOT.drafting}`} />
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
-        {/* 已发布独立图标位：发布状态由系统管理，与写作状态分离展示 */}
-        {isPublished && (
-          <span
-            title="已发布（发布状态由系统管理）"
-            className="shrink-0 flex items-center justify-center w-4 h-4 rounded bg-sky-500/15 text-sky-300 border border-sky-500/25"
-          >
-            <Send size={9} />
-          </span>
-        )}
-        {/* 写作状态两态切换（写作中 ↔ 已完成） */}
+        {/* 小飞机统一入口：未发布灰显；已发布点亮，点击打开 发布版 vs 编辑版 对比/回滚。
+            发布操作在作品概览页「发布管理」；写作状态切换在要点编辑器内。 */}
         <button
           onClick={(e) => {
             e.stopPropagation();
-            if (!isPublished) onToggleStatus();
+            if (isPublished && node.chapter_id != null) onCompare(node.chapter_id);
           }}
-          disabled={isPublished}
-          title={isPublished ? '已发布章节的写作状态视为已完成' : '点击切换写作状态'}
-          className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full border transition-colors ${status.chip} ${
-            isPublished ? 'cursor-default' : 'hover:brightness-125'
+          disabled={!isPublished}
+          title={isPublished ? '发布版 vs 编辑版对比 / 回滚' : '未发布（在概览页发布管理中发布）'}
+          className={`shrink-0 flex items-center justify-center w-5 h-5 rounded transition-colors ${
+            isPublished ? 'text-sky-300 hover:bg-sky-500/15' : 'text-neutral-700 cursor-default'
           }`}
         >
-          {OUTLINE_STATUS_LABELS[writingStatus] ?? OUTLINE_STATUS_LABELS.drafting}
+          <Send size={11} />
         </button>
       </div>
       {/* 正文入口（章名下方常驻，大纲与章节的交互合并——有正文就打开，没正文就建一章再打开） */}
@@ -582,3 +535,5 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenB
 };
 
 export default OutlinePanel;
+
+

@@ -11,7 +11,6 @@ import CommandPalette from '@/components/layout/CommandPalette';
 import ShortcutsDialog from '@/components/layout/ShortcutsDialog';
 import MemoPad from '@/components/memo/MemoPad';
 import DashboardModal from '@/components/insights/DashboardModal';
-import RhythmModal from '@/components/insights/RhythmModal';
 import InspirationModal from '@/components/insights/InspirationModal';
 import HistoryPanel from '@/components/history/HistoryPanel';
 import NovelVersionPanel from '@/components/history/NovelVersionPanel';
@@ -270,12 +269,10 @@ const AppLayout: React.FC = () => {
       {/* 全局浮层 */}
       <CommandPalette />
       <ShortcutsDialog />
-      <DashboardModal />
-      <RhythmModal />
-      <InspirationModal />
+      {/* 节奏 / 仪表盘 / 灵感包已迁入右侧板「洞察」Tab（备忘录 L61）；随记模式仍保留仪表盘/灵感包弹窗 */}
       {/* 章节版本历史（业务方案 v3 E1） */}
       <HistoryPanel />
-            {/* 整本里程碑快照（Agent safety work Q3） */}
+            {/* 整本里程碑快照（Agent safety work Q3；入口在全书概览页操作区） */}
             <NovelVersionPanel />
     </div>
   );

@@ -1,19 +1,28 @@
 import React from 'react';
-import { Library, Brain, ListOrdered, Megaphone, Lightbulb } from 'lucide-react';
-import NovelList from './NovelList';
+import { Brain, ListOrdered, Megaphone, Lightbulb, Network } from 'lucide-react';
 import KnowledgePanel from '../knowledge/KnowledgePanel';
 import MemoryPanel from '../memory/MemoryPanel';
 import OutlinePanel from '../outline/OutlinePanel';
 import MediaLibraryPanel from '../media/MediaLibraryPanel';
 import TopicPoolPanel from '../media/TopicPoolPanel';
+import ArchitecturePanel from '../architecture/ArchitecturePanel';
+import WorksBar from './WorksBar';
 import ErrorBoundary from '../common/ErrorBoundary';
 import { useNovelStore } from '@/stores/novel-store';
 import { useUIStore, type LeftTab, type CreatorRole } from '@/stores/ui-store';
 
-/** 小说作者：作品库 / 大纲 / 记忆 */
+/**
+ * 左侧板（备忘录 L61 作品库迁移 + 架构栏目）：
+ *  · 小说作者：顶部为作品集成标签条（WorksBar：+ 新建 / 作品库下展 / 作品项
+ *    标签右列），其下为选项 Tab——大纲 / 架构（大纲右侧）/ 记忆；
+ *  · 自媒体作者：内容库 / 选题池 / 记忆（无作品集成条）。
+ *  · 知识图谱面板随大纲 Tab 展示（原作品库 Tab 的承载职责并入 WorksBar）。
+ */
+
+/** 小说作者：大纲 / 架构 / 记忆（作品库已迁移至顶部 WorksBar） */
 const NOVELIST_TABS: { id: LeftTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'library', label: '作品库', icon: <Library size={13} /> },
   { id: 'outline', label: '大纲', icon: <ListOrdered size={13} /> },
+  { id: 'architecture', label: '架构', icon: <Network size={13} /> },
   { id: 'memory', label: '记忆', icon: <Brain size={13} /> },
 ];
 
@@ -43,6 +52,9 @@ const LeftPanel: React.FC = () => {
 
   return (
     <div className="w-full h-full flex flex-col bg-surface-1">
+      {/* 作品集成标签条（仅小说作者；自原作品库 Tab 迁入） */}
+      {role === 'novelist' && <WorksBar />}
+
       {/* Tab 切换：按角色展示不同 Tab（Logo/角色切换/搜索/用户入口已迁至全局 TopBar） */}
       <div className="flex gap-1 px-3 pt-2 pb-2">
         {tabs.map((tab) => (
@@ -62,20 +74,21 @@ const LeftPanel: React.FC = () => {
       </div>
 
       {/* 内容区 */}
-      {activeTab === 'library' && (
-        <>
-          <div className="flex-1 overflow-y-auto py-1 min-h-0">
-            {/* 文章库并入大纲：章节正文统一在大纲面板管理，作品库只列作品 */}
-            <NovelList />
-          </div>
-          {/* 知识图谱面板 */}
-          <KnowledgePanel />
-        </>
-      )}
       {activeTab === 'outline' && (
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <ErrorBoundary label="大纲面板" resetKey={currentNovelId}>
+              <OutlinePanel />
+            </ErrorBoundary>
+          </div>
+          {/* 知识图谱面板（原作品库 Tab 承载，随大纲展示） */}
+          <KnowledgePanel />
+        </div>
+      )}
+      {activeTab === 'architecture' && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          <ErrorBoundary label="大纲面板" resetKey={currentNovelId}>
-            <OutlinePanel />
+          <ErrorBoundary label="架构面板" resetKey={currentNovelId}>
+            <ArchitecturePanel />
           </ErrorBoundary>
         </div>
       )}

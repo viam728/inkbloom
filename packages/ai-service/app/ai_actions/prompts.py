@@ -247,7 +247,7 @@ def story_overview_prompt(
     ctx = "\n".join(ctx_parts) if ctx_parts else "（暂无现有内容）"
 
     # 线索库摘录段：作者勾选了才注入，未勾选（或作品没有对应库）时不出现
-    clue_labels = {"outline": "大纲", "memory": "记忆", "foreshadow": "伏笔"}
+    clue_labels = {"outline": "大纲", "memory": "记忆", "foreshadow": "伏笔", "architecture": "架构"}
     clue_parts = []
     for c in clues or []:
         label = clue_labels.get(c.get("kind", ""), c.get("kind", ""))

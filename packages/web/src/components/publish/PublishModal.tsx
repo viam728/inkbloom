@@ -9,11 +9,9 @@ import {
   publishChapter,
   unpublishChapter,
 } from '@/services/reader-client';
-import { getChapterVersion, fetchChapterContent } from '@/services/history-client';
-import DiffViewer from '@/components/editor/DiffViewer';
-import { htmlToPlainText } from '@/utils/html';
 import { uploadImage } from '@/services/image-client';
 import { track } from '@/services/analytics';
+import VersionCompare from '@/components/history/VersionCompare';
 import { toast } from '@/components/common/Toast';
 
 /**
@@ -137,44 +135,86 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
   const handlePublishChapters = useCallback(async () => {
     if (!published || !currentNovel || selected.size === 0) return;
     setPublishing(true);
-    try {
-      const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
-      const done: Awaited<ReturnType<typeof publishChapter>>[] = [];
-      // 备忘录 L57：按大纲顺序依次发布（勾选集合按 orderedChapters 展示序展开）
-      for (const ch of orderedChapters) {
-        if (!selected.has(ch.id)) continue;
+    const scheduled = useSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
+    const done: Awaited<ReturnType<typeof publishChapter>>[] = [];
+    const failed: { id: number; title: string; message: string }[] = [];
+    // 备忘录 L61：发布 = 推送全书世界线，只推「从第1章开始」的大纲连续前缀。
+    // 沿大纲顺序逐要点检查，一旦出现未成稿（未绑定有效章节）的要点即断线，
+    // 之后的所有章节都不推送；勾选中不在前缀内的章节跳过并明确反馈。
+    const pushable = new Set<number>();
+    {
+      let broken = false;
+      for (const act of outlineActs ?? []) {
+        if (broken) break;
+        for (const n of act.nodes) {
+          const ch = n.chapter_id != null ? orderedChapters.find((c) => c.id === n.chapter_id) : undefined;
+          if (!ch) {
+            broken = true;
+            break;
+          }
+          pushable.add(ch.id);
+        }
+      }
+    }
+    // 按大纲顺序依次发布（勾选集合按 orderedChapters 展示序展开）。
+    // 逐章串行 + 单章失败不中断整批：失败的章节收集后汇总提示，成功的照常入库。
+    for (const ch of orderedChapters) {
+      if (!selected.has(ch.id)) continue;
+      if (!pushable.has(ch.id)) {
+        failed.push({ id: ch.id, title: ch.title, message: '不在连续前缀内（世界线须从第1章起连续）' });
+        continue;
+      }
+      try {
         done.push(await publishChapter(published.id, { chapter_id: ch.id, scheduled_at: scheduled }));
         track('publish_chapter', { work_id: published.id, chapter_id: ch.id });
+      } catch (e) {
+        failed.push({ id: ch.id, title: ch.title, message: e instanceof Error ? e.message : '发布失败' });
       }
-      // 立即发布的章节同步大纲节点为「已发布」；定时发布的保持原状态，到点由读者侧生效
+    }
+    try {
+      // 发布调用完成标记（写作态），但与发布态解耦：不再写 'published' 状态
       const immediate = scheduled ? [] : done.map((d) => d.chapter_id);
-      await usePublishStore.getState().markPublished(currentNovel.id, done);
-      await syncOutlineStatus(immediate, 'published');
-      toast.show(`已发布 ${done.length} 章${scheduled ? '（定时）' : ''}`, 'success');
-      setSelected(new Set());
-      setUseSchedule(false);
-      setScheduledAt('');
+      if (done.length > 0) {
+        await usePublishStore.getState().markPublished(currentNovel.id, done);
+        await syncOutlineStatus(immediate, 'done');
+      }
+      if (failed.length === 0) {
+        toast.show(`已推送 ${done.length} 章${scheduled ? '（定时）' : ''}`, 'success');
+        setSelected(new Set());
+        setUseSchedule(false);
+        setScheduledAt('');
+      } else {
+        // 部分/全部失败：保留失败项的勾选，便于修正后重试
+        toast.show(
+          `推送完成：成功 ${done.length} 章，未推送 ${failed.length} 章（${failed[0].title}：${failed[0].message}${failed.length > 1 ? ' 等' : ''}）`,
+          done.length > 0 ? 'info' : 'error',
+        );
+        setSelected((s) => {
+          const next = new Set<number>();
+          for (const f of failed) if (s.has(f.id)) next.add(f.id);
+          return next;
+        });
+      }
     } catch (e) {
-      toast.show(e instanceof Error ? e.message : '章节发布失败', 'error');
+      toast.show(e instanceof Error ? e.message : '发布状态刷新失败，请重新打开发布管理', 'error');
     } finally {
       setPublishing(false);
     }
-  }, [published, currentNovel, selected, orderedChapters, useSchedule, scheduledAt, syncOutlineStatus]);
+  }, [published, currentNovel, selected, orderedChapters, outlineActs, useSchedule, scheduledAt, syncOutlineStatus]);
 
-  /** 取消发布单章：系统移除公开快照，大纲节点回「已完成」 */
+  /** 取消发布单章：系统移除公开快照；与写作/完成态解耦，不回改节点状态 */
   const handleUnpublishChapter = useCallback(
     async (chapterId: number, pid: number) => {
       if (!currentNovel) return;
       try {
         await unpublishChapter(pid);
         await usePublishStore.getState().markUnpublished(currentNovel.id, chapterId);
-        await syncOutlineStatus([chapterId], 'done');
         toast.show('已取消发布该章', 'info');
       } catch (e) {
         toast.show(e instanceof Error ? e.message : '取消发布失败', 'error');
       }
     },
-    [currentNovel, syncOutlineStatus],
+    [currentNovel],
   );
 
   /**
@@ -196,7 +236,8 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
       try {
         const done = await publishChapter(published.id, { chapter_id: chapterId });
         await usePublishStore.getState().markPublished(currentNovel.id, [done]);
-        await syncOutlineStatus([chapterId], 'published');
+        // 发布调用完成标记（写作态），与发布态解耦
+        await syncOutlineStatus([chapterId], 'done');
         toast.show('已用编辑版本更新发布', 'success');
       } catch (e) {
         toast.show(e instanceof Error ? e.message : '重新发布失败', 'error');
@@ -207,36 +248,9 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     [published, currentNovel, syncOutlineStatus],
   );
 
-  /** 发布版 vs 编辑版只读对比（复用 DiffViewer） */
-  const [compare, setCompare] = useState<{
-    loading: boolean;
-    publishedText: string;
-    draftText: string;
-    title: string;
-  } | null>(null);
+  /** 发布版 vs 编辑版对比（VSCode 左右分屏，回滚前自动暂存到浏览器临时分支） */
+  const [compareChapterId, setCompareChapterId] = useState<number | null>(null);
 
-  const handleComparePublished = useCallback(async (chapterId: number, title: string, versionId?: number) => {
-    if (!versionId) {
-      toast.show('该章发布版本缺少快照记录，无法对比', 'error');
-      return;
-    }
-    setCompare({ loading: true, publishedText: '', draftText: '', title });
-    try {
-      const [ver, draft] = await Promise.all([
-        getChapterVersion(chapterId, versionId),
-        fetchChapterContent(chapterId),
-      ]);
-      setCompare({
-        loading: false,
-        publishedText: htmlToPlainText(ver.content ?? ''),
-        draftText: htmlToPlainText(draft ?? ''),
-        title,
-      });
-    } catch (e) {
-      setCompare(null);
-      toast.show(e instanceof Error ? e.message : '对比加载失败', 'error');
-    }
-  }, []);
 
   const toggleChapter = (id: number) => {
     setSelected((s) => {
@@ -443,7 +457,7 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                           <div className="shrink-0 flex items-center gap-0.5">
                             <button
                               type="button"
-                              onClick={() => void handleComparePublished(ch.id, ch.title, pub.version_id)}
+                              onClick={() => setCompareChapterId(ch.id)}
                               title="发布版 vs 编辑版对比"
                               className="p-1 rounded text-neutral-600 hover:text-brand-300 hover:bg-brand-500/10 transition-colors"
                             >
@@ -521,17 +535,12 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     document.body,
       )}
 
-      {/* 发布版 vs 编辑版只读对比（复用 DiffViewer，层级高于发布弹窗 z-[1000]） */}
-      {compare && (
-        <DiffViewer
-          original={compare.publishedText}
-          modified={compare.draftText}
-          onAccept={() => setCompare(null)}
-          onReject={() => setCompare(null)}
-          title={`发布版 vs 编辑版 · ${compare.title}`}
-          rejectText="关闭"
-          hideAccept
-          overlayClass="z-[1100]"
+      {/* 发布版 vs 编辑版对比（VSCode 左右分屏，portal 到 body 不会被遮挡） */}
+      {compareChapterId !== null && (
+        <VersionCompare
+          open
+          chapterId={compareChapterId}
+          onClose={() => setCompareChapterId(null)}
         />
       )}
     </>
@@ -539,3 +548,6 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
 };
 
 export default PublishModal;
+
+
+

@@ -62,13 +62,15 @@ type PublishedWork struct {
 // TableName specifies the table name for PublishedWork.
 func (PublishedWork) TableName() string { return "published_works" }
 
-// PublishedChapter is a point-in-time copy of a chapter's body.
+// PublishedChapter is a point-in-time copy of a chapter's body (服务器保存的
+// 第二份文章，备忘录 L61 版本三态：草稿/发布两份在服务器，临时在浏览器).
 //
 // The body is stored redundantly rather than joined to `chapters` on read,
 // and that is the whole point: once a chapter is published, the author
 // continuing to edit the draft must NOT change what readers see. A reader
 // mid-chapter suddenly seeing different prose is a worse failure than any
-// amount of duplicated storage.
+// amount of duplicated storage. VersionID additionally points at the
+// chapter_versions publish snapshot (发布快照指针) for traceability.
 type PublishedChapter struct {
 	ID        int64  `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID    int64  `gorm:"not null;index:idx_pc_work,priority:1" json:"user_id"`

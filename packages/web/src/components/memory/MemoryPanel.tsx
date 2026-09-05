@@ -28,6 +28,7 @@ import { GROUP_CONFIG, GROUP_ORDER } from './memory-config';
 import MemoryEditorModal, { type MemoryEditorPayload } from './MemoryEditorModal';
 import MemoryExpandedView from './MemoryExpandedView';
 import { htmlToPlainText } from '@/utils/html';
+import { describeAccess } from '@/utils/memory-access';
 
 interface MemoryPanelProps {
   /** 记忆作用域：novel = 按作品隔离；media = 自媒体全局记忆 */
@@ -509,6 +510,18 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ scope = 'novel' }) => {
                                 <span className="flex-1 text-xs font-medium text-neutral-200 truncate">
                                   {item.name}
                                 </span>
+                                {/* AI 访问闸门徽标（六模式；无限制不显示） */}
+                                {(() => {
+                                  const badge = describeAccess(item);
+                                  return badge ? (
+                                    <span
+                                      title="AI 访问权限（编辑条目可修改）"
+                                      className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-white/6 text-neutral-500"
+                                    >
+                                      {badge}
+                                    </span>
+                                  ) : null;
+                                })()}
                                 {/* 悬停操作 */}
                                 <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button

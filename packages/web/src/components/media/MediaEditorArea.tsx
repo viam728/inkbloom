@@ -12,6 +12,7 @@ import { useToast } from '@/components/common/Toast';
 import { PLATFORMS, type MediaPlatform } from '@/types/media';
 import { adaptContent } from '@/services/media-client';
 import TipTapEditor from '@/components/editor/TipTapEditor';
+import AigcCard from '@/components/ai/AigcCard';
 
 // ── 纯文本 → HTML 辅助（平台适配改写结果转回富文本） ────────────────
 const escapeHtml = (s: string) =>
@@ -137,6 +138,17 @@ const MediaEditorArea: React.FC = () => {
     scheduleSave({ content: html });
   };
 
+  /** AIGC 产物 → 纯文本转 HTML 定向插入本编辑器光标处 */
+  const insertAigc = (text: string) => {
+    const html = plainToHtml(text);
+    setContent((prev) => prev);
+    window.dispatchEvent(
+      new CustomEvent('inkbloom:insert-content', {
+        detail: { html, target: `media-content-${currentContent?.id ?? 0}` },
+      }),
+    );
+  };
+
   if (!currentContent) {
     return (
       <div className="flex-1 flex items-center justify-center bg-surface-0 relative overflow-hidden">
@@ -200,6 +212,26 @@ const MediaEditorArea: React.FC = () => {
           platform={platform}
           onSelectPlatform={handleSelectPlatform}
           onAdapt={handleAdapt}
+          insertTarget={`media-content-${currentContent.id}`}
+          aigcSlot={
+            /* AIGC 配置卡（备忘录 L61）：基于标题与正文素材生成/扩写内容，插入光标处 */
+            <AigcCard
+              scene="summary"
+              taskLabel="AIGC · 内容创作"
+              hint="基于标题与正文生成或扩写内容，插入光标处"
+              buildInstruction={(extra) =>
+                [
+                  title.trim() ? `内容标题：${title.trim()}` : '',
+                  isEmpty ? '' : `现有正文摘录：${content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)}`,
+                  currentMeta ? `目标平台：${currentMeta.label}（风格：${currentMeta.tone}）` : '',
+                  extra ? `附加要求：${extra}` : '请生成适合该平台发布的内容段落。',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              }
+              onApply={insertAigc}
+            />
+          }
           placeholder={
             currentMeta
               ? `为「${currentMeta.label}」写作（建议 ${currentMeta.maxWords} 字以内）：${currentMeta.tone}`

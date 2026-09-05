@@ -12,7 +12,7 @@ export const ANALYSIS_MAX = 460;
 export type CreatorRole = 'novelist' | 'media' | 'memo';
 
 /** 左侧面板 Tab（按角色展示不同子集） */
-export type LeftTab = 'library' | 'outline' | 'memory' | 'contents' | 'topics';
+export type LeftTab = 'library' | 'outline' | 'architecture' | 'memory' | 'contents' | 'topics';
 
 /** 右侧面板 Tab（按角色展示不同子集） */
 export type RightTab =
@@ -23,7 +23,8 @@ export type RightTab =
   | 'title'
   | 'gallery'
   | 'tracker'
-  | 'tasks';
+  | 'tasks'
+  | 'insight';
 
 interface UIState {
   leftWidth: number;
@@ -56,8 +57,9 @@ interface UIState {
   centerTab: 'overview' | 'story';
   /** 全局弹窗 */
   dashboardOpen: boolean;
-  rhythmOpen: boolean;
   inspirationOpen: boolean;
+  /** 右侧板「洞察」Tab 当前子视图（节奏/仪表盘/灵感包，供命令面板深链） */
+  insightView: 'rhythm' | 'dashboard' | 'inspiration';
   subscriptionOpen: boolean;
   tokenOpen: boolean;
   dataOpen: boolean;
@@ -91,8 +93,8 @@ interface UIState {
   setActiveRightTab: (tab: RightTab) => void;
   setCenterTab: (tab: 'overview' | 'story') => void;
   setDashboardOpen: (open: boolean) => void;
-  setRhythmOpen: (open: boolean) => void;
   setInspirationOpen: (open: boolean) => void;
+  setInsightView: (view: 'rhythm' | 'dashboard' | 'inspiration') => void;
   setSubscriptionOpen: (open: boolean) => void;
   setTokenOpen: (open: boolean) => void;
   setDataOpen: (open: boolean) => void;
@@ -122,8 +124,8 @@ export const useUIStore = create<UIState>()(
       activeRightTab: 'chat',
       centerTab: 'overview',
       dashboardOpen: false,
-      rhythmOpen: false,
       inspirationOpen: false,
+      insightView: 'dashboard',
       subscriptionOpen: false,
       tokenOpen: false,
       dataOpen: false,
@@ -169,8 +171,8 @@ export const useUIStore = create<UIState>()(
       setActiveRightTab: (tab) => set({ activeRightTab: tab }),
       setCenterTab: (tab) => set({ centerTab: tab }),
       setDashboardOpen: (open) => set({ dashboardOpen: open }),
-      setRhythmOpen: (open) => set({ rhythmOpen: open }),
       setInspirationOpen: (open) => set({ inspirationOpen: open }),
+      setInsightView: (view) => set({ insightView: view }),
       setSubscriptionOpen: (open) => set({ subscriptionOpen: open }),
       setTokenOpen: (open) => set({ tokenOpen: open }),
       setDataOpen: (open) => set({ dataOpen: open }),

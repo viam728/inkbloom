@@ -18,21 +18,14 @@ import {
   Redo2,
   ImagePlus,
   Download,
-  Activity,
-  BarChart3,
-  Lightbulb,
-  MessageSquareQuote,
   Maximize2,
   Minimize2,
-  Sparkles,
-  Loader2,
   History,
-    BookMarked,
 } from 'lucide-react';
 import ExportModal from '@/components/export/ExportModal';
+import { putAutoSnapshot } from '@/utils/temp-branch';
 import { useUIStore } from '@/stores/ui-store';
 import { useNovelStore } from '@/stores/novel-store';
-import { usePublishStore } from '@/stores/publish-store';
 import {
   useOutlineStore,
   OUTLINE_STATUS_LABELS,
@@ -60,10 +53,6 @@ interface ToolbarProps {
   focused?: boolean;
   /** 局部专注：切换回调（受控） */
   onToggleFocus?: () => void;
-  /** AIGC 入口回调（传入时渲染 Sparkles 按钮） */
-  onAIGC?: () => void;
-  /** AIGC 调用中：按钮展示加载态并禁用 */
-  aigcLoading?: boolean;
   /** 打开图片选择弹窗（仅 full 预设的「图片」按钮使用） */
   onOpenImagePicker?: () => void;
 }
@@ -89,15 +78,11 @@ const STATUS_DOT: Record<OutlineStatus, string> = {
   published: 'bg-sky-400',
 };
 
-const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, onSelectPlatform, onAdapt, preset = 'full', focusable, focused, onToggleFocus, onAIGC, aigcLoading, onOpenImagePicker }) => {
+const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, onSelectPlatform, onAdapt, preset = 'full', focusable, focused, onToggleFocus, onOpenImagePicker }) => {
   const isNovel = variant === 'novel';
   const isPlain = preset === 'plain';
   const [exportOpen, setExportOpen] = useState(false);
-  const setDashboardOpen = useUIStore((s) => s.setDashboardOpen);
-  const setRhythmOpen = useUIStore((s) => s.setRhythmOpen);
-  const setInspirationOpen = useUIStore((s) => s.setInspirationOpen);
   const setHistoryOpen = useUIStore((s) => s.setHistoryOpen);
-    const setNovelVersionOpen = useUIStore((s) => s.setNovelVersionOpen);
   const focusMode = useUIStore((s) => s.focusMode);
   const toggleFocusMode = useUIStore((s) => s.toggleFocusMode);
 
@@ -117,12 +102,6 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
       }
     }
   }
-  // 发布状态系统事实：published_chapters 表（publish-store，OutlinePanel 打开时加载）
-  const pubChapters = usePublishStore((s) =>
-    currentNovel ? s.byNovel[currentNovel.id]?.chapters : undefined,
-  );
-  const chapterPublished =
-    !!currentChapter && (pubChapters?.some((c) => c.chapter_id === currentChapter.id) ?? false);
 
   if (!editor) return null;
 
@@ -247,38 +226,22 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         );
       })}
 
-      {/* 局部专注 / AIGC 受控入口（plain 与 full 预设通用，宿主传入时才渲染） */}
-      {((focusable && onToggleFocus) || onAIGC) && (
+      {/* 局部专注受控入口（plain 与 full 预设通用，宿主传入时才渲染）；
+          AIGC 统一为编辑器顶部配置卡片（备忘录 L61），工具栏不再渲染 Sparkles 入口 */}
+      {focusable && onToggleFocus && (
         <>
           <div className="w-px h-4 bg-white/8 mx-1.5" />
-          {focusable && onToggleFocus && (
-            <button
-              type="button"
-              onClick={onToggleFocus}
-              title={focused ? '退出局部专注' : '局部专注'}
-                            className={`${toolBtnCls} ${focused
-                  ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
-                  : ''
-              }`}
-            >
-              {focused ? <Minimize2 className={iconCls} /> : <Maximize2 className={iconCls} />}
-            </button>
-          )}
-          {onAIGC && (
-            <button
-              type="button"
-              onClick={onAIGC}
-              disabled={aigcLoading}
-              title="AIGC"
-              className={`${toolBtnCls} disabled:opacity-40 disabled:pointer-events-none`}
-            >
-              {aigcLoading ? (
-                <Loader2 className={`${iconCls} animate-spin`} />
-              ) : (
-                <Sparkles className={iconCls} />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onToggleFocus}
+            title={focused ? '退出局部专注' : '局部专注'}
+                          className={`${toolBtnCls} ${focused
+                ? '!bg-brand-600/25 !text-brand-300 shadow-[0_0_0_1px_rgba(99,102,241,0.3)]'
+                : ''
+            }`}
+          >
+            {focused ? <Minimize2 className={iconCls} /> : <Maximize2 className={iconCls} />}
+          </button>
         </>
       )}
 
@@ -298,55 +261,8 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
           <History className="w-3.5 h-3.5" />
         </button>
       )}
-                    {/* 整本里程碑快照（Agent safety work Q3）：作品级，仅小说模式 */}
-                    {isNovel && (
-                        <button
-                            type="button"
-                            onClick={() => setNovelVersionOpen(true)}
-                            className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-brand-300 active:scale-95`}
-                            title="整本版本"
-                        >
-                            <BookMarked className="w-3.5 h-3.5" />
-                        </button>
-                    )}
-      {/* AI 洞察入口（节奏图/批注评审依赖章节，仅小说模式） */}
-      {isNovel && (
-        <>
-          <button
-            type="button"
-            onClick={() => setRhythmOpen(true)}
-            className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-indigo-300 active:scale-95`}
-            title="剧情节奏图"
-          >
-            <Activity className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('inkbloom:show-review'))}
-            className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-orange-300 active:scale-95`}
-            title="AI 批注评审"
-          >
-            <MessageSquareQuote className="w-3.5 h-3.5" />
-          </button>
-        </>
-      )}
-      <button
-        type="button"
-        onClick={() => setDashboardOpen(true)}
-        className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-emerald-300 active:scale-95`}
-        title="写作仪表盘"
-      >
-        <BarChart3 className="w-3.5 h-3.5" />
-      </button>
-      <button
-        type="button"
-        onClick={() => setInspirationOpen(true)}
-        className={`p-1.5 rounded-md transition-all duration-150 text-neutral-400 hover:bg-white/8 hover:text-amber-300 active:scale-95`}
-        title="灵感急救包"
-      >
-        <Lightbulb className="w-3.5 h-3.5" />
-      </button>
-      <div className="w-px h-4 bg-white/8 mx-1.5" />
+      {/* 节奏 / 批注 / 仪表盘 / 灵感包已迁移至右侧板（备忘录 L61）；
+          AI 成章升级为编辑器顶部统一 AIGC 配置卡片；整本版本入口迁至全书概览页 */}
       <button
         type="button"
         onClick={() => {
@@ -383,42 +299,36 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
         <Download className="w-3.5 h-3.5" />
         导出
       </button>
-      {/* 写作状态两态切换（写作中 ↔ 已完成）：当前章节绑定的大纲节点；已发布由系统管理 */}
+      {/* 写作状态两态切换（写作中 ↔ 已完成）：与发布态解耦（备忘录 L61），
+          发布只写完成标记、不再锁定状态位；发布入口在概览页发布管理。
+          切到「已完成」时自动把当前正文存入工作区自动快照（浏览器本地）。 */}
       {isNovel && statusNode && (
         <button
           type="button"
           onClick={() => {
-            if (!currentNovel || !statusNode || statusNode.node.status === 'published' || chapterPublished) return;
+            if (!currentNovel || !statusNode) return;
+            const nextStatus = toggleWritingStatus(statusNode.node.status);
+            if (nextStatus === 'done' && editor && currentChapter) {
+              const html = editor.getHTML();
+              if (html.trim()) putAutoSnapshot(currentChapter.id, html, '点击已完成');
+            }
             useOutlineStore.getState().updateNode(currentNovel.id, statusNode.actId, statusNode.node.id, {
-              status: toggleWritingStatus(statusNode.node.status),
+              status: nextStatus,
             });
           }}
-          disabled={statusNode.node.status === 'published' || chapterPublished}
-          title={
-            statusNode.node.status === 'published' || chapterPublished
-              ? '发布状态由系统管理'
-              : '切换写作状态（写作中 ↔ 已完成）'
-          }
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all disabled:cursor-default ${
-            STATUS_CHIP[
-              statusNode.node.status === 'published' || chapterPublished
-                ? 'published'
-                : statusNode.node.status
-            ]
+          title="切换写作状态（写作中 ↔ 已完成）"
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all ${
+            STATUS_CHIP[statusNode.node.status === 'published' ? 'done' : statusNode.node.status]
           }`}
         >
           <span
             className={`w-1.5 h-1.5 rounded-full ${
-              STATUS_DOT[
-                statusNode.node.status === 'published' || chapterPublished
-                  ? 'published'
-                  : statusNode.node.status
-              ]
+              STATUS_DOT[statusNode.node.status === 'published' ? 'done' : statusNode.node.status]
             }`}
           />
-          {statusNode.node.status === 'published' || chapterPublished
-            ? '已发布'
-            : OUTLINE_STATUS_LABELS[statusNode.node.status]}
+          {OUTLINE_STATUS_LABELS[
+            statusNode.node.status === 'published' ? 'done' : statusNode.node.status
+          ]}
         </button>
       )}
       {/* 发布入口已迁移至作品概览页（NovelOverview 操作区）：发布操作与读者看板统一在概览页 */}
@@ -438,3 +348,4 @@ const Toolbar: React.FC<ToolbarProps> = ({ editor, variant = 'novel', platform, 
 };
 
 export default Toolbar;
+

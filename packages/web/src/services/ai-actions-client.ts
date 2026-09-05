@@ -233,8 +233,8 @@ export interface StoryOverviewContext {
 
 export type StoryOverviewField = keyof StoryOverviewContext;
 
-/** 线索库种类：大纲 / 记忆 / 伏笔（勾选后对本模块所有 AIGC 生效） */
-export type StoryOverviewClueKind = 'outline' | 'memory' | 'foreshadow';
+/** 线索库种类：架构 / 大纲 / 记忆 / 伏笔（AIGC 卡勾选后对本模块所有 AIGC 生效） */
+export type StoryOverviewClueKind = 'architecture' | 'outline' | 'memory' | 'foreshadow';
 
 export interface StoryOverviewClue {
   kind: StoryOverviewClueKind;

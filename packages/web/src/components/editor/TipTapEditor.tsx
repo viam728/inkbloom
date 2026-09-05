@@ -18,7 +18,7 @@ import ImagePickerModal from './ImagePickerModal';
 import CandidatesPanel, { setLastCandidatesContext } from './CandidatesPanel';
 import { toast } from '@/components/common/Toast';
 import { uploadImage } from '@/services/image-client';
-import { snapshotChapter } from '@/services/history-client';
+import { putAutoSnapshot } from '@/utils/temp-branch';
 import { track } from '@/services/analytics';
 import { useAIStore } from '@/stores/ai-store';
 import { useNovelStore } from '@/stores/novel-store';
@@ -48,14 +48,12 @@ interface TipTapEditorProps {
   focused?: boolean;
   /** 局部专注：切换回调（受控） */
   onToggleFocus?: () => void;
-  /** AIGC 入口回调（透传 Toolbar，传入时渲染 Sparkles 按钮） */
-  onAIGC?: () => void;
-  /** AIGC 调用中：按钮展示加载态并禁用 */
-  aigcLoading?: boolean;
   /** 编辑器实例标识：写入容器 data-inkbloom-editor，供 inkbloom:insert-content 定向投递 */
   insertTarget?: string;
   /** 工具栏下方插槽（如章节标题输入框），由宿主自绘 */
   titleSlot?: React.ReactNode;
+  /** AIGC 配置卡片插槽（备忘录 L61）：渲染在工具列表最上方，所有富文本编辑器统一 */
+  aigcSlot?: React.ReactNode;
 }
 
 /** 编辑器变体：三种创作模式共用同一套富文本内核 */
@@ -95,10 +93,9 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   focusable,
   focused,
   onToggleFocus,
-  onAIGC,
-  aigcLoading,
   insertTarget,
   titleSlot,
+  aigcSlot,
 }) => {
   const isNovel = variant === 'novel';
   const isPlain = toolbarPreset === 'plain';
@@ -457,20 +454,14 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   );
 
   /**
-   * AI 改写落库前存点（业务方案 v3 E1，施工任务 A04）。
-   *
-   * 后端无法区分「AI 改写」与「手动编辑」，因此存点只能由前端在覆盖正文前
-   * 显式触发。必须 await：否则可能先落库后存点，存到的就是改写后的新内容。
-   * 存点失败不阻断改写（snapshotChapter 内部已吞异常），仅提示不可回滚。
+   * AI 改写覆盖前暂存（备忘录 L61 三态）：当前正文压入浏览器临时分支，
+   * 服务器不存第三份；用户可随时在版本管理面板撤销。
    */
-  const snapshotBeforeAIRewrite = useCallback(async () => {
+  const snapshotBeforeAIRewrite = useCallback(() => {
     const chapterId = currentChapter?.id;
-    if (!chapterId) return;
-    const v = await snapshotChapter(chapterId, 'ai_rewrite');
-    if (!v) {
-      toast.show('改写前存点失败，本次改写将无法回滚', 'error');
-    }
-  }, [currentChapter?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!chapterId || !editor) return;
+    putAutoSnapshot(chapterId, editor.getHTML(), 'AI 改写覆盖前');
+  }, [currentChapter?.id, editor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle accepting rewrite: replace selected text in editor
   const handleAcceptRewrite = useCallback(async () => {
@@ -626,11 +617,12 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   useEffect(() => {
     const handler = (e: Event) => {
       if (!editor) return;
-      // plain 实例（记忆弹窗编辑器）不接收外部插入广播，避免 AIGC 内容误落
-      if (isPlainRef.current) return;
+      // plain 实例（记忆弹窗编辑器）不接收无目标的全局广播，避免 AIGC 内容误落；
+      // 但 detail.target 精确命中的定向投递（弹窗自身的一键加载/AIGC 插入）必须放行
       const detail = (e as CustomEvent).detail as string | { html?: string; target?: string } | undefined;
-      const html = typeof detail === 'string' ? detail : detail?.html;
       const target = typeof detail === 'string' ? undefined : detail?.target;
+      if (isPlainRef.current && !target) return;
+      const html = typeof detail === 'string' ? detail : detail?.html;
       if (!html) return;
       const el = editorRef.current;
       if (target) {
@@ -653,6 +645,8 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         if (editorRef.current) lastActiveEditorEl = editorRef.current;
       }}
     >
+      {/* AIGC 配置卡片（备忘录 L61）：所有富文本编辑器统一置于工具列表最上方 */}
+      {aigcSlot && <div className="px-3 pt-2 border-b border-white/6 bg-surface-1/60">{aigcSlot}</div>}
       {/* 工具栏恒显：全局专注模式下仍可通过工具栏按钮退出专注 */}
       <Toolbar
         editor={editor}
@@ -664,8 +658,6 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         focusable={focusable}
         focused={focused}
         onToggleFocus={onToggleFocus}
-        onAIGC={onAIGC}
-        aigcLoading={aigcLoading}
         onOpenImagePicker={() => setImagePickerOpen(true)}
       />
       {titleSlot}
@@ -751,3 +743,5 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
 };
 
 export default TipTapEditor;
+
+

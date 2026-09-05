@@ -202,6 +202,18 @@ type PromptBuildResponse struct {
 	Messages json.RawMessage `json:"messages"`
 }
 
+// AgentContextFlags lets the caller (AIGC 卡可选上下文注入) toggle which
+// server-assembled context blocks ride along. Pointer fields: nil = include
+// (back-compat default), false = omit the block entirely.
+type AgentContextFlags struct {
+	Outline    *bool `json:"outline,omitempty"`
+	Memory     *bool `json:"memory,omitempty"`
+	Foreshadow *bool `json:"foreshadow,omitempty"`
+	// PrecedingChapters controls the preceding-chapter excerpts block
+	// (「附近章节/前文」)。
+	PrecedingChapters *bool `json:"preceding_chapters,omitempty"`
+}
+
 // AgentGenerateRequest is the request body for POST /ai/agent/generate.
 // Scene must be one of: character, setting, summary, inspiration, outline.
 // ItemID/NodeID are optional scene-specific anchors.
@@ -215,4 +227,7 @@ type AgentGenerateRequest struct {
 	// through to the orchestrator so scene-model config applies to agent
 	// generation (e.g. outline 扩写) too.
 	Model string `json:"model,omitempty"`
+	// Context toggles server-assembled context blocks (AIGC 卡可选上下文注入).
+	// nil = 全部照常注入（兼容旧调用方）。
+	Context *AgentContextFlags `json:"context,omitempty"`
 }

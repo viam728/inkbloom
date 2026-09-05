@@ -12,6 +12,8 @@ interface DraftPreviewModalProps {
   memoryRefs: string[];
   /** 正在创建章节写入 */
   writing: boolean;
+  /** 主操作按钮文案（节点编辑=创建章节并写入；正文编辑=覆盖当前正文） */
+  writeLabel?: string;
   onClose: () => void;
   /** 创建章节并写入初稿 */
   onWrite: () => void;
@@ -25,6 +27,7 @@ const DraftPreviewModal: React.FC<DraftPreviewModalProps> = ({
   draft,
   memoryRefs,
   writing,
+  writeLabel = '创建章节并写入',
   onClose,
   onWrite,
 }) => {
@@ -107,7 +110,7 @@ const DraftPreviewModal: React.FC<DraftPreviewModalProps> = ({
                 ) : (
                   <>
                     <FilePlus2 size={12} />
-                    创建章节并写入
+                    {writeLabel}
                   </>
                 )}
               </button>

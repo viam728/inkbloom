@@ -43,13 +43,26 @@ def _format_chapters(context: AgentContext) -> str:
     return "\n\n".join(lines)
 
 
+_ACCESS_LABEL = {"ignore": "忽略", "hidden": "隐藏"}
+
+
 def _format_memory(context: AgentContext) -> str:
-    """Format memory items including base fields and relations."""
+    """Format memory items including base fields and relations.
+
+    带软闸指令的条目（Go 端求值结果）在名称后标注访问限制；配套的集中
+    规则块（memory_access_rules）由 _common_context 渲染在前。
+    """
     if not context.memory_items:
         return ""
     lines: list[str] = []
     for item in context.memory_items:
-        lines.append(f"- {item.name}（{item.type}）")
+        access = item.access
+        marker = ""
+        if access is not None and access.visibility in _ACCESS_LABEL:
+            marker = f"［访问限制·{_ACCESS_LABEL[access.visibility]}］"
+        lines.append(f"- {item.name}（{item.type}）{marker}")
+        if access is not None and access.note:
+            lines.append(f"  限制说明：{access.note}")
         if item.content:
             lines.append(f"  描述：{item.content}")
         if item.fields:
@@ -150,6 +163,7 @@ def _common_context(context: AgentContext) -> str:
     parts.append(_ctx_block("大纲结构", _format_outline(context)))
     parts.append(_ctx_block("本章目标", _format_target_node(context)))
     parts.append(_ctx_block("前文摘录", _format_chapters(context)))
+    parts.append(_ctx_block("记忆访问规则", context.memory_access_rules))
     parts.append(_ctx_block("相关记忆与设定", _format_memory(context)))
     parts.append(_ctx_block("已沉淀实体（知识图谱）", _format_knowledge_nodes(context)))
     parts.append(_ctx_block("待回收伏笔线索", _format_foreshadow_threads(context)))

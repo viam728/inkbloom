@@ -120,8 +120,7 @@ func (h *PublishHandler) UnpublishChapter(c *gin.Context) {
 
 // ListWorkChapters handles GET /api/v1/publish/works/:wid/chapters — the
 // author-facing published-chapter list (system truth for the 已发布 badge).
-func (h *PublishHandler) ListWorkChapters(c *gin.Context) {
-	wid, ok := parseID(c, "wid")
+func (h *PublishHandler) ListWorkChapters(c *gin.Context) {	wid, ok := parseID(c, "wid")
 	if !ok {
 		return
 	}
@@ -183,6 +182,74 @@ func (h *PublishHandler) respondPublishError(c *gin.Context, err error) {
 		zap.L().Error("publish operation failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
 	}
+}
+
+// ── 版本管理（备忘录 L61 三态：草稿/发布两份在服务器，临时只在浏览器） ──
+
+// VersionsSummary handles GET /api/v1/chapters/:id/versions/summary
+func (h *PublishHandler) VersionsSummary(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid id"})
+		return
+	}
+	summary, err := h.ps.VersionsSummary(c.Request.Context(), GetUserID(c), id)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
+			return
+		}
+		zap.L().Error("versions summary failed", zap.Int64("chapter_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: summary})
+}
+
+// VersionsBranchContent handles GET /api/v1/chapters/:id/versions/content?branch=published
+func (h *PublishHandler) VersionsBranchContent(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid id"})
+		return
+	}
+	branch := c.DefaultQuery("branch", "published")
+	if branch != "published" && branch != "draft" {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "branch must be draft or published"})
+		return
+	}
+	content, err := h.ps.VersionsBranchContent(c.Request.Context(), GetUserID(c), id, branch)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "chapter not found"})
+			return
+		}
+		zap.L().Error("versions branch content failed", zap.Int64("chapter_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: gin.H{"content": content}})
+}
+
+// VersionsCheckoutPublished handles POST /api/v1/chapters/:id/versions/checkout/published —
+// rolls the draft back to the published copy (前端先把当前草稿压入浏览器临时分支).
+func (h *PublishHandler) VersionsCheckoutPublished(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.APIResponse{Code: 400, Message: "invalid id"})
+		return
+	}
+	content, err := h.ps.CheckoutPublishedVersion(c.Request.Context(), GetUserID(c), id)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "published version not found"})
+			return
+		}
+		zap.L().Error("versions checkout failed", zap.Int64("chapter_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, dto.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.APIResponse{Code: 200, Message: "ok", Data: gin.H{"content": content}})
 }
 
 // ── Reader-facing handler (A18): anonymous reads + logged-in progress/follows ─

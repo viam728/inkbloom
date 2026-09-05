@@ -1,11 +1,12 @@
 import React, { useEffect } from 'react';
-import { ListTodo, Ban, Palette, CircleCheck, CircleX, Clock3, LoaderCircle } from 'lucide-react';
+import { ListTodo, Ban, Palette, CircleCheck, CircleX, Clock3, LoaderCircle, Sparkles } from 'lucide-react';
 import { useTaskStore, type TaskItem } from '@/stores/task-store';
 import { useNovelStore } from '@/stores/novel-store';
 
 /** 任务类型 → 展示名与图标（随任务 handler 注册扩展） */
 const TYPE_META: Record<string, { label: string; icon: React.ReactNode }> = {
   image_gen: { label: '图片生成', icon: <Palette size={12} /> },
+  chapter_generate: { label: 'AI 成章', icon: <Sparkles size={12} /> },
 };
 
 const defaultTypeMeta = (type: string) => ({ label: type || '未知任务', icon: <ListTodo size={12} /> });
@@ -63,7 +64,7 @@ const TaskRow: React.FC<{ task: TaskItem }> = ({ task }) => {
           {status.icon}
           {status.label}
         </span>
-        {active && (
+        {active && !task.local && (
           <button
             onClick={() => {
               if (window.confirm('确定中止该任务？进行中的任务会丢弃结果。')) {

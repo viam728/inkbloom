@@ -40,6 +40,13 @@ type ChapterVersionRepository interface {
 	// presence is a precise, chapter-level signal that the author used AI on
 	// this specific chapter.
 	ExistsAIMark(ctx context.Context, userID, chapterID int64) (bool, error)
+	// DeletePublishMilestones removes the chapter's previous publish-milestone
+	// snapshots (kind=milestone, label 前缀「发布《」). Publishing overwrites
+	// the reader snapshot, so only the latest publish milestone is meaningful;
+	// keeping older ones made every re-publish pile up a duplicate "发布版本"
+	// in the history panel. User-authored milestones (other labels) and auto /
+	// rollback / import versions are never touched.
+	DeletePublishMilestones(ctx context.Context, userID, chapterID int64) (int64, error)
 	// CountSince counts snapshots created at or after `since` for the user
 	// (across all chapters). Used by the retention sweep.
 	CountSince(ctx context.Context, userID int64, since time.Time) (int64, error)
@@ -200,6 +207,19 @@ func (r *chapterVersionRepository) ExistsAIMark(ctx context.Context, userID, cha
 		Where("chapter_id = ? AND kind = ?", chapterID, model.VersionKindAIMark).
 		Count(&n).Error
 	return n > 0, err
+}
+
+// publishLabelPrefix is the label prefix PublishService writes for the
+// publish milestone (「发布《作品》第N章」). It is the discriminator between a
+// system-managed publish checkpoint and an author-created milestone.
+const publishLabelPrefix = "发布《"
+
+func (r *chapterVersionRepository) DeletePublishMilestones(ctx context.Context, userID, chapterID int64) (int64, error) {
+	res := r.db.WithContext(ctx).
+		Scopes(scope.ForUser(userID)).
+		Where("chapter_id = ? AND kind = ? AND label LIKE ?", chapterID, model.VersionKindMilestone, publishLabelPrefix+"%").
+		Delete(&model.ChapterVersion{})
+	return res.RowsAffected, res.Error
 }
 
 func (r *chapterVersionRepository) CountSince(ctx context.Context, userID int64, since time.Time) (int64, error) {

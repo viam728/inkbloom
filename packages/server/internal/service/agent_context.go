@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/inkbloom/server/internal/model"
@@ -37,18 +38,56 @@ type agentOutlineAct struct {
 }
 
 // agentMemoryItem is the minimal memory-item shape needed for context
-// assembly. AIVisible is a pointer so that "absent" (default visible) can
-// be distinguished from an explicit false.
+// assembly. AIVisible/VisibleChapters are the legacy chapter-lock fields
+// (normalized into AIAccess on read); AIAccess is the six-gate permission
+// (备忘录：3 软闸 + 3 硬闸).
 type agentMemoryItem struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Type            string          `json:"type"`
-	Content         string          `json:"content"`
-	Fields          json.RawMessage `json:"fields"`
-	Pinned          bool            `json:"pinned"`
-	AIVisible       *bool           `json:"ai_visible"`
-	VisibleChapters []string        `json:"visible_chapters"`
-	Relations       json.RawMessage `json:"relations"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	Type            string             `json:"type"`
+	Content         string             `json:"content"`
+	Fields          json.RawMessage    `json:"fields"`
+	Pinned          bool               `json:"pinned"`
+	AIVisible       *bool              `json:"ai_visible"`
+	VisibleChapters []string           `json:"visible_chapters"`
+	AIAccess        *agentMemoryAccess `json:"ai_access"`
+	Relations       json.RawMessage    `json:"relations"`
+}
+
+// AI 访问闸门模式（备忘录：3 软闸 + 3 硬闸）。软闸注入条目并附带约束指令；
+// 硬闸直接不注入（求值失败一律 fail-closed，宁可不带也不能剧透）。
+const (
+	accessIgnore             = "ignore"              // 软闸：注入但要求忽略，除非人类指令明确提及
+	accessRestrictedVisible  = "restricted_visible"  // 软闸：解锁章及以后可见，此前仅可伏笔铺垫
+	accessPartialVisible     = "partial_visible"     // 软闸：仅选中章可见，其余仅可伏笔铺垫
+	accessDisabled           = "disabled"            // 硬闸：全局不注入
+	accessRestrictedDisabled = "restricted_disabled" // 硬闸：解锁章及以后注入
+	accessPartialDisabled    = "partial_disabled"    // 硬闸：仅选中章注入
+)
+
+// agentMemoryAccess is the per-item AI access gate config stored in the
+// memory JSONB. unlock_chapter_id / visible_chapter_ids reference outline
+// node ids (备忘录 L59：章节 = 大纲要点，顺序按大纲序).
+type agentMemoryAccess struct {
+	Mode              string   `json:"mode"`
+	UnlockChapterID   string   `json:"unlock_chapter_id,omitempty"`
+	VisibleChapterIDs []string `json:"visible_chapter_ids,omitempty"`
+}
+
+// effectiveAccess returns the item's access config, normalizing the legacy
+// chapter-lock fields (ai_visible=false → disabled; visible_chapters →
+// partial_visible) so old rows keep working without a data migration.
+func (i *agentMemoryItem) effectiveAccess() *agentMemoryAccess {
+	if i.AIAccess != nil && i.AIAccess.Mode != "" {
+		return i.AIAccess
+	}
+	if i.AIVisible != nil && !*i.AIVisible {
+		return &agentMemoryAccess{Mode: accessDisabled}
+	}
+	if len(i.VisibleChapters) > 0 {
+		return &agentMemoryAccess{Mode: accessPartialVisible, VisibleChapterIDs: i.VisibleChapters}
+	}
+	return nil
 }
 
 // ── Frozen output payload (field names must match the Python contract) ───
@@ -73,6 +112,10 @@ type AgentContextData struct {
 	TargetItem        json.RawMessage       `json:"target_item"`
 	// TargetNode is the outline node to write (chapter scene).
 	TargetNode json.RawMessage `json:"target_node"`
+	// MemoryAccessRules carries the centralized 记忆访问规则 text (备忘录
+	// 3 软闸) when any injected item carries an ignore/hidden directive.
+	// Rendered by ai-service as a dedicated prompt block.
+	MemoryAccessRules string                    `json:"memory_access_rules,omitempty"`
 	// KnowledgeNodes carries the novel's established world-building nodes
 	// (from the knowledge graph) so generation stays consistent with them.
 	KnowledgeNodes []AgentKnowledgeNodeOut `json:"knowledge_nodes"`
@@ -118,11 +161,22 @@ type AgentChapterExcerpt struct {
 
 // AgentMemoryItemOut is the memory-item shape forwarded to the AI service.
 type AgentMemoryItemOut struct {
-	Name      string          `json:"name"`
-	Type      string          `json:"type"`
-	Content   string          `json:"content"`
-	Fields    json.RawMessage `json:"fields"`
-	Relations json.RawMessage `json:"relations"`
+	Name      string               `json:"name"`
+	Type      string               `json:"type"`
+	Content   string               `json:"content"`
+	Fields    json.RawMessage      `json:"fields"`
+	Relations json.RawMessage      `json:"relations"`
+	// Access carries the resolved per-item visibility directive for soft
+	// gates (ignore / hidden). nil = 无限制；硬闸条目根本不会进入本列表。
+	Access *AgentMemoryAccessOut `json:"access,omitempty"`
+}
+
+// AgentMemoryAccessOut is the soft-gate directive rendered into the prompt.
+type AgentMemoryAccessOut struct {
+	// Visibility is one of "ignore" | "hidden".
+	Visibility string `json:"visibility"`
+	// Note is the Go-rendered Chinese directive so ai-service only prints it.
+	Note string `json:"note,omitempty"`
 }
 
 // AgentContextService assembles the frozen agent-generation context from the
@@ -154,17 +208,34 @@ func (s *AgentContextService) WithKnowledgeAndForeshadow(kr repository.Knowledge
 	return s
 }
 
+// AgentContextOptions toggles which context blocks are assembled into the
+// payload (AIGC 卡可选上下文注入). Pointer fields: nil = include (default),
+// false = omit the block. TargetItem（记忆 AIGC 卡的显式任务对象）不受
+// IncludeMemory 约束——显式点名等同「人类指令明确提及」。
+type AgentContextOptions struct {
+	IncludeOutline    *bool
+	IncludeMemory     *bool
+	IncludeForeshadow *bool
+	IncludePreceding  *bool
+}
+
+// enabled resolves an optional flag: nil → true.
+func enabled(f *bool) bool {
+	return f == nil || *f
+}
+
 // BuildAgentContext reads the novel's outline/memory documents and chapters
 // within the user's scope, applies chapter-lock visibility filtering, and
 // returns the payload frozen with the Python AI service. itemID/nodeID are
 // optional pointers; an itemID that matches no memory item yields an empty
-// target_item object.
+// target_item object. opts toggles optional context blocks (nil = 全量).
 func (s *AgentContextService) BuildAgentContext(
 	ctx context.Context,
 	userID, novelID int64,
 	scene string,
 	itemID, nodeID *string,
 	instruction string,
+	opts *AgentContextOptions,
 ) (*AgentGeneratePayload, error) {
 	novel, err := s.novelRepo.GetByID(ctx, userID, novelID)
 	if err != nil {
@@ -190,15 +261,22 @@ func (s *AgentContextService) BuildAgentContext(
 	// Agent 对"上一章/前文章节"的感知与作者侧章节序列一致。
 	chapters = orderedChaptersByOutline(chapters, acts)
 
-	// Index node statuses for the chapter-lock rule and locate the chapter
-	// linked to nodeID (preceding excerpts stop before it).
-	doneNodes := make(map[string]bool)
+	// Linearize the outline (acts→nodes order, 与 Python 端「第N章」编号一致)
+	// into nodeID→position/title maps, and locate the chapter linked to nodeID
+	// (preceding excerpts stop before it; memory gates evaluate at its position).
+	nodePos := make(map[string]int)
+	nodeTitle := make(map[string]string)
 	var cutoffChapterID int64
+	targetNodeID := ""
+	if nodeID != nil {
+		targetNodeID = *nodeID
+	}
+	seq := 0
 	for _, act := range acts {
 		for _, node := range act.Nodes {
-			if node.Status == "done" {
-				doneNodes[node.ID] = true
-			}
+			seq++
+			nodePos[node.ID] = seq
+			nodeTitle[node.ID] = node.Title
 			if nodeID != nil && node.ID == *nodeID && node.ChapterID != nil {
 				if id, convErr := strconv.ParseInt(*node.ChapterID, 10, 64); convErr == nil {
 					cutoffChapterID = id
@@ -207,22 +285,48 @@ func (s *AgentContextService) BuildAgentContext(
 		}
 	}
 
+	resolved := resolveMemoryItems(items, targetNodeID, nodePos, nodeTitle)
+
+	// AIGC 卡可选上下文注入：按调用方开关裁剪装配块（nil = 照常注入）。
+	var outlineOut []AgentOutlineActOut
+	var precedingOut []AgentChapterExcerpt
+	var memoryOut []AgentMemoryItemOut
+	memoryRules := ""
+	var foreshadowOut []AgentForeshadowOut
+	if opts == nil || enabled(opts.IncludeOutline) {
+		outlineOut = buildOutlineActsOut(acts)
+	}
+	if opts == nil || enabled(opts.IncludePreceding) {
+		precedingOut = buildPrecedingChapters(chapters, cutoffChapterID)
+	}
+	if opts == nil || enabled(opts.IncludeMemory) {
+		memoryOut = buildMemoryItemsOut(resolved)
+		memoryRules = memoryAccessRules(resolved)
+	}
+	if opts == nil || enabled(opts.IncludeForeshadow) {
+		foreshadowOut = s.loadForeshadowThreads(ctx, userID, novelID)
+	}
+
 	payload := &AgentGeneratePayload{
 		Scene:       scene,
 		Instruction: instruction,
 		Context: AgentContextData{
 			NovelTitle:        novel.Title,
 			NovelDescription:  desc,
-			OutlineActs:       buildOutlineActsOut(acts),
-			PrecedingChapters: buildPrecedingChapters(chapters, cutoffChapterID),
-			MemoryItems:       buildMemoryItemsOut(filterVisibleItems(items, doneNodes)),
+			OutlineActs:       outlineOut,
+			PrecedingChapters: precedingOut,
+			MemoryItems:       memoryOut,
+			MemoryAccessRules: memoryRules,
 			TargetItem:        json.RawMessage("{}"),
 			TargetNode:        json.RawMessage("{}"),
 			KnowledgeNodes:    s.loadKnowledgeNodes(ctx, userID, novelID),
-			ForeshadowThreads: s.loadForeshadowThreads(ctx, userID, novelID),
+			ForeshadowThreads: foreshadowOut,
 		},
 	}
 
+	// target_item：调用方显式指定要生成/编辑的条目（记忆 AIGC 卡）。
+	// 这是作者对该条目的直接点名，等同「人类指令明确提及」——即使条目
+	// 带闸门也照常注入（闸门只约束记忆列表的被动注入，不拦显式任务对象）。
 	if itemID != nil {
 		for i := range items {
 			if items[i].ID == *itemID {
@@ -284,32 +388,132 @@ func (s *AgentContextService) loadMemoryItems(ctx context.Context, userID, novel
 	return items
 }
 
-// filterVisibleItems applies the chapter-lock rules:
-//   - items with an explicit ai_visible == false are dropped;
-//   - items with a non-empty visible_chapters list are kept only when at
-//     least one referenced outline node has status "done".
-func filterVisibleItems(items []agentMemoryItem, doneNodes map[string]bool) []agentMemoryItem {
-	visible := make([]agentMemoryItem, 0, len(items))
+// resolvedMemoryItem is one memory item that survived the hard gates together
+// with its soft-gate directive (visibility visible 时无约束，不出现在 payload)。
+type resolvedMemoryItem struct {
+	item       agentMemoryItem
+	visibility string // "visible" | "ignore" | "hidden"
+	note       string
+}
+
+// resolveMemoryItems evaluates every item's access gate at the current
+// writing position (备忘录：3 软闸 + 3 硬闸) and returns the items to inject
+// with their soft-gate directives:
+//
+//   - 硬闸（disabled / restricted_disabled / partial_disabled）：位置不允许的
+//     条目在此被丢弃，绝不进入 payload —— 这是唯一的绝对保证；
+//   - 软闸（ignore / restricted_visible / partial_visible）：条目照常注入，
+//     但附带 ignore/hidden 标注与约束指令（允许伏笔铺垫）；
+//   - 无 targetNodeID（大纲生成/纯聊天等无写作位置的场景）：位置型闸门一律
+//     fail-closed —— 硬闸不注入、软闸按 hidden 处理，宁可保守不可剧透。
+//
+// pos maps outline node id → 1-based 大纲序（acts→nodes 展开序），title maps
+// node id → 章名（渲染限制说明用）。缺参（未选解锁章/可见章集合为空）同样
+// fail-closed：软闸视为 hidden、硬闸不注入。
+func resolveMemoryItems(items []agentMemoryItem, targetNodeID string, pos map[string]int, title map[string]string) []resolvedMemoryItem {
+	out := make([]resolvedMemoryItem, 0, len(items))
+	targetPos := 0
+	if p, ok := pos[targetNodeID]; ok {
+		targetPos = p
+	}
+	hasTarget := targetNodeID != "" && targetPos > 0
 	for i := range items {
 		item := &items[i]
-		if item.AIVisible != nil && !*item.AIVisible {
+		acc := item.effectiveAccess()
+		if acc == nil {
+			out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
 			continue
 		}
-		if len(item.VisibleChapters) > 0 {
-			unlocked := false
-			for _, nodeID := range item.VisibleChapters {
-				if doneNodes[nodeID] {
-					unlocked = true
-					break
-				}
-			}
-			if !unlocked {
+		switch acc.Mode {
+		case accessDisabled:
+			// 硬闸：全局不注入。
+			continue
+
+		case accessRestrictedDisabled:
+			unlock, ok := pos[acc.UnlockChapterID]
+			if !hasTarget || !ok || targetPos < unlock {
 				continue
 			}
+			out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
+
+		case accessPartialDisabled:
+			if !hasTarget || !containsID(acc.VisibleChapterIDs, targetNodeID) {
+				continue
+			}
+			out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
+
+		case accessIgnore:
+			out = append(out, resolvedMemoryItem{
+				item:       *item,
+				visibility: "ignore",
+				note:       "除非用户当前指令明确提及本条目，否则忽略其内容：不得在正文中使用、复述或据其展开情节。",
+			})
+
+		case accessRestrictedVisible:
+			unlock, ok := pos[acc.UnlockChapterID]
+			if hasTarget && ok && targetPos >= unlock {
+				out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
+				continue
+			}
+			note := "本条目对当前章节属于未来剧情信息：绝对不能剧透、提前显露或直接揭示，仅允许以伏笔、暗示、隐晦线索的方式铺垫。"
+			if t, ok := title[acc.UnlockChapterID]; ok && t != "" {
+				note = fmt.Sprintf("本条目自「%s」章起解锁；在该章之前" + note, t)
+			}
+			out = append(out, resolvedMemoryItem{item: *item, visibility: "hidden", note: note})
+
+		case accessPartialVisible:
+			if hasTarget && containsID(acc.VisibleChapterIDs, targetNodeID) {
+				out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
+				continue
+			}
+			out = append(out, resolvedMemoryItem{
+				item:       *item,
+				visibility: "hidden",
+				note:       "本条目仅在指定章节可见，当前章节不可见：绝对不能剧透、提前显露或直接揭示，仅允许以伏笔、暗示、隐晦线索的方式铺垫。",
+			})
+
+		default:
+			// 未知模式（契约演进容错）：按无限制处理。
+			out = append(out, resolvedMemoryItem{item: *item, visibility: "visible"})
 		}
-		visible = append(visible, *item)
 	}
-	return visible
+	return out
+}
+
+// containsID reports whether ids contains id.
+func containsID(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+// memoryAccessRules returns the centralized 记忆访问规则 text (rendered by
+// ai-service as a dedicated block) when any injected item carries a soft-gate
+// directive, and "" otherwise to keep the payload lean.
+func memoryAccessRules(resolved []resolvedMemoryItem) string {
+	hasIgnore, hasHidden := false, false
+	for _, r := range resolved {
+		switch r.visibility {
+		case "ignore":
+			hasIgnore = true
+		case "hidden":
+			hasHidden = true
+		}
+	}
+	if !hasIgnore && !hasHidden {
+		return ""
+	}
+	rules := "下列记忆条目带有访问限制标注，必须严格遵守："
+	if hasIgnore {
+		rules += "标注「忽略」的条目，除非用户当前指令明确提及，否则不得使用其内容；"
+	}
+	if hasHidden {
+		rules += "标注「隐藏」的条目对当前章节属于未来剧情信息，绝对不能剧透、提前显露或直接揭示，只允许以伏笔、暗示、隐晦线索的方式铺垫。"
+	}
+	return rules
 }
 
 // buildOutlineActsOut maps parsed acts to the frozen output shape. Each node
@@ -400,11 +604,17 @@ func buildPrecedingChapters(chapters []model.Chapter, cutoffChapterID int64) []A
 	return out
 }
 
-// buildMemoryItemsOut maps visible items to the frozen output shape.
-func buildMemoryItemsOut(items []agentMemoryItem) []AgentMemoryItemOut {
-	out := make([]AgentMemoryItemOut, 0, len(items))
-	for i := range items {
-		out = append(out, toMemoryItemOut(&items[i]))
+// buildMemoryItemsOut maps resolved items to the frozen output shape,
+// attaching the soft-gate access directive (visible 且无约束的条目不带 access).
+func buildMemoryItemsOut(resolved []resolvedMemoryItem) []AgentMemoryItemOut {
+	out := make([]AgentMemoryItemOut, 0, len(resolved))
+	for i := range resolved {
+		r := &resolved[i]
+		itemOut := toMemoryItemOut(&r.item)
+		if r.visibility == "ignore" || r.visibility == "hidden" {
+			itemOut.Access = &AgentMemoryAccessOut{Visibility: r.visibility, Note: r.note}
+		}
+		out = append(out, itemOut)
 	}
 	return out
 }

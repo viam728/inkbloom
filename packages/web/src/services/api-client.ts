@@ -49,8 +49,15 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => {
     const body = response.data as { code?: number; message?: string; data?: unknown } | undefined;
-    // APIResponse 包裹：code≠200 即业务错误，message 可直接 toast
-    if (body && typeof body === 'object' && 'code' in body && body.code !== 200) {
+    // APIResponse 包裹：非 2xx 业务码才是错误（201 Created 等同样是成功——
+    // 发布章节/创建作品端点返回 201，若只认 200 会把成功当失败，导致批量
+    // 发布在第一发就中断，表现为「多选只发布了一章」）
+    if (
+      body &&
+      typeof body === 'object' &&
+      typeof body.code === 'number' &&
+      (body.code < 200 || body.code >= 300)
+    ) {
       return Promise.reject(new Error(body.message || '请求失败')) as Promise<never>;
     }
     // 解包 data 后直接返回（与历史行为一致，调用方自行断言类型）

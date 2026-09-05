@@ -4,6 +4,7 @@ import Modal from '@/components/common/Modal';
 import { GROUP_CONFIG, GROUP_ORDER } from './memory-config';
 import { sortMemoryItems, type MemoryItem } from '@/stores/memory-store';
 import { htmlToPlainText } from '@/utils/html';
+import { describeAccess } from '@/utils/memory-access';
 
 interface MemoryExpandedViewProps {
   open: boolean;
@@ -58,9 +59,12 @@ const MemoryExpandedView: React.FC<MemoryExpandedViewProps> = ({ open, onClose, 
                           <Pin size={10} className="text-brand-300 shrink-0" />
                         )}
                         <span className="flex-1 text-xs font-medium text-neutral-200 truncate">{item.name}</span>
-                        {item.ai_visible === false && (
-                          <span className="text-[9px] px-1 py-0.5 rounded bg-white/6 text-neutral-500">AI 不可见</span>
-                        )}
+                        {(() => {
+                          const badge = describeAccess(item);
+                          return badge ? (
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-white/6 text-neutral-500">{badge}</span>
+                          ) : null;
+                        })()}
                       </div>
                       {preview && (
                         <p className="text-[11px] text-neutral-500 leading-relaxed line-clamp-4">{preview}</p>

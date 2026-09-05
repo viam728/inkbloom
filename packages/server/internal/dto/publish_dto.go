@@ -64,6 +64,23 @@ type PublishedChapterResponse struct {
 	PublishedAt  time.Time  `json:"published_at"`
 }
 
+// ── 版本管理（备忘录 L61 三态：草稿/发布两份在服务器，临时只在浏览器） ──
+
+// VersionBranchSummary is one server-side version state of a chapter.
+type VersionBranchSummary struct {
+	Exists    bool      `json:"exists"`
+	VersionID *int64    `json:"version_id,omitempty"`
+	WordCount int       `json:"word_count"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// VersionPanelSummary drives the 版本管理 panel. The temp (临时) third state
+// lives only in the browser (localStorage) and never reaches the server.
+type VersionPanelSummary struct {
+	Draft     VersionBranchSummary  `json:"draft"`
+	Published *VersionBranchSummary `json:"published,omitempty"`
+}
+
 // ChapterStatsDTO is one bar of the read-through funnel (plan A23).
 // ReaderCount is how many readers' latest reading position currently sits on
 // this chapter — an honest proxy for the drop-off funnel given the

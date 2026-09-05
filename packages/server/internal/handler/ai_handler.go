@@ -941,7 +941,18 @@ func (h *AIHandler) AgentGenerate(c *gin.Context) {
 		zap.String("scene", req.Scene),
 	)
 
-	payload, err := h.agentContext.BuildAgentContext(c.Request.Context(), GetUserID(c), req.NovelID, req.Scene, req.ItemID, req.NodeID, req.Instruction)
+	// AIGC 卡可选上下文注入：把调用方开关映射为装配选项（nil = 全量）。
+	var opts *service.AgentContextOptions
+	if req.Context != nil {
+		opts = &service.AgentContextOptions{
+			IncludeOutline:    req.Context.Outline,
+			IncludeMemory:     req.Context.Memory,
+			IncludeForeshadow: req.Context.Foreshadow,
+			IncludePreceding:  req.Context.PrecedingChapters,
+		}
+	}
+
+	payload, err := h.agentContext.BuildAgentContext(c.Request.Context(), GetUserID(c), req.NovelID, req.Scene, req.ItemID, req.NodeID, req.Instruction, opts)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, dto.APIResponse{Code: 404, Message: "novel not found"})

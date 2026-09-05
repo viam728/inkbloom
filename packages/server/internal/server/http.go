@@ -479,6 +479,13 @@ func New(cfg *config.Config, logger *zap.Logger, h Handlers) *HTTPServer {
 		api.PUT("/chapters/:id", h.Chapter.UpdateChapter)
 		api.DELETE("/chapters/:id", h.Chapter.DeleteChapter)
 
+		// 版本管理（备忘录 L61 三态）：草稿/发布两份正文在服务器（发布记录
+		// 带 version_id 快照指针），临时分支只存在于浏览器 localStorage。
+		// 静态段（summary/content/checkout）须注册在 :vid 通配之前（contract C5）。
+		api.GET("/chapters/:id/versions/summary", h.Publish.VersionsSummary)
+		api.GET("/chapters/:id/versions/content", h.Publish.VersionsBranchContent)
+		api.POST("/chapters/:id/versions/checkout/published", h.Publish.VersionsCheckoutPublished)
+
 		// Chapter version history (E1, plan A05). The static `restore`
 		// segment must be registered before the `:vid` wildcard (contract C5).
 		if h.History != nil {

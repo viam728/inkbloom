@@ -1,47 +1,29 @@
 import apiClient from './api-client';
 
 /**
- * 章节版本历史服务（业务方案 v3 E1）
+ * 章节版本管理客户端（备忘录 L61 三态：草稿-发布-临时）
  *
- * 端点契约：
- *   GET    /chapters/:id/versions                → 摘要列表（不含正文）
- *   GET    /chapters/:id/versions/:vid           → 单条含正文
- *   POST   /chapters/:id/versions                → 手动打点 { kind, label }
- *   POST   /chapters/:id/versions/:vid/restore   → 回滚，返回回滚前的检查点
+ * 服务器保存两份文章：
+ *   草稿 = chapters.content（工作区）；发布 = published_chapters.content
+ *   （不可变副本，带 version_id → chapter_versions 发布快照指针）。
+ *   GET    /chapters/:id/versions/summary            → 草稿/发布两态概要
+ *   GET    /chapters/:id/versions/content?branch=X   → 某一态正文
+ *   POST   /chapters/:id/versions/checkout/published → 回滚（发布正文拷回草稿）
+ * 临时分支只存浏览器 localStorage（utils/temp-branch），服务器永不保存。
  */
 
-export type ChapterVersionKind = 'auto' | 'milestone' | 'ai_rewrite' | 'rollback' | 'import';
-
-export interface ChapterVersionSummary {
-  id: number;
-  chapter_id: number;
-  novel_id: number;
-  title: string;
+/** 单个版本态概要 */
+export interface VersionBranchSummary {
+  exists: boolean;
+  version_id?: number;
   word_count: number;
-  kind: ChapterVersionKind;
-  label?: string;
-  content_hash: string;
-  created_at: string;
+  updated_at: string;
 }
 
-export interface ChapterVersionDetail extends ChapterVersionSummary {
-  content?: string;
-  content_json?: unknown;
-}
-
-/** 保留策略（A07）：自动快照的存活时长；max_days 为 0 表示不限期 */
-export interface RetentionInfo {
-  keep_count: number;
-  max_days: number;
-  tier: 'free' | 'paid' | 'unlimited';
-}
-
-export interface VersionListResponse {
-  versions: ChapterVersionSummary[];
-  total: number;
-  limit: number;
-  offset: number;
-  retention?: RetentionInfo;
+/** 版本面板数据：草稿 + 发布（未发布时缺省） */
+export interface VersionPanelSummary {
+  draft: VersionBranchSummary;
+  published?: VersionBranchSummary | null;
 }
 
 /** 拉取章节当前正文（回滚后用于刷新编辑器草稿） */
@@ -52,53 +34,28 @@ export async function fetchChapterContent(chapterId: number): Promise<string> {
   return data?.content ?? '';
 }
 
-export async function listChapterVersions(
-  chapterId: number,
-  limit = 50,
-  offset = 0,
-): Promise<VersionListResponse> {
-  const data = (await apiClient.get(
-    `/chapters/${chapterId}/versions?limit=${limit}&offset=${offset}`,
-  )) as unknown as VersionListResponse;
-  return data ?? { versions: [], total: 0, limit, offset };
-}
-
-export async function getChapterVersion(
-  chapterId: number,
-  versionId: number,
-): Promise<ChapterVersionDetail> {
+/** 草稿/发布两态概要（版本管理面板数据源） */
+export async function getVersionSummary(chapterId: number): Promise<VersionPanelSummary> {
   return (await apiClient.get(
-    `/chapters/${chapterId}/versions/${versionId}`,
-  )) as unknown as ChapterVersionDetail;
+    `/chapters/${chapterId}/versions/summary`,
+  )) as unknown as VersionPanelSummary;
 }
 
-/**
- * 打一个检查点。
- *
- * kind 只允许 milestone（手动存档）或 ai_rewrite（AI 改写前存点）。
- * auto 由服务端在写入时自动生成，前端不可指定。
- */
-export async function snapshotChapter(
+/** 某一态正文：published 取发布不可变副本；draft 取工作区 */
+export async function getVersionContent(
   chapterId: number,
-  kind: 'milestone' | 'ai_rewrite' = 'milestone',
-  label?: string,
-): Promise<ChapterVersionSummary | null> {
-  try {
-    return (await apiClient.post(`/chapters/${chapterId}/versions`, {
-      kind,
-      label,
-    })) as unknown as ChapterVersionSummary;
-  } catch {
-    // 存点失败绝不阻断改写/保存主流程（施工任务 A04 验收标准）
-    return null;
-  }
+  branch: 'draft' | 'published' = 'published',
+): Promise<string> {
+  const data = (await apiClient.get(
+    `/chapters/${chapterId}/versions/content?branch=${branch}`,
+  )) as unknown as { content?: string };
+  return data?.content ?? '';
 }
 
-export async function restoreChapterVersion(
-  chapterId: number,
-  versionId: number,
-): Promise<ChapterVersionSummary> {
-  return (await apiClient.post(
-    `/chapters/${chapterId}/versions/${versionId}/restore`,
-  )) as unknown as ChapterVersionSummary;
+/** 回滚：把发布正文拷回草稿工作区（调用方先把当前草稿压入临时分支） */
+export async function checkoutPublished(chapterId: number): Promise<string> {
+  const data = (await apiClient.post(
+    `/chapters/${chapterId}/versions/checkout/published`,
+  )) as unknown as { content?: string };
+  return data?.content ?? '';
 }

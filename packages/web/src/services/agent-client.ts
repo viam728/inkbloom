@@ -21,6 +21,14 @@ export interface AgentGenerateRequest {
   instruction?: string;
   /** 调用方选定的模型（空则 ai-service 默认）；场景模型配置经此透传 */
   model?: string;
+  /** 可选上下文注入开关（AIGC 卡线索勾选）：true=注入，false=省略；
+   *  缺省 = 全部照常注入（服务端装配并求值记忆门控，门控始终在服务端） */
+  context?: {
+    outline?: boolean;
+    memory?: boolean;
+    foreshadow?: boolean;
+    preceding_chapters?: boolean;
+  };
 }
 
 export interface AgentGenerateResult {
@@ -31,9 +39,13 @@ export interface AgentGenerateResult {
   error?: string;
 }
 
-/** 调用场景化 Agent 生成；data 含 error 时抛错（code≠200 由 axios 拦截器 reject） */
-export async function agentGenerate(req: AgentGenerateRequest): Promise<AgentGenerateResult> {
-  const data = (await apiClient.post('/ai/agent/generate', req)) as unknown as AgentGenerateResult;
+/** 调用场景化 Agent 生成；data 含 error 时抛错（code≠200 由 axios 拦截器 reject）。
+ *  signal 用于 AIGC 卡的取消（AbortController），中断后 reject AbortError。 */
+export async function agentGenerate(
+  req: AgentGenerateRequest,
+  signal?: AbortSignal,
+): Promise<AgentGenerateResult> {
+  const data = (await apiClient.post('/ai/agent/generate', req, { signal })) as unknown as AgentGenerateResult;
   if (data?.error) throw new Error(data.error);
   if (!data?.content) throw new Error('Agent 未返回内容');
   return data;

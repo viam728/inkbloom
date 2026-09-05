@@ -211,7 +211,7 @@ func (s *StoryService) GenerateStage(ctx context.Context, userID, id int64, inst
 
 	scene, userPrompt := s.stageToScene(job, instruction)
 
-	payload, err := s.agentContext.BuildAgentContext(ctx, userID, job.NovelID, scene, nil, nil, userPrompt)
+	payload, err := s.agentContext.BuildAgentContext(ctx, userID, job.NovelID, scene, nil, nil, userPrompt, nil)
 	if err != nil {
 		return nil, err
 	}

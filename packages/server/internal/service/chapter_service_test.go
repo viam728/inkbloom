@@ -105,8 +105,8 @@ func TestChapterServiceSnapshotForAgentPersistsAgentAuto(t *testing.T) {
 	if err := db.Create(nilContent).Error; err != nil {
 		t.Fatalf("seed nil-content chapter: %v", err)
 	}
-	s.SnapshotForAgent(ctx, userID, int64(202))   // nil content -> no-op
-	s.SnapshotForAgent(ctx, userID, int64(99999))  // non-existent -> no-op
+	s.SnapshotForAgent(ctx, userID, int64(202))  // nil content -> no-op
+	s.SnapshotForAgent(ctx, userID, int64(99999)) // non-existent -> no-op
 	if err := db.Where("chapter_id = ? AND user_id = ?", chapterID, userID).Find(&rows).Error; err != nil {
 		t.Fatalf("query chapter_versions: %v", err)
 	}

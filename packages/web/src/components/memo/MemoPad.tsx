@@ -3,6 +3,7 @@ import { Plus, Trash2, StickyNote, Search } from 'lucide-react';
 import { useMemoStore } from '@/stores/memo-store';
 import { useUIStore } from '@/stores/ui-store';
 import TipTapEditor from '@/components/editor/TipTapEditor';
+import AigcCard from '@/components/ai/AigcCard';
 
 const fmtTime = (ts: number) => {
   const d = new Date(ts);
@@ -68,6 +69,18 @@ const MemoPad: React.FC = () => {
     reorderNotes(next.map((n) => n.id));
     setDraggingId(null);
     setDragOverId(null);
+  };
+
+  /** AIGC 产物 → 纯文本转 HTML 后定向插入本随记编辑器光标处 */
+  const insertAigc = (text: string) => {
+    if (!current) return;
+    const html = text
+      .split('\n')
+      .map((line) => (line.trim() ? `<p>${line.trim()}</p>` : '<p></p>'))
+      .join('');
+    window.dispatchEvent(
+      new CustomEvent('inkbloom:insert-content', { detail: { html, target: `memo-${current.id}` } }),
+    );
   };
 
   return (
@@ -170,6 +183,24 @@ const MemoPad: React.FC = () => {
                   onWordCount={setWordCount}
                   variant="memo"
                   placeholder="随手记点什么…首行会自动成为标题。灵感、片段、待办，都可以先丢进来。"
+                  insertTarget={`memo-${current.id}`}
+                  aigcSlot={
+                    /* AIGC 配置卡（备忘录 L61）：随记灵感生成，产物插入光标处 */
+                    <AigcCard
+                      scene="inspiration"
+                      taskLabel="AIGC · 灵感速记"
+                      hint="生成灵感/桥段/待办内容，插入光标处"
+                      buildInstruction={(extra) =>
+                        [
+                          firstLineOf(draft) ? `当前随记主题：${firstLineOf(draft)}` : '',
+                          extra ? `附加要求：${extra}` : '请围绕当前随记主题生成内容；无主题时给一条写作灵感。',
+                        ]
+                          .filter(Boolean)
+                          .join('\n')
+                      }
+                      onApply={insertAigc}
+                    />
+                  }
                 />
               ) : (
                 <div className="flex-1 flex items-center justify-center text-xs text-neutral-600">

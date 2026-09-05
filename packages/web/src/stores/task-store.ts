@@ -19,6 +19,8 @@ export interface TaskItem {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /** 本地伪任务（前端同步调用包装，如 AI 成章）：无后端任务行，中止仅本地标记 */
+  local?: boolean;
 }
 
 const isActive = (s: TaskItem['status']) => s === 'pending' || s === 'running';
@@ -31,6 +33,8 @@ interface TaskStore {
   tasks: TaskItem[];
   /** 任务创建后登记进会话通知列表（未知来源不接收） */
   register: (task: Pick<TaskItem, 'id' | 'type'> & Partial<TaskItem>) => void;
+  /** 会话内任务状态推进（如本地伪任务的终态写入）；终态自动安排销毁 */
+  update: (id: string, patch: Partial<TaskItem>) => void;
   /** 中止任务（POST /tasks/:id/cancel）；暂停语义对当前任务类型无意义，统一为中止 */
   cancel: (id: string) => Promise<void>;
   /** 监听 WS 任务事件（仅更新会话内已登记的任务）；幂等 */
@@ -76,7 +80,24 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     });
   },
 
+  update: (id, patch) => {
+    set((s) => ({
+      tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
+    const now = get().tasks.find((t) => t.id === id);
+    if (now && isTerminal(now.status)) scheduleDestroy(set, id);
+  },
+
   cancel: async (id) => {
+    const target = get().tasks.find((t) => t.id === id);
+    // 本地伪任务没有后端任务行：直接本地置为已中止
+    if (target?.local) {
+      set((s) => ({
+        tasks: s.tasks.map((t) => (t.id === id ? { ...t, status: 'cancelled' as const } : t)),
+      }));
+      scheduleDestroy(set, id);
+      return;
+    }
     await apiClient.post(`/tasks/${id}/cancel`);
     // 乐观置为已中止并按终态销毁；后端 task:cancelled 事件幂等
     set((s) => ({

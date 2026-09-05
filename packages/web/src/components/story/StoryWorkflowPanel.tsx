@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, BookText, Brain, Anchor } from 'lucide-react';
+import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -12,6 +12,10 @@ import { fetchMemory } from '@/services/memory-client';
 import { listForeshadows } from '@/services/foreshadow-client';
 import type { CreateNovelRequest, UpdateNovelRequest } from '@/types';
 import { toast } from '@/components/common/Toast';
+import AigcCard from '@/components/ai/AigcCard';
+import type { AigcClueContext } from '@/components/ai/AigcCard';
+import { architectureText, useArchitectureStore } from '@/stores/architecture-store';
+import { buildAccessEvalContext, evaluateAccess } from '@/utils/memory-access';
 
 /** 概览字段中文名（覆盖警告与提示文案用） */
 const OVERVIEW_FIELD_LABELS: Record<StoryOverviewField, string> = {
@@ -52,16 +56,6 @@ const clearDraft = (scope: string) => {
     /* ignore */
   }
 };
-
-/** 线索勾选卡可选的线索库（勾选后对本模块所有 AIGC 生效；概览已填信息默认注入，不在此显示） */
-const CLUE_LIBRARIES: { kind: StoryOverviewClueKind; label: string; icon: typeof BookText }[] = [
-  { kind: 'outline', label: '大纲', icon: BookText },
-  { kind: 'memory', label: '记忆', icon: Brain },
-  { kind: 'foreshadow', label: '伏笔', icon: Anchor },
-];
-
-const EMPTY_CLUES: Record<StoryOverviewClueKind, string> = { outline: '', memory: '', foreshadow: '' };
-const EMPTY_CLUES_ON: Record<StoryOverviewClueKind, boolean> = { outline: false, memory: false, foreshadow: false };
 
 /** 概览字段行：标签 + 常驻可编辑的受控输入（右侧常驻 AI 单项生成按钮）+ 自适应文本域 */
 const OverviewFieldRow: React.FC<{
@@ -166,11 +160,10 @@ const StoryWorkflowPanel: React.FC = () => {
   // AIGC：正在生成的概览字段（null = 空闲）；fillingAll = 全概览一键生成中
   const [fillingField, setFillingField] = useState<StoryOverviewField | null>(null);
   const [fillingAll, setFillingAll] = useState(false);
+  // 线索库摘录（供单项 ✦ 生成使用；全概览生成走 AIGC 卡的上下文勾选快照）
+  const cluesRef = useRef<StoryOverviewClue[]>([]);
   // 概览字段常驻可编辑：改动先落本地草稿，再防抖自动入库（无需编辑开关/完成按钮）
   const savingRef = useRef(false);
-  // 线索勾选卡：各线索库的内容摘录（切换作品时拉取）与勾选态（对本模块所有 AIGC 生效）
-  const [clueData, setClueData] = useState<Record<StoryOverviewClueKind, string>>(EMPTY_CLUES);
-  const [cluesOn, setCluesOn] = useState<Record<StoryOverviewClueKind, boolean>>(EMPTY_CLUES_ON);
   // 「取消」的回滚基线 = 服务端已存的 currentNovel 值（字段常驻可编辑，无独立编辑态）
   // 滑动选择器：拖动中的节点索引（仅用于标签高亮），以及连续指针比例（手柄实际跟随）
   const [dragStageIdx, setDragStageIdx] = useState<number | null>(null);
@@ -204,19 +197,22 @@ const StoryWorkflowPanel: React.FC = () => {
     setLogline(draft?.logline ?? '');
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 拉取当前作品的线索库（大纲/记忆/伏笔）内容摘录；库为空时对应项不可勾选。
-  // 概览已填信息默认注入思考上下文，不在勾选卡显示（后端始终携带全部概览字段）。
+  // 拉取当前作品的线索库（架构/大纲/记忆/伏笔）内容摘录 → cluesRef，
+  // 供单项 ✦ 生成使用；全概览生成走顶部 AIGC 卡的上下文勾选快照（同一套来源）。
+  // 概览已填信息默认注入思考上下文（后端始终携带全部概览字段）。
   useEffect(() => {
     const id = currentNovel?.id;
     if (!id) {
-      setClueData(EMPTY_CLUES);
-      setCluesOn(EMPTY_CLUES_ON);
+      cluesRef.current = [];
       return;
     }
     let alive = true;
     void (async () => {
       const stripTags = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const cap = (s: string) => (s.length > 1200 ? `${s.slice(0, 1200)}…` : s);
+      // 架构线索（本地预制 store，当前作品时用流派预填基本信息）
+      useArchitectureStore.getState().ensure(id, currentNovel?.genre);
+      const architecture = architectureText(id);
       const [outlineR, memoryR, foresR] = await Promise.allSettled([
         fetchOutline(id),
         fetchMemory(id),
@@ -239,7 +235,13 @@ const StoryWorkflowPanel: React.FC = () => {
       const memory =
         memoryR.status === 'fulfilled'
           ? memoryR.value.items
-              .filter((it) => it.ai_visible !== false && (it.name || it.content))
+              // AI 访问闸门（六模式）求值：创意阶段无写作位置，位置型硬闸
+              // fail-closed 不进线索；软闸条目照常提供（与服务端同规则镜像）。
+              .filter(
+                (it) =>
+                  evaluateAccess(it, buildAccessEvalContext(outlineR.status === 'fulfilled' ? outlineR.value : [])).inject &&
+                  (it.name || it.content),
+              )
               .map((it) => `${it.name ? `${it.name}：` : ''}${stripTags(it.content)}`)
               .filter(Boolean)
               .join('；')
@@ -251,8 +253,12 @@ const StoryWorkflowPanel: React.FC = () => {
               .map((f) => f.description)
               .join('；')
           : '';
-      setClueData({ outline: cap(outline), memory: cap(memory), foreshadow: cap(foreshadow) });
-      setCluesOn({ outline: false, memory: false, foreshadow: false });
+      const clues: StoryOverviewClue[] = [];
+      if (architecture.trim()) clues.push({ kind: 'architecture', content: cap(architecture) });
+      if (outline.trim()) clues.push({ kind: 'outline', content: cap(outline) });
+      if (memory.trim()) clues.push({ kind: 'memory', content: cap(memory) });
+      if (foreshadow.trim()) clues.push({ kind: 'foreshadow', content: cap(foreshadow) });
+      if (alive) cluesRef.current = clues;
     })();
     return () => {
       alive = false;
@@ -414,12 +420,8 @@ const StoryWorkflowPanel: React.FC = () => {
     return () => clearTimeout(timer);
   }, [title, description, style, audience, intent, currentNovel]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 已勾选且非空的线索库 → 请求摘录（对本模块所有 AIGC 生效）
-  const buildClues = (): StoryOverviewClue[] =>
-    CLUE_LIBRARIES.filter(({ kind }) => cluesOn[kind] && clueData[kind]).map(({ kind }) => ({
-      kind,
-      content: clueData[kind],
-    }));
+  // 线索摘录（cluesRef，切换作品时加载：架构/大纲/记忆/伏笔）——单项 ✦ 生成使用
+  const buildClues = (): StoryOverviewClue[] => cluesRef.current;
 
   // 当前概览六字段上下文（已填信息默认全部注入思考，无需勾选）
   const buildOverviewContext = (): StoryOverviewContext => ({
@@ -455,10 +457,11 @@ const StoryWorkflowPanel: React.FC = () => {
     }
   };
 
-  // AIGC 全概览自动生成（原开关改为动作按钮，位于线索勾选卡右侧）：
+  // AIGC 全概览自动生成（统一 AIGC 卡宿主管线，备忘录 L61）：
   // 一次性接管全部六个字段；任何字段已有内容时先弹覆盖警告，确认后才生成。
-  // 只读态生成后立即入库（含书名，经 store 同步）；编辑态落本地随「完成」保存。
-  const handleAIGenerateAll = async () => {
+  // 上下文 = 卡内勾选的线索快照（架构/大纲/记忆默认勾选，悬念可选）。
+  const handleAIGenerateAll = async (_instruction: string, ctx: AigcClueContext) => {
+    if (fillingField !== null || fillingAll) return;
     const allFields: StoryOverviewField[] = ['title', 'description', 'logline', 'style', 'audience', 'intent'];
     const filled = allFields.filter((f) => getOverviewField(f).trim());
     if (filled.length) {
@@ -467,7 +470,12 @@ const StoryWorkflowPanel: React.FC = () => {
     }
     setFillingAll(true);
     try {
-      const out = await generateStoryOverview(buildOverviewContext(), allFields, buildClues());
+      // 卡内勾选的上下文快照 → 线索库（架构/大纲/记忆/伏笔；章节类线索不适用概览生成）
+      const clues: StoryOverviewClue[] = ctx.selected
+        .filter((k): k is StoryOverviewClueKind => k !== 'current_chapter' && k !== 'nearby_chapters')
+        .map((k) => ({ kind: k, content: ctx.excerpts[k] ?? '' }))
+        .filter((c) => c.content.trim());
+      const out = await generateStoryOverview(buildOverviewContext(), allFields, clues);
       for (const f of allFields) {
         const v = (out[f] ?? '').trim();
         if (v) setOverviewField(f, v);
@@ -607,47 +615,18 @@ const StoryWorkflowPanel: React.FC = () => {
           <div className="rounded-xl bg-white/4 border border-white/8 p-3 mb-3">
             <p className="text-xs text-neutral-400 mb-3">输入一句话创意，AI 自动跑完全本创作流水线</p>
 
-            {/* 线索勾选卡（书名上方）：勾选的线索库对本模块所有 AIGC 生效；
-                概览已填信息默认注入思考上下文，不显示勾选项。
-                勾选后图标原地打勾，不另起独立勾选框。AIGC 位于卡右侧，一键接管全部概览字段。 */}
-            <div className="mb-3 p-2.5 rounded-lg bg-white/3 border border-white/6 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[11px] text-neutral-500 mr-0.5">线索库</span>
-                {CLUE_LIBRARIES.map(({ kind, label, icon: Icon }) => {
-                  const has = Boolean(clueData[kind]);
-                  const on = cluesOn[kind];
-                  return (
-                    <button
-                      key={kind}
-                      type="button"
-                      disabled={!has}
-                      onClick={() => setCluesOn((p) => ({ ...p, [kind]: !p[kind] }))}
-                      title={has ? (on ? `已勾选：所有 AIGC 生成将参考${label}线索` : `勾选后所有 AIGC 生成将参考${label}线索`) : `暂无${label}线索内容`}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-all ${
-                        on
-                          ? 'bg-violet-500/20 text-violet-200 border-violet-500/40 shadow-[0_0_10px_rgba(139,92,246,0.18)]'
-                          : has
-                            ? 'bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10 hover:text-neutral-300'
-                            : 'bg-white/3 text-neutral-600 border-white/6 cursor-not-allowed opacity-60'
-                      }`}
-                    >
-                      {on ? <Check size={12} className="text-emerald-300" /> : <Icon size={12} />}
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={handleAIGenerateAll}
-                disabled={fillingAll || fillingField !== null}
-                title="AIGC 全概览自动生成：AI 接管全部概览字段填写（已填内容将被覆盖）"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border shrink-0 bg-violet-500/15 text-violet-200 border-violet-500/35 hover:bg-violet-500/25 shadow-[0_0_12px_rgba(139,92,246,0.18)] disabled:opacity-50 transition-all"
-              >
-                {fillingAll ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} className="text-violet-300" />}
-                AIGC 全概览
-              </button>
-            </div>
+            {/* 统一 AIGC 配置卡（备忘录 L61）：全概览一键生成；上下文勾选（架构/大纲/记忆
+                默认勾选，悬念可选）在卡内完成，附加指令可选输入 */}
+            <AigcCard
+              novelId={currentNovel?.id}
+              scene="summary"
+              taskLabel="AIGC · 全概览"
+              hint="AI 接管全部概览字段（已填内容将被覆盖）"
+              buildInstruction={(extra) => extra}
+              onGenerate={handleAIGenerateAll}
+              running={fillingAll}
+              className="mb-3"
+            />
 
             {/* 作品概览字段组：书名/简介/创意/文风/受众/意图 统一管理；编辑态下每项右侧常驻 ✦ 单项生成 */}
             <OverviewFieldRow

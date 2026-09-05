@@ -34,6 +34,18 @@ class ChapterExcerpt(BaseModel):
     excerpt: str
 
 
+class MemoryItemAccessCtx(BaseModel):
+    """软闸访问指令（Go 端按写作位置求值后的结果）。
+
+    visibility: visible=无约束（不带本对象）；ignore=要求忽略除非明确提及；
+    hidden=当前章节不可见，仅允许伏笔/隐晦铺垫。硬闸条目根本不会出现在
+    memory_items 里，所以这里不会出现"硬禁"语义。
+    """
+
+    visibility: str = "visible"
+    note: str = ""
+
+
 class MemoryItemCtx(BaseModel):
     """A memory item (character / setting / location / ...) from the memory panel."""
 
@@ -42,6 +54,7 @@ class MemoryItemCtx(BaseModel):
     content: str = ""
     fields: dict = {}
     relations: list = []
+    access: MemoryItemAccessCtx | None = None
 
 
 class AgentContext(BaseModel):
@@ -52,6 +65,8 @@ class AgentContext(BaseModel):
     outline_acts: list[OutlineAct] = []
     preceding_chapters: list[ChapterExcerpt] = []
     memory_items: list[MemoryItemCtx] = []
+    # 记忆访问规则（Go 端在有软闸条目时生成的集中约束文案，渲染为独立区块）。
+    memory_access_rules: str = ""
     target_item: dict | None = Field(default=None)
     # 目标大纲节点（chapter 场景精确写作：本节点的标题+概要+状态）。
     target_node: dict | None = Field(default=None)

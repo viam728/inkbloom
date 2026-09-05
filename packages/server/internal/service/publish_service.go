@@ -17,6 +17,7 @@ import (
 	"github.com/inkbloom/server/internal/pkg/contentsafety"
 	"github.com/inkbloom/server/internal/pkg/contentsanitize"
 	"github.com/inkbloom/server/internal/repository"
+	"github.com/inkbloom/server/internal/service/cache"
 	"go.uber.org/zap"
 )
 
@@ -26,16 +27,17 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,118}[a-z0-9]$`)
 
 // PublishService owns the E4 publishing operations (plan A17).
 type PublishService struct {
-	workRepo      repository.PublishedRepository
-	readRepo      repository.PublishedReadRepository
-	chapterRepo   repository.ChapterRepository
-	novelRepo     repository.NovelRepository
-	versionRepo   repository.ChapterVersionRepository
-	ledgerRepo    repository.TokenLedgerRepository
+	workRepo        repository.PublishedRepository
+	readRepo        repository.PublishedReadRepository
+	chapterRepo     repository.ChapterRepository
+	novelRepo       repository.NovelRepository
+	versionRepo     repository.ChapterVersionRepository
+	ledgerRepo      repository.TokenLedgerRepository
 	interactionRepo repository.InteractionRepository
-	history       *HistoryService
-	cs            contentsafety.Checker
-	localMode     bool
+	history         *HistoryService
+	cs              contentsafety.Checker
+	cache           *cache.CacheManager
+	localMode       bool
 }
 
 // NewPublishService creates a new PublishService.
@@ -49,11 +51,12 @@ func NewPublishService(
 	ir repository.InteractionRepository,
 	h *HistoryService,
 	cs contentsafety.Checker,
+	cm *cache.CacheManager,
 	localMode bool,
 ) *PublishService {
 	return &PublishService{
 		workRepo: wr, readRepo: rr, chapterRepo: cr, novelRepo: nr,
-		versionRepo: vr, ledgerRepo: lr, interactionRepo: ir, history: h, cs: cs, localMode: localMode,
+		versionRepo: vr, ledgerRepo: lr, interactionRepo: ir, history: h, cs: cs, cache: cm, localMode: localMode,
 	}
 }
 
@@ -212,11 +215,18 @@ func (s *PublishService) PublishChapter(ctx context.Context, userID, workID int6
 	// see is sanitised.
 	sanitised := contentsanitize.SafeHTML(body)
 
+	// 发布版本唯一化：一章只保留一条发布 milestone。重发=覆盖读者快照，
+	// 旧的发布快照已被新发布取代，留在历史面板里只会堆积成多条重复的
+	// 「发布《…》」条目。先清旧的再写新的；用户自建 milestone（其它 label）
+	// 与 auto / rollback 版本不受影响。
+	if _, derr := s.versionRepo.DeletePublishMilestones(ctx, userID, req.ChapterID); derr != nil {
+		return nil, derr
+	}
+
 	// Snapshot the current draft as a milestone so the published version is
-	// traceable. Label carries the work title + chapter position so the
-	// history panel reads naturally. position is the outline-ordered 0-based
-	// rank (备忘录 L57), so the human-facing "第N章" is position+1.
-	label := fmt.Sprintf("发布《%s》第%d章", w.Title, chapter.Position+1)
+	// traceable. 章节次序的唯一权威是大纲序，任何把「第N章」烧进 label 的
+	// 文本都会在重排后变成脏数据（第19章问题根因），label 只带作品名。
+	label := fmt.Sprintf("发布《%s》", w.Title)
 	snap, err := s.history.CreateSnapshot(ctx, userID, req.ChapterID, &dto.CreateVersionRequest{
 		Kind: model.VersionKindMilestone, Label: label,
 	})
@@ -267,6 +277,104 @@ func (s *PublishService) ListWorkChapters(ctx context.Context, userID, workID in
 		return nil, ErrNotFound
 	}
 	return s.workRepo.ListChaptersByWork(ctx, userID, workID)
+}
+
+// ── 版本管理（备忘录 L61 三态：草稿/发布两份在服务器，临时只在浏览器） ──
+
+// VersionsSummary returns the two server-side version states of a chapter:
+// draft (chapters.content working copy) and published (published_chapters
+// full copy + 快照指针 version_id → chapter_versions milestone).
+func (s *PublishService) VersionsSummary(ctx context.Context, userID, chapterID int64) (*dto.VersionPanelSummary, error) {
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if chapter == nil {
+		return nil, ErrNotFound
+	}
+	out := &dto.VersionPanelSummary{
+		Draft: dto.VersionBranchSummary{
+			Exists:    true,
+			WordCount: chapter.WordCount,
+			UpdatedAt: chapter.UpdatedAt,
+		},
+	}
+	pc, err := s.workRepo.ChapterPublishedByChapterID(ctx, userID, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if pc != nil {
+		updatedAt := pc.PublishedAt
+		out.Published = &dto.VersionBranchSummary{
+			Exists:    true,
+			VersionID: pc.VersionID,
+			WordCount: pc.WordCount,
+			UpdatedAt: updatedAt,
+		}
+	}
+	return out, nil
+}
+
+// VersionsBranchContent returns the body of one version state: draft =
+// chapters.content; published = the frozen published_chapters copy.
+func (s *PublishService) VersionsBranchContent(ctx context.Context, userID, chapterID int64, branch string) (string, error) {
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, chapterID)
+	if err != nil {
+		return "", err
+	}
+	if chapter == nil {
+		return "", ErrNotFound
+	}
+	if branch == "draft" {
+		if chapter.Content == nil {
+			return "", nil
+		}
+		return *chapter.Content, nil
+	}
+	pc, err := s.workRepo.ChapterPublishedByChapterID(ctx, userID, chapterID)
+	if err != nil {
+		return "", err
+	}
+	if pc == nil || pc.Content == nil {
+		return "", nil
+	}
+	return *pc.Content, nil
+}
+
+// CheckoutPublishedVersion rolls the draft back to the published body: the
+// frozen published copy is copied into chapters.content (草稿工作区被覆盖，
+// 调用方先把当前草稿压入浏览器临时分支，保证可撤销)。
+func (s *PublishService) CheckoutPublishedVersion(ctx context.Context, userID, chapterID int64) (string, error) {
+	chapter, err := s.chapterRepo.GetByID(ctx, userID, chapterID)
+	if err != nil {
+		return "", err
+	}
+	if chapter == nil {
+		return "", ErrNotFound
+	}
+	pc, err := s.workRepo.ChapterPublishedByChapterID(ctx, userID, chapterID)
+	if err != nil {
+		return "", err
+	}
+	if pc == nil || pc.Content == nil {
+		return "", ErrNotFound
+	}
+	content := *pc.Content
+	chapter.Content = &content
+	chapter.WordCount = countWords(content)
+	if err := s.chapterRepo.Update(ctx, userID, chapter); err != nil {
+		return "", err
+	}
+	// 关键：失效章节正文缓存。不失效的话回滚后 3 分钟内 GET /content 仍命中
+	// 旧缓存，前端把旧草稿灌回编辑器 —— 「回滚未稳定覆盖草稿」的根因。
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, fmt.Sprintf(cache.ChapterContent, userID, chapterID))
+	}
+	if err := s.chapterRepo.RefreshNovelWordCount(ctx, userID, chapter.NovelID); err != nil {
+		zap.L().Warn("failed to refresh novel word_count after version checkout",
+			zap.Int64("novel_id", chapter.NovelID), zap.Int64("chapter_id", chapterID), zap.Error(err))
+	}
+	return content, nil
 }
 
 // GetWorkStats returns the author's read-statistics for a work (plan A23):

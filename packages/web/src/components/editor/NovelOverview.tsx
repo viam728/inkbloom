@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Trash2, FileText, Wand2, Clock, PenLine, Send, BarChart3, Network } from 'lucide-react';
+import { BookOpen, Trash2, FileText, Wand2, Clock, PenLine, Send, BarChart3, Network, History } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
+import { useOutlineStore } from '@/stores/outline-store';
+import { useTabStore } from '@/stores/tab-store';
+import { useUIStore } from '@/stores/ui-store';
 import { usePublishStore } from '@/stores/publish-store';
 import { useToast } from '@/components/common/Toast';
 import PublishModal from '@/components/publish/PublishModal';
@@ -55,8 +58,24 @@ const NovelOverview: React.FC = () => {
     };
 
     const handleNewChapter = async () => {
-        // 文章库并入大纲：章节正文统一在大纲面板管理（要点上的「写正文」入口）
-        showToast('请在大纲面板选择要点，点「写正文」创建章节', 'info');
+        // 文章库并入大纲：新建章节 = 在最新幕的末尾追加要点，并立即打开该要点的
+        // 中央编辑标签页（要点编辑器承载标题/梗概/写正文/成章）。
+        const ost = useOutlineStore.getState();
+        let acts = ost.byNovel[currentNovel.id];
+        if (!acts) {
+            await ost.loadOutline(currentNovel.id);
+            acts = useOutlineStore.getState().byNovel[currentNovel.id] ?? [];
+        }
+        let act = acts[acts.length - 1];
+        if (!act) act = ost.addAct(currentNovel.id, '');
+        const node = useOutlineStore.getState().addNode(currentNovel.id, act.id);
+        useTabStore.getState().openPanelTab(
+            `outline-node-${node.id}`,
+            node.title || '未命名章节',
+            'outline-node',
+            { actId: act.id, nodeId: node.id, novelId: currentNovel.id },
+        );
+        showToast(`已在「${act.title || '未命名幕'}」新建章节要点，填写梗概后可直接成章`, 'success');
     };
 
     return (
@@ -119,6 +138,13 @@ const NovelOverview: React.FC = () => {
                         <Wand2 size={14} /> AI 起稿
                     </button>
                     <div className="flex-1" />
+                    <button
+                        onClick={() => useUIStore.getState().setNovelVersionOpen(true)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600/15 hover:bg-amber-600/25 text-amber-300 text-sm font-medium transition-all"
+                        title="整本里程碑快照：创建/还原全书版本（为后续世界线导出做准备）"
+                    >
+                        <History size={14} /> 全本版本
+                    </button>
                     <button
                         onClick={() => setWorldTreeOpen(true)}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-600/15 hover:bg-sky-600/25 text-sky-300 text-sm font-medium transition-all"
