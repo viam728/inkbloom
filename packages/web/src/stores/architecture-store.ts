@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 
 /**
- * 小说架构（备忘录 L61 预制）：参考记忆库的结构预制的成熟架构组类，
- * 挂在左侧板「架构」栏目（大纲右侧），同时作为 AIGC 卡「架构」上下文线索源。
+ * 小说架构（备忘录 L61 预制）：参考记忆库的结构预制的成熟架构组类。
+ * UI 双入口：左侧板「架构」导航器（ArchitecturePanel，摘要+跳转）+
+ * 中央标签页「小说架构」编辑器（ArchitectureEditor，Home tab，编辑主战场），
+ * 共享本 store；同时作为 AIGC 卡「架构」上下文线索源。
  *
  * 预制阶段持久化在浏览器 localStorage（key: inkbloom-architecture-<novelId>），
  * 服务端表结构与迁移后续再接（备忘录：先预制组类，再考虑具体页面复用或实现）。
@@ -117,18 +119,22 @@ const persist = (novelId: number, arch: NovelArchitecture) => {
 
 interface ArchitectureStore {
   byNovel: Record<number, NovelArchitecture>;
+  /** 中央架构编辑器的焦点条目（左侧导航点击后打开/定位中央 tab 用，消费后清除） */
+  focus: { group: ArchGroupKey; id: string } | null;
   /** 取作品架构（无则初始化；genreFromNovel 用于首次预填流派） */
   ensure: (novelId: number, genreFromNovel?: string) => NovelArchitecture;
   updateBasic: (novelId: number, patch: Partial<ArchBasicInfo>) => void;
   addEntry: (novelId: number, group: ArchGroupKey, title: string) => ArchEntry;
   updateEntry: (novelId: number, group: ArchGroupKey, id: string, patch: Partial<ArchEntry>) => void;
   removeEntry: (novelId: number, group: ArchGroupKey, id: string) => void;
+  setFocus: (f: { group: ArchGroupKey; id: string } | null) => void;
   /** 清空某作品架构（删除作品时由调用方触发，可选） */
   reset: (novelId: number) => void;
 }
 
 export const useArchitectureStore = create<ArchitectureStore>((set, get) => ({
   byNovel: {},
+  focus: null,
 
   ensure: (novelId, genreFromNovel) => {
     const existing = get().byNovel[novelId];
@@ -174,8 +180,12 @@ export const useArchitectureStore = create<ArchitectureStore>((set, get) => ({
     const arch = get().ensure(novelId);
     const next = { ...arch, [group]: arch[group].filter((e) => e.id !== id) };
     persist(novelId, next);
+    // 焦点条目被删除时一并清除，避免中央编辑器选中悬空条目
+    if (get().focus?.id === id) set({ focus: null });
     set((s) => ({ byNovel: { ...s.byNovel, [novelId]: next } }));
   },
+
+  setFocus: (f) => set({ focus: f }),
 
   reset: (novelId) => {
     try {

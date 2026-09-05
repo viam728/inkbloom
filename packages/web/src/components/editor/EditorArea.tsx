@@ -7,12 +7,13 @@ import {
   X,
   Home,
   Wand2,
+  Network,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useEditorStore } from '@/stores/editor-store';
 import { useUIStore } from '@/stores/ui-store';
 import { useStatsStore } from '@/stores/stats-store';
-import { useTabStore, countDraftWords, chapterTabKey, STORY_TAB_KEY, type EditorTab } from '@/stores/tab-store';
+import { useTabStore, countDraftWords, chapterTabKey, STORY_TAB_KEY, ARCH_TAB_KEY, type EditorTab } from '@/stores/tab-store';
 import { useOutlineStore, type OutlineNode } from '@/stores/outline-store';
 import { useChapterDraft } from '@/hooks/useChapterDraft';
 import { putAutoSnapshot } from '@/utils/temp-branch';
@@ -26,6 +27,7 @@ import StoryWorkflowPanel from '@/components/story/StoryWorkflowPanel';
 import OutlineNodeEditor from '@/components/outline/OutlineNodeEditor';
 import DraftPreviewModal from '@/components/outline/DraftPreviewModal';
 import MemoryEditorPanel from '@/components/memory/MemoryEditorPanel';
+import ArchitectureEditor from '@/components/architecture/ArchitectureEditor';
 import Kbd from '@/components/common/Kbd';
 import ForeshadowHintBar from '@/components/knowledge/ForeshadowHintBar';
 
@@ -210,6 +212,26 @@ const EditorArea: React.FC = () => {
         .openPanelTab(STORY_TAB_KEY, 'AI 起稿', 'story', {});
     window.addEventListener('inkbloom:open-story-workflow', openStory);
     return () => window.removeEventListener('inkbloom:open-story-workflow', openStory);
+  }, []);
+
+  // 中央架构编辑器：左侧架构导航器派发此事件 → 打开/复用 architecture Home tab
+  // （全局单例；重复打开时 openPanelTab 会刷新 meta.novelId 到当前作品）
+  useEffect(() => {
+    const openArch = () => {
+      const nid = useNovelStore.getState().currentNovel?.id;
+      if (nid == null) {
+        toast.show('先选择作品，再管理小说架构', 'error');
+        return;
+      }
+      const novel = useNovelStore.getState().currentNovel;
+      useTabStore
+        .getState()
+        .openPanelTab(ARCH_TAB_KEY, novel?.title ? `${novel.title} · 架构` : '小说架构', 'architecture', {
+          novelId: nid,
+        });
+    };
+    window.addEventListener('inkbloom:open-architecture', openArch);
+    return () => window.removeEventListener('inkbloom:open-architecture', openArch);
   }, []);
 
   // 内容变化 → 回写 active tab 草稿并重置该 tab 的防抖计时
@@ -503,9 +525,10 @@ const EditorArea: React.FC = () => {
                 {active && (
                   <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-gradient-to-r from-indigo-400 to-pink-400 pointer-events-none" />
                 )}
-                {/* Home 类 tab（全书首页 / AI 起稿）图标区分 */}
+                {/* Home 类 tab（全书首页 / AI 起稿 / 小说架构）图标区分 */}
                 {tab.kind === 'overview' && <Home size={11} className="shrink-0 text-brand-300" />}
                 {tab.kind === 'story' && <Wand2 size={11} className="shrink-0 text-violet-300" />}
+                {tab.kind === 'architecture' && <Network size={11} className="shrink-0 text-violet-300" />}
                 <span className="truncate">{tab.title}</span>
                 <span className="relative shrink-0 w-4 h-4 flex items-center justify-center">
                   {showSaving ? (
@@ -592,6 +615,8 @@ const EditorArea: React.FC = () => {
                 <NovelOverview novelId={t.meta.novelId} />
               ) : t.kind === 'story' ? (
                 <StoryWorkflowPanel tabKey={t.key} />
+              ) : t.kind === 'architecture' ? (
+                <ArchitectureEditor novelId={t.meta?.novelId} />
               ) : null}
             </div>
           ))}

@@ -8,7 +8,13 @@ export type TabSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
  * Home 类（overview 全书首页 / story AI 起稿）同样以可关闭 tab 形式驻留标签栏，
  * 关闭即消失，不再挤压/顶替编辑板。
  */
-export type TabKind = 'chapter' | 'outline-node' | 'memory' | 'overview' | 'story';
+export type TabKind =
+  | 'chapter'
+  | 'outline-node'
+  | 'memory'
+  | 'overview'
+  | 'story'
+  | 'architecture';
 
 /** panel 类 tab 的定位信息（按 kind 取用） */
 export interface TabMeta {
@@ -48,6 +54,8 @@ export const chapterTabKey = (chapterId: number) => `chapter-${chapterId}`;
 export const overviewTabKey = (novelId: number) => `overview-${novelId}`;
 /** AI 起稿 Home tab（全局单例） */
 export const STORY_TAB_KEY = 'story';
+/** 小说架构 Home tab（全局单例，meta.novelId 定位作品） */
+export const ARCH_TAB_KEY = 'architecture';
 
 /** 从 HTML 草稿估算字数（中文按字、英文按词，与编辑器统计口径一致） */
 export const countDraftWords = (html: string): number => {
