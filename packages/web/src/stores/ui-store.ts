@@ -14,6 +14,13 @@ export type CreatorRole = 'novelist' | 'media' | 'memo';
 /** 左侧面板 Tab（按角色展示不同子集） */
 export type LeftTab = 'library' | 'outline' | 'architecture' | 'memory' | 'contents' | 'topics';
 
+/**
+ * 大纲顺序标签渲染模式（节点/幕标题头顺序标签，点击循环切换；备忘录 L61）：
+ * cn = 第一章（中文，默认）/ num = 1（数字）/ blank = 不含文字的节点标（无文字小标记）。
+ * 旧值 'hidden'（曾误实现为隐藏）在 migrate 中映射为 'blank'。
+ */
+export type OutlineNumMode = 'cn' | 'num' | 'blank';
+
 /** 右侧面板 Tab（按角色展示不同子集） */
 export type RightTab =
   | 'chat'
@@ -49,17 +56,13 @@ interface UIState {
   leftTab: LeftTab;
   /** 右侧面板当前 Tab（全局可写，供命令面板/AIGC 等外部跳转） */
   activeRightTab: RightTab;
-  /**
-   * 中央编辑区视图（无打开章节时）：overview=作品概览，story=AI 起稿中央窗口。
-   * AI 起稿从右侧栏常驻改为中央正式窗口（合并创建+工作流），故用独立 centerTab 控制，
-   * 不持久化（刷新回到概览更符合直觉）。`inkbloom:open-story-workflow` 事件置为 'story'。
-   */
-  centerTab: 'overview' | 'story';
   /** 全局弹窗 */
   dashboardOpen: boolean;
   inspirationOpen: boolean;
   /** 右侧板「洞察」Tab 当前子视图（节奏/仪表盘/灵感包，供命令面板深链） */
   insightView: 'rhythm' | 'dashboard' | 'inspiration';
+  /** 大纲顺序标签渲染模式：第一章(cn，默认) / 1(num) / 不含文字的节点标(blank)，点击循环 */
+  outlineNumMode: OutlineNumMode;
   subscriptionOpen: boolean;
   tokenOpen: boolean;
   dataOpen: boolean;
@@ -91,10 +94,11 @@ interface UIState {
   setRole: (role: CreatorRole) => void;
   setLeftTab: (tab: LeftTab) => void;
   setActiveRightTab: (tab: RightTab) => void;
-  setCenterTab: (tab: 'overview' | 'story') => void;
   setDashboardOpen: (open: boolean) => void;
   setInspirationOpen: (open: boolean) => void;
   setInsightView: (view: 'rhythm' | 'dashboard' | 'inspiration') => void;
+  /** 循环大纲顺序标签渲染：cn → num → blank → cn */
+  cycleOutlineNumMode: () => void;
   setSubscriptionOpen: (open: boolean) => void;
   setTokenOpen: (open: boolean) => void;
   setDataOpen: (open: boolean) => void;
@@ -122,10 +126,10 @@ export const useUIStore = create<UIState>()(
       role: 'novelist',
       leftTab: 'library',
       activeRightTab: 'chat',
-      centerTab: 'overview',
       dashboardOpen: false,
       inspirationOpen: false,
       insightView: 'dashboard',
+      outlineNumMode: 'cn',
       subscriptionOpen: false,
       tokenOpen: false,
       dataOpen: false,
@@ -169,10 +173,14 @@ export const useUIStore = create<UIState>()(
         }),
       setLeftTab: (tab) => set({ leftTab: tab }),
       setActiveRightTab: (tab) => set({ activeRightTab: tab }),
-      setCenterTab: (tab) => set({ centerTab: tab }),
       setDashboardOpen: (open) => set({ dashboardOpen: open }),
       setInspirationOpen: (open) => set({ inspirationOpen: open }),
       setInsightView: (view) => set({ insightView: view }),
+      cycleOutlineNumMode: () =>
+        set((s) => ({
+          outlineNumMode:
+            s.outlineNumMode === 'cn' ? 'num' : s.outlineNumMode === 'num' ? 'blank' : 'cn',
+        })),
       setSubscriptionOpen: (open) => set({ subscriptionOpen: open }),
       setTokenOpen: (open) => set({ tokenOpen: open }),
       setDataOpen: (open) => set({ dataOpen: open }),
@@ -183,6 +191,13 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'inkbloom-ui',
+      version: 2,
+      // v1 → v2：旧第三态 'hidden'（误实现为隐藏）迁移为 'blank'（不含文字的节点标）
+      migrate: (persisted: unknown) => {
+        const p = (persisted ?? {}) as Record<string, unknown>;
+        if (p.outlineNumMode === 'hidden') p.outlineNumMode = 'blank';
+        return p as never;
+      },
       partialize: (s) => ({
         leftWidth: s.leftWidth,
         rightWidth: s.rightWidth,
@@ -195,6 +210,8 @@ export const useUIStore = create<UIState>()(
         role: s.role,
         leftTab: s.leftTab,
         activeRightTab: s.activeRightTab,
+        // 大纲顺序标签渲染模式：持久化（备忘录 L61 顺序标签三态切换）
+        outlineNumMode: s.outlineNumMode,
         // 主动提示开关：持久化，关闭后不再打扰（业务方案 v3 A15）
         hintBarEnabled: s.hintBarEnabled,
       }),

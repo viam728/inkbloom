@@ -40,8 +40,9 @@ const STATUS_DOT: Record<OutlineStatus, string> = {
 };
 
 /**
- * 顺序标签（备忘录 L61）：绑定大纲次序、不写入标题文本；点击循环三种渲染
- * 第一章（中文）/ 1（数字）/ 隐藏。节点用「章」、幕用「幕」后缀，共享同一模式。
+ * 顺序标签（备忘录 L61）：绑定大纲次序、不写入标题文本；点击循环三种渲染：
+ * 第一章（中文，默认）/ 1（数字）/ 不含文字的节点标（无文字小标记）。
+ * 节点用「章」、幕用「幕」后缀，共享同一模式。
  * 字体用 font-display 衬线体区分右侧正文文本；渲染模式仅存浏览器（zustand persist / localStorage），
  * 是大纲次序的衍生展示，不入服务器。
  * variant：act 幕标题头用加粗+更大字号，node 章节点用常规规格。
@@ -53,8 +54,12 @@ const OrderTag: React.FC<{ index: number; suffix: '章' | '幕'; variant?: 'act'
 }) => {
   const mode = useUIStore((s) => s.outlineNumMode);
   const cycle = useUIStore((s) => s.cycleOutlineNumMode);
-  if (mode === 'hidden') return null;
-  const label = mode === 'cn' ? `第${toChineseNumeral(index)}${suffix}` : String(index);
+  // 兼容：旧持久化残留的 'hidden' 视作 blank
+  const m: 'cn' | 'num' | 'blank' = (mode as string) === 'hidden' ? 'blank' : mode;
+  const tone =
+    suffix === '章'
+      ? 'bg-brand-500/12 text-brand-300 border border-brand-500/25'
+      : 'bg-violet-500/12 text-violet-300 border border-violet-500/25';
   return (
     <button
       type="button"
@@ -62,16 +67,17 @@ const OrderTag: React.FC<{ index: number; suffix: '章' | '幕'; variant?: 'act'
         e.stopPropagation();
         cycle();
       }}
-      title={`顺序标签（绑定大纲次序，点击切换渲染：第一章 / 1 / 隐藏）`}
-      className={`font-display shrink-0 px-1.5 py-0.5 rounded-md tabular-nums leading-none transition-colors ${
-        variant === 'act' ? 'text-[11px] font-bold' : 'text-[10px] font-semibold'
-      } ${
-        suffix === '章'
-          ? 'bg-brand-500/12 text-brand-300 border border-brand-500/25'
-          : 'bg-violet-500/12 text-violet-300 border border-violet-500/25'
+      title={`顺序标签（绑定大纲次序，点击切换渲染：第一章 / 1 / 无文字节点标）`}
+      aria-label={`第${index}${suffix}`}
+      className={`shrink-0 rounded-md transition-colors ${
+        m === 'blank'
+          ? `${variant === 'act' ? 'w-3 h-3' : 'w-2.5 h-2.5'} ${tone} flex items-center justify-center`
+          : `font-display px-1.5 py-0.5 tabular-nums leading-none ${
+              variant === 'act' ? 'text-[11px] font-bold' : 'text-[10px] font-semibold'
+            } ${tone}`
       }`}
     >
-      {label}
+      {m === 'blank' ? null : m === 'cn' ? `第${toChineseNumeral(index)}${suffix}` : String(index)}
     </button>
   );
 };
