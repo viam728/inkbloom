@@ -13,6 +13,7 @@ import {
 import { useBranchStore, type BranchNode } from '@/stores/branch-store';
 import { useNovelStore } from '@/stores/novel-store';
 import { useToast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 /** 树节点视图模型：节点 + 子分支 */
 interface BranchVM {
@@ -194,14 +195,17 @@ const WorldTreePanel: React.FC<WorldTreePanelProps> = ({ open, onClose }) => {
               <Sparkles size={11} />
             </button>
             <button
-              onClick={() => {
-                if (
-                  window.confirm(
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: '删除分支',
+                  message:
                     vm.children.length > 0
-                      ? `删除「${n.title}」及其全部 ${vm.children.length > 0 ? '子分支' : ''}？该操作不可撤销。`
+                      ? `删除「${n.title}」及其全部子分支？该操作不可撤销。`
                       : `删除「${n.title}」？该操作不可撤销。`,
-                  )
-                ) {
+                  confirmText: '删除',
+                  danger: true,
+                });
+                if (ok) {
                   void remove(novelId, n.id, vm.children.length > 0).then(() =>
                     showToast('分支已删除', 'info'),
                   );

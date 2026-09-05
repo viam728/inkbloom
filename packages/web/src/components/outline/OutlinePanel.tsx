@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronDown,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   Maximize2,
   FileText,
   Send,
+  MoreHorizontal,
 } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import {
@@ -19,10 +21,12 @@ import {
 } from '@/stores/outline-store';
 import { usePublishStore } from '@/stores/publish-store';
 import { useTabStore } from '@/stores/tab-store';
+import { useUIStore } from '@/stores/ui-store';
 import { useToast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import Modal from '@/components/common/Modal';
 import { htmlToPlainText } from '@/utils/html';
-import VersionCompare from '@/components/history/VersionCompare';
+import { toChineseNumeral } from '@/utils/cn-numeral';
 import OutlineExpandedView from './OutlineExpandedView';
 
 /** 稳定引用的空数组，避免 selector 每次返回新引用导致无限渲染 */
@@ -33,6 +37,43 @@ const STATUS_DOT: Record<OutlineStatus, string> = {
   drafting: 'bg-amber-400',
   done: 'bg-emerald-400',
   published: 'bg-emerald-400',
+};
+
+/**
+ * 顺序标签（备忘录 L61）：绑定大纲次序、不写入标题文本；点击循环三种渲染
+ * 第一章（中文）/ 1（数字）/ 隐藏。节点用「章」、幕用「幕」后缀，共享同一模式。
+ * 字体用 font-display 衬线体区分右侧正文文本；渲染模式仅存浏览器（zustand persist / localStorage），
+ * 是大纲次序的衍生展示，不入服务器。
+ * variant：act 幕标题头用加粗+更大字号，node 章节点用常规规格。
+ */
+const OrderTag: React.FC<{ index: number; suffix: '章' | '幕'; variant?: 'act' | 'node' }> = ({
+  index,
+  suffix,
+  variant = 'node',
+}) => {
+  const mode = useUIStore((s) => s.outlineNumMode);
+  const cycle = useUIStore((s) => s.cycleOutlineNumMode);
+  if (mode === 'hidden') return null;
+  const label = mode === 'cn' ? `第${toChineseNumeral(index)}${suffix}` : String(index);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        cycle();
+      }}
+      title={`顺序标签（绑定大纲次序，点击切换渲染：第一章 / 1 / 隐藏）`}
+      className={`font-display shrink-0 px-1.5 py-0.5 rounded-md tabular-nums leading-none transition-colors ${
+        variant === 'act' ? 'text-[11px] font-bold' : 'text-[10px] font-semibold'
+      } ${
+        suffix === '章'
+          ? 'bg-brand-500/12 text-brand-300 border border-brand-500/25'
+          : 'bg-violet-500/12 text-violet-300 border border-violet-500/25'
+      }`}
+    >
+      {label}
+    </button>
+  );
 };
 
 /** 结构化创作面板：大纲（幕 → 章节要点）→ AI 扩写 → 成稿章节。
@@ -51,7 +92,9 @@ const OutlinePanel: React.FC = () => {
     updateAct,
     removeAct,
     addNode,
+    addNodeAt,
     updateNode,
+    removeNode,
   } = useOutlineStore();
 
   const { showToast } = useToast();
@@ -73,11 +116,6 @@ const OutlinePanel: React.FC = () => {
     () => new Set((pubChapters ?? []).map((c) => c.chapter_id)),
     [pubChapters],
   );
-
-  // ── 发布版 vs 编辑版对比 / 回滚（小飞机入口，备忘录 L61） ────────────
-  // 打开共享 VersionCompare：左发布副本、右草稿工作区；回滚前自动把当前
-  // 草稿压入浏览器临时分支（可撤销）。
-  const [compareChapterId, setCompareChapterId] = useState<number | null>(null);
 
   useEffect(() => {
     if (novelId) {
@@ -126,6 +164,18 @@ const OutlinePanel: React.FC = () => {
     openNodeEditor(actId, node);
   };
 
+  /** 省略号菜单「上/下方添加」：幕内按位置插入并打开编辑器 */
+  const handleAddNodeAt = (actId: string, index: number) => {
+    if (!novelId) return;
+    const node = addNodeAt(novelId, actId, index);
+    setCollapsedActs((prev) => {
+      const next = new Set(prev);
+      next.delete(actId);
+      return next;
+    });
+    openNodeEditor(actId, node);
+  };
+
   /**
    * 正文入口（大纲 ↔ 章节合并后的唯一出口）：
    * 已关联成稿章节 → 直接打开该章节正文；未关联 → 按大纲顺序就地建一章
@@ -165,17 +215,88 @@ const OutlinePanel: React.FC = () => {
     }
   };
 
+  /** 省略号菜单「章节正文AIGC」：有绑定章节 → 打开正文并派发成章管线；
+   *  无绑定 → 打开要点编辑器（写好梗概后用「扩写成稿」建章） */
+  const handleBodyAIGC = async (actId: string, node: OutlineNode) => {
+    const linked = node.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
+    if (linked) {
+      await selectChapter(linked);
+      window.dispatchEvent(new CustomEvent('inkbloom:ai-compose'));
+      showToast('已派发章节正文 AIGC（成章结果经预览确认后覆盖）', 'info');
+      return;
+    }
+    openNodeEditor(actId, node);
+  };
+
+  /** 省略号菜单「导出章节」：节点信息（标题/幕/状态/梗概）+ 正文 → 下载 .md */
+  const handleExportNode = (actTitle: string, node: OutlineNode) => {
+    const chapter = node.chapter_id ? chapters.find((c) => c.id === node.chapter_id) : undefined;
+    const statusText =
+      node.status === 'published' ? '已发布' : node.status === 'done' ? '已完成' : '写作中';
+    const content = [
+      `# ${node.title || '未命名章节'}`,
+      '',
+      `- 所属幕：${actTitle || '未命名幕'}`,
+      `- 状态：${statusText}`,
+      node.chapter_id ? `- 章节 ID：${node.chapter_id}` : undefined,
+      '',
+      '## 梗概',
+      htmlToPlainText(node.summary) || '（无）',
+      '',
+      '## 正文',
+      chapter?.content ? htmlToPlainText(chapter.content) : '（尚未成稿）',
+      '',
+    ]
+      .filter((l) => l !== undefined)
+      .join('\n');
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${node.title || '未命名章节'}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('章节已导出（节点信息 + 正文）', 'success');
+  };
+
+  /** 省略号菜单「删除章节」：要点 + 绑定章节直接删除（无回收站，确认后执行） */
+  const handleDeleteNode = async (actId: string, node: OutlineNode) => {
+    if (!novelId) return;
+    const ok = await confirmDialog({
+      title: '删除章节',
+      message: node.chapter_id
+        ? `要点「${node.title || '未命名章节'}」及其正文将被永久删除，无法恢复，确定？`
+        : `删除要点「${node.title || '未命名章节'}」？`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      if (node.chapter_id) await deleteChapter(node.chapter_id);
+      removeNode(novelId, actId, node.id);
+      showToast('已删除', 'info');
+    } catch {
+      showToast('删除失败，请检查后端连接', 'error');
+    } finally {
+      await loadOutline(novelId);
+      await fetchChapters(novelId);
+    }
+  };
+
   /** 删除幕：幕下全部要点与绑定章节直接删除（无回收站，删除前确认），再移除空幕 */
   const handleRemoveAct = async (act: OutlineAct) => {
     if (!novelId) return;
     const boundCount = act.nodes.filter((n) => n.chapter_id).length;
-    if (
-      act.nodes.length > 0 &&
-      !window.confirm(
-        `「${act.title || '未命名幕'}」下 ${act.nodes.length} 个要点${boundCount ? `（含 ${boundCount} 章正文）` : ''}将被永久删除，无法恢复，确定？`,
-      )
-    ) {
-      return;
+    if (act.nodes.length > 0) {
+      const ok = await confirmDialog({
+        title: '删除幕',
+        message: `「${act.title || '未命名幕'}」下 ${act.nodes.length} 个要点${
+          boundCount ? `（含 ${boundCount} 章正文）` : ''
+        }将被永久删除，无法恢复，确定？`,
+        confirmText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
     }
     let failed = false;
     for (const n of act.nodes) {
@@ -224,6 +345,19 @@ const OutlinePanel: React.FC = () => {
     0,
   );
   const progress = totalNodes ? Math.round((doneNodes / totalNodes) * 100) : 0;
+
+  // 幕序号与节点全局序号起点（顺序标签绑定大纲次序，跨幕连续计数）
+  const actStarts = useMemo(() => {
+    const map = new Map<string, { actNo: number; nodeStart: number }>();
+    let actNo = 0;
+    let nodeAcc = 0;
+    for (const a of acts) {
+      actNo += 1;
+      map.set(a.id, { actNo, nodeStart: nodeAcc });
+      nodeAcc += a.nodes.length;
+    }
+    return map;
+  }, [acts]);
 
   return (
     <div className="flex flex-col h-full">
@@ -278,6 +412,8 @@ const OutlinePanel: React.FC = () => {
           <ActBlock
             key={act.id}
             act={act}
+            actNo={actStarts.get(act.id)?.actNo ?? 1}
+            nodeStart={actStarts.get(act.id)?.nodeStart ?? 0}
             collapsed={collapsedActs.has(act.id)}
             publishedIds={publishedChapterIds}
             onToggle={() => toggleAct(act.id)}
@@ -287,9 +423,12 @@ const OutlinePanel: React.FC = () => {
             }}
             onRemove={() => handleRemoveAct(act)}
             onAddNode={() => handleAddNode(act.id)}
+            onAddNodeAt={handleAddNodeAt}
             onEditNode={(node) => openNodeEditor(act.id, node)}
             onOpenBody={(node) => handleOpenBody(act.id, node)}
-            onCompare={(chapterId) => setCompareChapterId(chapterId)}
+            onBodyAIGC={(node) => handleBodyAIGC(act.id, node)}
+            onExportNode={(node) => handleExportNode(act.title, node)}
+            onDeleteNode={(node) => handleDeleteNode(act.id, node)}
           />
         ))}
 
@@ -358,15 +497,6 @@ const OutlinePanel: React.FC = () => {
           openNodeEditor(actId, node);
         }}
       />
-
-      {/* 发布版 vs 编辑版对比 / 回滚（VSCode 左右分屏，portal 到 body 不被遮挡） */}
-      {compareChapterId !== null && (
-        <VersionCompare
-          open
-          chapterId={compareChapterId}
-          onClose={() => setCompareChapterId(null)}
-        />
-      )}
     </div>
   );
 };
@@ -374,6 +504,10 @@ const OutlinePanel: React.FC = () => {
 // ── 幕区块 ──────────────────────────────────────────────────────────────
 interface ActBlockProps {
   act: OutlineAct;
+  /** 幕序号（顺序标签，大纲次序） */
+  actNo: number;
+  /** 本幕首个节点的全局序号起点（顺序标签跨幕连续计数） */
+  nodeStart: number;
   collapsed: boolean;
   /** 发布状态的系统事实：已发布章节 id 集（published_chapters 表） */
   publishedIds: Set<number>;
@@ -381,23 +515,30 @@ interface ActBlockProps {
   onRename: () => void;
   onRemove: () => void;
   onAddNode: () => void;
+  onAddNodeAt: (actId: string, index: number) => void;
   onEditNode: (node: OutlineNode) => void;
   onOpenBody: (node: OutlineNode) => void;
-  /** 小飞机入口：已发布章节点击后打开 发布版 vs 编辑版 对比/回滚 */
-  onCompare: (chapterId: number) => void;
+  onBodyAIGC: (node: OutlineNode) => void;
+  onExportNode: (node: OutlineNode) => void;
+  onDeleteNode: (node: OutlineNode) => void;
 }
 
 const ActBlock: React.FC<ActBlockProps> = ({
   act,
+  actNo,
+  nodeStart,
   collapsed,
   publishedIds,
   onToggle,
   onRename,
   onRemove,
   onAddNode,
+  onAddNodeAt,
   onEditNode,
   onOpenBody,
-  onCompare,
+  onBodyAIGC,
+  onExportNode,
+  onDeleteNode,
 }) => {
   return (
     <div className="mb-2">
@@ -415,6 +556,8 @@ const ActBlock: React.FC<ActBlockProps> = ({
           onClick={onToggle}
           className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
         >
+          {/* 幕顺序标签（绑定大纲次序，点击循环 第一章/X/隐藏；加粗+大字号变体） */}
+          <OrderTag index={actNo} suffix="幕" variant="act" />
           <span className="text-xs font-semibold text-neutral-200 truncate">{act.title}</span>
           <span className="text-[10px] text-neutral-600 shrink-0">{act.nodes.length} 章</span>
         </button>
@@ -456,14 +599,21 @@ const ActBlock: React.FC<ActBlockProps> = ({
               + 添加章节要点
             </button>
           )}
-          {act.nodes.map((node) => (
+          {act.nodes.map((node, idx) => (
             <NodeCard
               key={node.id}
               node={node}
+              orderIndex={nodeStart + idx + 1}
+              nodeIdx={idx}
+              actId={act.id}
               publishedIds={publishedIds}
               onEdit={() => onEditNode(node)}
               onOpenBody={() => onOpenBody(node)}
-              onCompare={onCompare}
+              onAddAt={onAddNodeAt}
+              onEditNode={onEditNode}
+              onBodyAIGC={onBodyAIGC}
+              onExportNode={onExportNode}
+              onDeleteNode={onDeleteNode}
             />
           ))}
         </div>
@@ -472,46 +622,156 @@ const ActBlock: React.FC<ActBlockProps> = ({
   );
 };
 
-// ── 章节要点卡片（点击打开中央要点编辑 tab；小飞机 = 发布/对比统一入口） ──
+// ── 章节要点卡片（点击打开中央要点编辑 tab；发布标 = 纯标识；省略号 = 操作菜单） ──
 interface NodeCardProps {
   node: OutlineNode;
+  /** 全局大纲次序（跨幕连续，顺序标签数据源） */
+  orderIndex: number;
+  /** 幕内下标（上/下方添加用） */
+  nodeIdx: number;
+  actId: string;
   publishedIds: Set<number>;
   onEdit: () => void;
   onOpenBody: () => void;
-  onCompare: (chapterId: number) => void;
+  onAddAt: (actId: string, index: number) => void;
+  onEditNode: (node: OutlineNode) => void;
+  onBodyAIGC: (node: OutlineNode) => void;
+  onExportNode: (node: OutlineNode) => void;
+  onDeleteNode: (node: OutlineNode) => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenBody, onCompare }) => {
-  const hasBody = Boolean(node.chapter_id);
+const NodeCard: React.FC<NodeCardProps> = ({
+  node,
+  orderIndex,
+  nodeIdx,
+  actId,
+  publishedIds,
+  onEdit,
+  onOpenBody,
+  onAddAt,
+  onEditNode,
+  onBodyAIGC,
+  onExportNode,
+  onDeleteNode,
+}) => {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  // 菜单尺寸估算（w-44 + 8 项内容），用于视口翻转与左边界钳制
+  const MENU_W = 176;
+  const MENU_H = 300;
+
+  /** 打开菜单：按按钮位置计算 fixed 坐标（portal 顶层渲染，规避滚动容器裁剪） */
+  const openMenu = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) {
+      let top = r.bottom + 4;
+      if (top + MENU_H > window.innerHeight) top = Math.max(8, r.top - MENU_H - 4);
+      let left = r.right - MENU_W;
+      if (left < 8) left = 8;
+      setMenuPos({ top, left });
+    }
+    setMenuOpen(true);
+  };
+
+  const closeMenu = () => setMenuOpen(false);
   // 已发布 = 系统事实（published_chapters 表），与写作/完成态解耦（备忘录 L61）
   const isPublished = node.chapter_id != null && publishedIds.has(node.chapter_id);
   // 写作状态圆点恒为两态展示（写作中/已完成）
   const writingStatus: OutlineStatus = node.status === 'published' ? 'done' : node.status;
+
+  const menuItems: {
+    label: string;
+    danger?: boolean;
+    action: () => void;
+  }[] = [
+    { label: '在上方添加', action: () => onAddAt(actId, nodeIdx) },
+    { label: '在下方添加', action: () => onAddAt(actId, nodeIdx + 1) },
+    { label: '─', action: () => {} },
+    {
+      label: '章节简述AIGC',
+      action: () => onEditNode(node),
+    },
+    { label: '章节正文AIGC', action: () => onBodyAIGC(node) },
+    { label: '─', action: () => {} },
+    { label: '导出章节（信息+正文）', action: () => onExportNode(node) },
+    { label: '删除章节', danger: true, action: () => onDeleteNode(node) },
+  ];
+
   return (
     <div
       onClick={onEdit}
       className="group relative px-3 py-2 rounded-lg bg-surface-2 border border-white/6 hover:border-brand-500/30 cursor-pointer transition-all"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
+        {/* 章节顺序标签（绑定大纲次序，点击循环 第一章/1/隐藏） */}
+        <OrderTag index={orderIndex} suffix="章" />
         <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${STATUS_DOT[writingStatus] ?? STATUS_DOT.drafting}`} />
         <span className="flex-1 min-w-0 text-xs text-neutral-200 truncate">
           {node.title || '未命名章节'}
         </span>
-        {/* 小飞机统一入口：未发布灰显；已发布点亮，点击打开 发布版 vs 编辑版 对比/回滚。
-            发布操作在作品概览页「发布管理」；写作状态切换在要点编辑器内。 */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (isPublished && node.chapter_id != null) onCompare(node.chapter_id);
-          }}
-          disabled={!isPublished}
-          title={isPublished ? '发布版 vs 编辑版对比 / 回滚' : '未发布（在概览页发布管理中发布）'}
-          className={`shrink-0 flex items-center justify-center w-5 h-5 rounded transition-colors ${
-            isPublished ? 'text-sky-300 hover:bg-sky-500/15' : 'text-neutral-700 cursor-default'
+        {/* 发布标识：纯展示（备忘录 L61），不触发任何操作；
+            发布操作在概览页发布管理，版本对比/回滚在章节版本历史面板 */}
+        <span
+          title={isPublished ? '已发布' : '未发布（在概览页发布管理中发布）'}
+          className={`shrink-0 flex items-center justify-center w-5 h-5 rounded ${
+            isPublished ? 'text-sky-300' : 'text-neutral-700'
           }`}
         >
           <Send size={11} />
-        </button>
+        </span>
+        {/* 省略号操作菜单（发布标右侧）：上下添加 / AIGC 工具 / 导出 / 删除。
+            菜单 portal 到 body + fixed 定位（顶层渲染），修复被滚动容器/相邻面板遮住的 bug */}
+        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+          <button
+            ref={btnRef}
+            type="button"
+            onClick={() => (menuOpen ? closeMenu() : openMenu())}
+            title="更多操作"
+            className={`flex items-center justify-center w-5 h-5 rounded transition-colors ${
+              menuOpen
+                ? 'text-brand-300 bg-brand-500/15'
+                : 'text-neutral-500 hover:text-neutral-200 hover:bg-white/8'
+            }`}
+          >
+            <MoreHorizontal size={13} />
+          </button>
+          {menuOpen &&
+            createPortal(
+              <>
+                {/* 点击外部关闭 */}
+                <div className="fixed inset-0 z-[1040]" onClick={closeMenu} />
+                <div
+                  className="fixed w-44 rounded-lg border border-white/10 bg-surface-1 shadow-2xl py-1 animate-fade-in z-[1041]"
+                  style={{ top: menuPos?.top ?? 0, left: menuPos?.left ?? 0 }}
+                >
+                  {menuItems.map((item, i) =>
+                    item.label === '─' ? (
+                      <div key={`sep-${i}`} className="my-1 border-t border-white/6" />
+                    ) : (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => {
+                          closeMenu();
+                          item.action();
+                        }}
+                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                          item.danger
+                            ? 'text-red-400 hover:bg-red-500/10'
+                            : 'text-neutral-300 hover:bg-white/8 hover:text-neutral-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ),
+                  )}
+                </div>
+              </>,
+              document.body,
+            )}
+        </div>
       </div>
       {/* 正文入口（章名下方常驻，大纲与章节的交互合并——有正文就打开，没正文就建一章再打开） */}
       <div className="mt-1.5 pl-3.5 flex items-center">
@@ -520,20 +780,16 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, publishedIds, onEdit, onOpenB
             e.stopPropagation();
             onOpenBody();
           }}
-          title={hasBody ? '打开正文章节' : '创建并打开正文章节'}
+          title={node.chapter_id ? '打开正文章节' : '创建并打开正文章节'}
           className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-brand-500/12 text-brand-200 border border-brand-500/25 hover:bg-brand-500/25 hover:text-white transition-colors"
         >
           <FileText size={11} />
-          {hasBody ? '正文' : '写正文'}
+          {node.chapter_id ? '正文' : '写正文'}
         </button>
       </div>
-      {node.summary && (
-        <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2 pl-3.5">{htmlToPlainText(node.summary)}</p>
-      )}
+      {/* 节点简介不再预览在大纲面板节点元素（备忘录 L61）；梗概在要点编辑器内查看 */}
     </div>
   );
 };
 
 export default OutlinePanel;
-
-

@@ -11,6 +11,7 @@ import {
 import { useTabStore, chapterTabKey } from '@/stores/tab-store';
 import { useEditorStore } from '@/stores/editor-store';
 import { useToast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import { useChapterDraft } from '@/hooks/useChapterDraft';
 import { putAutoSnapshot } from '@/utils/temp-branch';
 import TipTapEditor from '@/components/editor/TipTapEditor';
@@ -63,7 +64,15 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
   const nodeIdx = act?.nodes.findIndex((n) => n.id === nodeId) ?? -1;
   const nodeCount = act?.nodes.length ?? 0;
 
-  // 要点已被删除（或作品切换后不复存在）：自动关闭本 tab
+  // 大纲尚未加载（如刷新后恢复 tab / 切换作品瞬间）：先拉取再判定，
+  // 不能把「还没加载到」误判为「要点不存在或已删除」
+  useEffect(() => {
+    if (currentNovel && !outlineLoaded) {
+      void useOutlineStore.getState().loadOutline(currentNovel.id);
+    }
+  }, [currentNovel?.id, outlineLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 要点已被删除（大纲加载完成后的空命中）→ 自动关闭本 tab
   useEffect(() => {
     if (outlineLoaded && !node) useTabStore.getState().closeTab(tabKey);
   }, [outlineLoaded, node, tabKey]);
@@ -186,15 +195,15 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
   /** 删除要点：节点 + 绑定章节直接删除（无回收站，删除前确认），成功后关闭本 tab */
   const handleRemoveNode = async () => {
     if (!novelId || !node) return;
-    if (
-      !window.confirm(
-        node.chapter_id
-          ? `要点「${node.title || '未命名章节'}」及其正文将被永久删除，无法恢复，确定？`
-          : `删除要点「${node.title || '未命名章节'}」？`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: '删除章节',
+      message: node.chapter_id
+        ? `要点「${node.title || '未命名章节'}」及其正文将被永久删除，无法恢复，确定？`
+        : `删除要点「${node.title || '未命名章节'}」？`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       if (node.chapter_id) await deleteChapter(node.chapter_id);
       useOutlineStore.getState().removeNode(novelId, actId, node.id);
@@ -209,6 +218,14 @@ const OutlineNodeEditor: React.FC<OutlineNodeEditorProps> = ({ tabKey, actId, no
   };
 
   if (!node) {
+    // 大纲未加载 → 加载中态；加载完成仍无此要点 → 确实不存在/已删除
+    if (!outlineLoaded) {
+      return (
+        <div className="flex-1 flex items-center justify-center text-xs text-neutral-500">
+          正在加载要点…
+        </div>
+      );
+    }
     return (
       <div className="flex-1 flex items-center justify-center text-xs text-neutral-500">
         要点不存在或已删除

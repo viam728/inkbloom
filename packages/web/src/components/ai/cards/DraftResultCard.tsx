@@ -10,6 +10,7 @@ import {
 } from '@/services/story-client';
 import type { StoryJob } from '@/services/story-client';
 import { toast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import CardShell from './CardShell';
 import type { DraftResultCard as DraftResultCardData, DraftIssueSummary } from '@/types';
 
@@ -138,7 +139,15 @@ const DraftResultCard: React.FC<DraftResultCardProps> = ({ messageId, card }) =>
 
   /** 放弃：删除 job，卡片进入灰化终态（不影响已采纳的章节） */
   const handleAbandon = async () => {
-    if (!window.confirm('确定放弃该创作任务？（不影响已采纳的章节）')) return;
+    if (
+      !(await confirmDialog({
+        title: '放弃创作任务',
+        message: '确定放弃该创作任务？（不影响已采纳的章节）',
+        confirmText: '放弃',
+        danger: true,
+      }))
+    )
+      return;
     setBusy('abandon');
     try {
       await deleteStoryJob(card.jobId);

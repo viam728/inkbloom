@@ -13,6 +13,7 @@ import { uploadImage } from '@/services/image-client';
 import { track } from '@/services/analytics';
 import VersionCompare from '@/components/history/VersionCompare';
 import { toast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 /**
  * 作者侧发布弹窗（业务方案 v3 E4，施工任务 A20）
@@ -226,9 +227,11 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
     async (chapterId: number) => {
       if (!published || !currentNovel) return;
       if (
-        !window.confirm(
-          '此操作将用当前编辑版本覆盖已发布的读者版本，确定重新发布？',
-        )
+        !(await confirmDialog({
+          title: '重新发布',
+          message: '此操作将用当前编辑版本覆盖已发布的读者版本，确定重新发布？',
+          danger: true,
+        }))
       ) {
         return;
       }
@@ -474,11 +477,13 @@ const PublishModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 if (
-                                  window.confirm(
-                                    `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
-                                  )
+                                  await confirmDialog({
+                                    title: '取消发布',
+                                    message: `取消发布后读者将立即无法阅读「${ch.title}」，确定取消发布？`,
+                                    danger: true,
+                                  })
                                 ) {
                                   void handleUnpublishChapter(ch.id, pub.id);
                                 }

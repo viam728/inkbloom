@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { ListTodo, Ban, Palette, CircleCheck, CircleX, Clock3, LoaderCircle, Sparkles } from 'lucide-react';
 import { useTaskStore, type TaskItem } from '@/stores/task-store';
 import { useNovelStore } from '@/stores/novel-store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 /** 任务类型 → 展示名与图标（随任务 handler 注册扩展） */
 const TYPE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -66,8 +67,15 @@ const TaskRow: React.FC<{ task: TaskItem }> = ({ task }) => {
         </span>
         {active && !task.local && (
           <button
-            onClick={() => {
-              if (window.confirm('确定中止该任务？进行中的任务会丢弃结果。')) {
+            onClick={async () => {
+              if (
+                await confirmDialog({
+                  title: '中止任务',
+                  message: '确定中止该任务？进行中的任务会丢弃结果。',
+                  confirmText: '中止',
+                  danger: true,
+                })
+              ) {
                 void cancel(task.id);
               }
             }}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles } from 'lucide-react';
+import { Wand2, Play, ArrowRight, Check, Trash2, Loader2, ChevronDown, ChevronUp, RefreshCw, Sparkles, X } from 'lucide-react';
 import { useNovelStore } from '@/stores/novel-store';
 import { useStoryStore, STAGE_ORDER } from '@/stores/story-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -12,6 +12,7 @@ import { fetchMemory } from '@/services/memory-client';
 import { listForeshadows } from '@/services/foreshadow-client';
 import type { CreateNovelRequest, UpdateNovelRequest } from '@/types';
 import { toast } from '@/components/common/Toast';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import AigcCard from '@/components/ai/AigcCard';
 import type { AigcClueContext } from '@/components/ai/AigcCard';
 import { architectureText, useArchitectureStore } from '@/stores/architecture-store';
@@ -439,7 +440,14 @@ const StoryWorkflowPanel: React.FC = () => {
   // 3) 编辑态下生成结果只落本地，随「完成」统一保存
   const handleAIFillField = async (field: StoryOverviewField) => {
     if (getOverviewField(field).trim()) {
-      if (!window.confirm(`「${OVERVIEW_FIELD_LABELS[field]}」已有内容，AI 生成将覆盖现有内容，是否继续？`)) return;
+      if (
+        !(await confirmDialog({
+          title: '覆盖确认',
+          message: `「${OVERVIEW_FIELD_LABELS[field]}」已有内容，AI 生成将覆盖现有内容，是否继续？`,
+          danger: true,
+        }))
+      )
+        return;
     }
     setFillingField(field);
     try {
@@ -466,7 +474,14 @@ const StoryWorkflowPanel: React.FC = () => {
     const filled = allFields.filter((f) => getOverviewField(f).trim());
     if (filled.length) {
       const names = filled.map((f) => `「${OVERVIEW_FIELD_LABELS[f]}」`).join('、');
-      if (!window.confirm(`AIGC 将自动接管全部概览填写，${names}已有内容将被覆盖，是否继续？`)) return;
+      if (
+        !(await confirmDialog({
+          title: '覆盖确认',
+          message: `AIGC 将自动接管全部概览填写，${names}已有内容将被覆盖，是否继续？`,
+          danger: true,
+        }))
+      )
+        return;
     }
     setFillingAll(true);
     try {
@@ -568,7 +583,15 @@ const StoryWorkflowPanel: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!window.confirm('确定删除该创作任务？（不影响已采纳的章节）')) return;
+    if (
+      !(await confirmDialog({
+        title: '删除创作任务',
+        message: '确定删除该创作任务？（不影响已采纳的章节）',
+        confirmText: '删除',
+        danger: true,
+      }))
+    )
+      return;
     try {
       await removeJob(id);
     } catch (e) {
@@ -595,7 +618,7 @@ const StoryWorkflowPanel: React.FC = () => {
             </span>
             <span className="text-base font-semibold text-neutral-100">AI 起稿 · 全本创作</span>
           </div>
-          {/* 右侧：返回入口（自动保存下无需「取消」/「完成」开关——文本录入即保存） */}
+          {/* 右侧：返回入口 + 关闭 X（备忘录 L61：AI 起稿页右上角关闭按钮） */}
           <div className="flex items-center gap-2">
             {activeJob ? (
               <button onClick={closeJob} className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors ml-2">
@@ -606,6 +629,14 @@ const StoryWorkflowPanel: React.FC = () => {
                 返回作品概览 →
               </button>
             )}
+            <button
+              type="button"
+              onClick={backToOverview}
+              title="关闭 AI 起稿页"
+              className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-100 hover:bg-white/10 transition-colors"
+            >
+              <X size={15} />
+            </button>
           </div>
         </div>
 
@@ -745,7 +776,7 @@ const StoryWorkflowPanel: React.FC = () => {
                 className="w-full py-2 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-medium transition-all"
               >
                 <Wand2 size={14} className="inline mr-1.5" />
-                创建作品并开启全本创作
+                {title.trim() ? `创建「${title.trim()}」并开启全本创作` : '创建作品并开启全本创作'}
               </button>
             )}
           </div>
